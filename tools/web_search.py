@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 from html import unescape
 from typing import Any
@@ -13,9 +14,104 @@ from agent.settings import WebSearchSettings
 
 
 def web_search(query: str, settings: WebSearchSettings) -> tuple[list[WebSearchResult], str | None]:
-    if settings.provider == "duckduckgo":
+    provider = settings.provider.lower()
+    if provider == "duckduckgo":
         return _duckduckgo_html(query, settings)
+    if provider == "exa":
+        return _search_exa(query, settings)
+    if provider == "tavily":
+        return _search_tavily(query, settings)
     return [], f"Unknown web search provider: {settings.provider}"
+
+
+def _resolve_api_key(settings: WebSearchSettings) -> str | None:
+    if settings.api_key:
+        return settings.api_key
+    if settings.api_key_env:
+        return os.environ.get(settings.api_key_env)
+    return None
+
+
+def _search_exa(query: str, settings: WebSearchSettings) -> tuple[list[WebSearchResult], str | None]:
+    api_key = _resolve_api_key(settings)
+    if not api_key:
+        env_name = settings.api_key_env or "EXA_API_KEY"
+        return [], f"Missing API key: set {env_name} or web_search.api_key in config"
+
+    payload = {
+        "query": query,
+        "numResults": settings.max_results,
+        "type": "auto",
+    }
+    try:
+        with httpx.Client(timeout=float(settings.timeout_sec)) as client:
+            response = client.post(
+                "https://api.exa.ai/search",
+                headers={"x-api-key": api_key, "Content-Type": "application/json"},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        return [], str(exc)
+    except json.JSONDecodeError as exc:
+        return [], str(exc)
+
+    return _map_exa_results(data, settings.max_results), None
+
+
+def _map_exa_results(data: dict[str, Any], max_results: int) -> list[WebSearchResult]:
+    results: list[WebSearchResult] = []
+    for item in data.get("results", [])[:max_results]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("url") or "").strip()
+        url = str(item.get("url") or "").strip()
+        snippet = str(item.get("text") or item.get("snippet") or "").strip()
+        if title and url:
+            results.append(WebSearchResult(title=title, url=url, snippet=snippet))
+    return results
+
+
+def _search_tavily(query: str, settings: WebSearchSettings) -> tuple[list[WebSearchResult], str | None]:
+    api_key = _resolve_api_key(settings)
+    if not api_key:
+        env_name = settings.api_key_env or "TAVILY_API_KEY"
+        return [], f"Missing API key: set {env_name} or web_search.api_key in config"
+
+    payload = {
+        "api_key": api_key,
+        "query": query,
+        "max_results": settings.max_results,
+    }
+    try:
+        with httpx.Client(timeout=float(settings.timeout_sec)) as client:
+            response = client.post(
+                "https://api.tavily.com/search",
+                headers={"Content-Type": "application/json"},
+                json=payload,
+            )
+            response.raise_for_status()
+            data = response.json()
+    except httpx.HTTPError as exc:
+        return [], str(exc)
+    except json.JSONDecodeError as exc:
+        return [], str(exc)
+
+    return _map_tavily_results(data, settings.max_results), None
+
+
+def _map_tavily_results(data: dict[str, Any], max_results: int) -> list[WebSearchResult]:
+    results: list[WebSearchResult] = []
+    for item in data.get("results", [])[:max_results]:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or item.get("url") or "").strip()
+        url = str(item.get("url") or "").strip()
+        snippet = str(item.get("content") or item.get("snippet") or "").strip()
+        if title and url:
+            results.append(WebSearchResult(title=title, url=url, snippet=snippet))
+    return results
 
 
 def _duckduckgo_html(query: str, settings: WebSearchSettings) -> tuple[list[WebSearchResult], str | None]:
