@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Callable
 
 from rich.console import Console
 
@@ -11,6 +11,33 @@ from agent.exec_policy import ExecPolicyMode, evaluate_command
 from agent.session import HarnessSession
 
 console = Console()
+
+_approval_input: Callable[[str], str] | None = None
+
+
+def set_approval_input(fn: Callable[[str], str] | None) -> None:
+    global _approval_input
+    _approval_input = fn
+
+
+def parse_approval_response(
+    response: str,
+    *,
+    turn_state: TurnApprovalState | None = None,
+    session: HarnessSession | None = None,
+) -> bool:
+    if response == "A":
+        if session:
+            session.enable_session_auto_approve()
+            if not session.session_banner_shown:
+                session.session_banner_shown = True
+        return True
+    lower = response.lower()
+    if lower in ("a", "all"):
+        if turn_state:
+            turn_state.approve_all = True
+        return True
+    return lower in ("y", "yes")
 
 READ_COMMANDS = re.compile(
     r"^\s*(cat|type|head|tail|less|more|Get-Content|Get-ChildItem|ls|dir|findstr|select-string)\b",
@@ -96,29 +123,28 @@ def prompt_approval(
         return True
 
     summary = format_tool_summary(tool_name, arguments)
-    console.print(f"[yellow][approval][/yellow] {summary}")
-    console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
+    if _approval_input:
+        response = _approval_input(summary)
+    else:
+        console.print(f"[yellow][approval][/yellow] {summary}")
+        console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
 
-    try:
-        response = input().strip()
-    except (EOFError, KeyboardInterrupt):
-        console.print()
-        return False
+        try:
+            response = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return False
 
     if response == "A":
         if session:
             session.enable_session_auto_approve()
             if not session.session_banner_shown:
-                console.print("[dim][approval] session auto-approve enabled[/dim]")
+                if not _approval_input:
+                    console.print("[dim][approval] session auto-approve enabled[/dim]")
                 session.session_banner_shown = True
         return True
 
-    lower = response.lower()
-    if lower in ("a", "all"):
-        if turn_state:
-            turn_state.approve_all = True
-        return True
-    return lower in ("y", "yes")
+    return parse_approval_response(response, turn_state=turn_state, session=session)
 
 
 def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -149,6 +175,9 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
 
     if tool_name == "read_file":
         return f"read_file: {arguments.get('path', '')}"
+
+    if tool_name == "web_search":
+        return f"web_search: {arguments.get('query', '')}"
 
     parts = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     return f"{tool_name}: {parts}"

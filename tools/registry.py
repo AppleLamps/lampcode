@@ -6,11 +6,12 @@ from typing import Any, Callable
 
 from agent.config import Config
 from agent.mcp.manager import McpManager
-from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem
+from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem, WebSearchItem
 from tools.files import read_file, write_file
 from tools.patch import apply_patch
 from tools.search import search_repo
 from tools.shell import run_command
+from tools.web_search import format_results_for_model, web_search
 
 
 @dataclass
@@ -27,18 +28,27 @@ class DispatchResult:
     command_item: CommandExecutionItem | None = None
     file_items: list[FileChangeItem] = field(default_factory=list)
     mcp_item: McpToolCallItem | None = None
+    web_search_item: WebSearchItem | None = None
+    isolation_meta: dict | None = None
 
 
-def get_tool_schemas(mcp_manager: McpManager | None = None) -> list[dict[str, Any]]:
+def get_tool_schemas(
+    mcp_manager: McpManager | None = None,
+    config: Config | None = None,
+) -> list[dict[str, Any]]:
     schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
+    if config and config.web_search.enabled:
+        schemas.append(WEB_SEARCH_SCHEMA)
     if mcp_manager:
         schemas.extend(mcp_manager.get_tool_schemas())
     return schemas
 
 
 def tool_requires_approval(
-    name: str, mcp_manager: McpManager | None = None
+    name: str, mcp_manager: McpManager | None = None, config: Config | None = None
 ) -> bool:
+    if name == "web_search":
+        return True
     if mcp_manager and mcp_manager.is_mcp_tool(name):
         return mcp_manager.requires_approval(name)
     spec = TOOL_REGISTRY.get(name)
@@ -66,6 +76,23 @@ def dispatch_tool(
         )
         return DispatchResult(text=output, mcp_item=item)
 
+    if name == "web_search":
+        if not config.web_search.enabled:
+            return DispatchResult(text="Web search is disabled in configuration.")
+        query = arguments.get("query", "")
+        item = WebSearchItem(query=query, status="pending")
+        results, error = web_search(query, config.web_search)
+        if error:
+            item.status = "failed"
+            item.error = error
+            return DispatchResult(
+                text=f"Web search failed: {error}", web_search_item=item
+            )
+        item.results = results
+        item.status = "completed"
+        text = format_results_for_model(results)
+        return DispatchResult(text=text, web_search_item=item)
+
     if name not in TOOL_REGISTRY:
         return DispatchResult(text=f"Unknown tool: {name}")
 
@@ -77,18 +104,21 @@ def dispatch_tool(
             cwd=str(config.cwd if not workdir else config.cwd / workdir),
             status="running",
         )
-        output, exit_code, duration_ms = run_command(
+        output, exit_code, duration_ms, isolation_meta = run_command(
             config.cwd,
             cmd,
             workdir=workdir,
             timeout=config.command_timeout,
             max_output=config.max_tool_output,
+            config=config,
         )
         item.output = output
         item.exit_code = exit_code
         item.duration_ms = duration_ms
         item.status = "completed" if exit_code == 0 else "failed"
-        return DispatchResult(text=output, command_item=item)
+        return DispatchResult(
+            text=output, command_item=item, isolation_meta=isolation_meta
+        )
 
     if name == "write_file":
         path = arguments.get("path", "")
@@ -265,4 +295,19 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
         },
         handler=lambda **_: "",
     ),
+}
+
+WEB_SEARCH_SCHEMA = {
+    "type": "function",
+    "function": {
+        "name": "web_search",
+        "description": "Search the public web for documentation, errors, or references.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string", "description": "Search query."},
+            },
+            "required": ["query"],
+        },
+    },
 }

@@ -15,6 +15,7 @@ from agent.models import (
     SkillActivationItem,
     Thread,
     UserMessageItem,
+    WebSearchItem,
 )
 from agent.skills.discovery import Skill
 from agent.skills.injector import build_skills_prompt
@@ -167,6 +168,25 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
             content = "User denied this action."
         if item.diff_snippet:
             content = f"{content}\n\nDiff:\n{item.diff_snippet}"
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": item.tool_call_id,
+                "content": content,
+            }
+        ]
+
+    if isinstance(item, WebSearchItem):
+        if not item.tool_call_id:
+            return []
+        if item.status == "denied":
+            content = "User denied this action."
+        elif item.error:
+            content = f"Web search failed: {item.error}"
+        else:
+            from tools.web_search import format_results_for_model
+
+            content = format_results_for_model(item.results)
         return [
             {
                 "role": "tool",

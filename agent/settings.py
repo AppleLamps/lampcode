@@ -60,6 +60,44 @@ class OpenRouterSettings:
     request_timeout_sec: int = 120
 
 
+DEFAULT_ALLOWED_ENV = [
+    "PATH",
+    "PATHEXT",
+    "SystemRoot",
+    "TEMP",
+    "TMP",
+    "USERPROFILE",
+    "HOME",
+    "LANG",
+    "PYTHONIOENCODING",
+    "COMSPEC",
+    "WINDIR",
+]
+
+
+@dataclass
+class RecordingSettings:
+    enabled: bool = True
+    keep_last_runs_per_thread: int = 50
+
+
+@dataclass
+class IsolationSettings:
+    enabled: bool = True
+    strip_env: bool = True
+    kill_process_tree_on_timeout: bool = True
+    clear_network_env_hints: bool = True
+    allowed_env_vars: list[str] = field(default_factory=lambda: list(DEFAULT_ALLOWED_ENV))
+
+
+@dataclass
+class WebSearchSettings:
+    enabled: bool = False
+    provider: str = "duckduckgo"
+    max_results: int = 5
+    timeout_sec: int = 15
+
+
 def _load_toml(path: Path) -> dict[str, Any]:
     if tomllib is None or not path.is_file():
         return {}
@@ -89,6 +127,47 @@ def load_openrouter_settings(path: Path | None = None) -> OpenRouterSettings:
         max_retries=int(or_cfg.get("max_retries", 3)),
         retry_base_delay_sec=float(or_cfg.get("retry_base_delay_sec", 1.0)),
         request_timeout_sec=int(or_cfg.get("request_timeout_sec", 120)),
+    )
+
+
+def load_recording_settings(path: Path | None = None) -> RecordingSettings:
+    data = _load_toml(path or default_config_path())
+    rec = data.get("recording", {})
+    if not isinstance(rec, dict):
+        rec = {}
+    return RecordingSettings(
+        enabled=bool(rec.get("enabled", True)),
+        keep_last_runs_per_thread=int(rec.get("keep_last_runs_per_thread", 50)),
+    )
+
+
+def load_isolation_settings(path: Path | None = None) -> IsolationSettings:
+    data = _load_toml(path or default_config_path())
+    iso = data.get("isolation", {})
+    if not isinstance(iso, dict):
+        iso = {}
+    allowed = iso.get("allowed_env_vars", DEFAULT_ALLOWED_ENV)
+    if not isinstance(allowed, list):
+        allowed = list(DEFAULT_ALLOWED_ENV)
+    return IsolationSettings(
+        enabled=bool(iso.get("enabled", True)),
+        strip_env=bool(iso.get("strip_env", True)),
+        kill_process_tree_on_timeout=bool(iso.get("kill_process_tree_on_timeout", True)),
+        clear_network_env_hints=bool(iso.get("clear_network_env_hints", True)),
+        allowed_env_vars=[str(v) for v in allowed],
+    )
+
+
+def load_web_search_settings(path: Path | None = None) -> WebSearchSettings:
+    data = _load_toml(path or default_config_path())
+    ws = data.get("web_search", {})
+    if not isinstance(ws, dict):
+        ws = {}
+    return WebSearchSettings(
+        enabled=bool(ws.get("enabled", False)),
+        provider=str(ws.get("provider", "duckduckgo")),
+        max_results=int(ws.get("max_results", 5)),
+        timeout_sec=int(ws.get("timeout_sec", 15)),
     )
 
 

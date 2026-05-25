@@ -8,6 +8,72 @@ from typing import Any, Callable
 EventHandler = Callable[["AgentEvent"], None]
 
 
+class EventBus:
+    """Fan-out event bus for headless CLI, recording, and TUI."""
+
+    def __init__(self, handlers: list[EventHandler] | None = None) -> None:
+        self._handlers: list[EventHandler] = list(handlers or [])
+
+    def subscribe(self, handler: EventHandler) -> None:
+        self._handlers.append(handler)
+
+    def emit(self, event: AgentEvent) -> None:
+        for handler in self._handlers:
+            handler(event)
+
+    def as_handler(self) -> EventHandler:
+        return self.emit
+
+
+class RecordingHandler:
+    """Persist every AgentEvent to ~/.agent-cli/runs/{thread}/{turn}.jsonl."""
+
+    def __init__(
+        self,
+        store: "RunStore | None" = None,
+        *,
+        keep_last_runs_per_thread: int = 50,
+    ) -> None:
+        from agent.recording.store import RunStore
+
+        self._store = store or RunStore()
+        self._keep_last = keep_last_runs_per_thread
+        self._enabled = True
+
+    @property
+    def enabled(self) -> bool:
+        return self._enabled
+
+    @enabled.setter
+    def enabled(self, value: bool) -> None:
+        self._enabled = value
+
+    def handle(self, event: AgentEvent) -> None:
+        if not self._enabled or not event.thread_id or not event.turn_id:
+            return
+        self._store.append_event(event.thread_id, event.turn_id, event)
+        if event.type == "turn.completed":
+            self._store.prune_thread(event.thread_id, self._keep_last)
+
+
+def build_event_emitter(
+    *handlers: EventHandler,
+    recording: bool = False,
+    recording_keep: int = 50,
+    run_store: "RunStore | None" = None,
+) -> EventEmitter:
+    bus = EventBus(list(handlers))
+    if recording:
+        from agent.recording.store import RunStore
+
+        recorder = RecordingHandler(
+            store=run_store or RunStore(),
+            keep_last_runs_per_thread=recording_keep,
+        )
+        bus.subscribe(recorder.handle)
+    return EventEmitter(bus.as_handler())
+
+
 def _utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -176,6 +242,28 @@ class EventEmitter:
                     "mode": mode,
                     "reason": reason,
                     "command": command,
+                },
+            )
+        )
+
+    def isolation_applied(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        pid: int | None,
+        cwd: str,
+        stripped_env_count: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "isolation.applied",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "pid": pid,
+                    "cwd": cwd,
+                    "stripped_env_count": stripped_env_count,
                 },
             )
         )

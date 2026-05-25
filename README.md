@@ -7,6 +7,7 @@ A local coding agent CLI inspired by OpenAI Codex — powered by [OpenRouter](ht
 ```powershell
 cd agent-cli
 pip install -e ".[dev]"
+pip install -e ".[tui]"    # optional: interactive terminal UI
 ```
 
 ## Configure
@@ -55,6 +56,22 @@ summary_max_chars = 8000
 max_retries = 3
 retry_base_delay_sec = 1.0
 request_timeout_sec = 120
+
+[recording]
+enabled = true
+keep_last_runs_per_thread = 50
+
+[isolation]
+enabled = true
+strip_env = true
+kill_process_tree_on_timeout = true
+clear_network_env_hints = true
+
+[web_search]
+enabled = false
+provider = "duckduckgo"
+max_results = 5
+timeout_sec = 15
 
 [skills]
 max_active = 3
@@ -150,6 +167,63 @@ agent run "fix it" --title "calc bug"   # title on new thread only
 
 Forked threads store `forked_from` in JSONL metadata; `agent threads list` shows lineage.
 
+## Interactive TUI (Phase 5)
+
+```powershell
+pip install -e ".[tui]"
+agent tui --cwd e:\lampcode\agent-cli\examples\demo-project
+agent tui --resume-last
+```
+
+Layout: thread list (left), live transcript (right), status bar, input at bottom.
+
+| Key | Action |
+|-----|--------|
+| Enter | Submit turn (or approval key when pending) |
+| `y` / `n` / `a` / `A` | Approve / deny / turn / session (inline during approvals) |
+| Ctrl+C | Cancel running turn |
+| Ctrl+L | Clear input |
+| `q` | Quit (warns if turn running) |
+
+Headless `agent run` is unchanged — TUI is optional.
+
+## Run recording & replay
+
+Every turn writes `~/.agent-cli/runs/{thread_id}/{turn_id}.jsonl` (one `AgentEvent` per line).
+
+```powershell
+agent runs list
+agent runs list --thread-id abc123
+agent runs show turn-id-prefix --human
+agent runs replay turn-id-prefix
+```
+
+Use `--jsonl-events` on `agent run` for stdout streaming; run logs mirror the same event schema.
+
+## Subprocess isolation (Phase 5)
+
+When `sandbox_mode` is not `danger-full-access` and `[isolation] enabled = true`:
+
+- Subprocess cwd locked to thread cwd
+- Environment stripped to allowlist (+ proxy vars removed)
+- Timeout kills process tree (`taskkill /T /F` on Windows)
+
+Emits `isolation.applied` events. **Not** true network/filesystem isolation — env hardening only.
+
+## Web search (optional, off by default)
+
+```toml
+[web_search]
+enabled = true
+```
+
+Requires approval in interactive mode; blocked in `read-only` sandbox. Uses DuckDuckGo (no API key). Results persist as `webSearch` items.
+
+```powershell
+# Enable in config, then ask the agent to search
+agent run "look up pytest exit code 1 docs" --cwd examples/demo-project
+```
+
 ## Skills
 
 Skills live in folders with `SKILL.md`:
@@ -178,7 +252,7 @@ MCP tools are exposed as `mcp__{server}__{tool}` and persisted as `mcpToolCall` 
 
 ## Built-in tools
 
-`read_file`, `search_repo`, `apply_patch`, `write_file`, `run_command` + MCP tools.
+`read_file`, `search_repo`, `apply_patch`, `write_file`, `run_command`, optional `web_search` + MCP tools.
 
 ## Project rules
 
@@ -187,15 +261,13 @@ Loads `AGENTS.md`, `agents.md`, or `.agents/AGENTS.md` into `# Project Rules` in
 ## Tests
 
 ```powershell
-pytest   # 111+ tests
+pytest   # 140+ tests
 ```
 
-## Phase 4 migration
+## Phase 5 migration
 
-New optional config keys (`sandbox_mode`, `exec_policy`, `[compaction]`, `[openrouter]`). Defaults preserve prior behavior (`danger-full-access`, `exec_policy=prompt`). Thread JSONL adds optional `forked_from` and `title` fields — older threads load unchanged.
+New optional sections: `[recording]`, `[isolation]`, `[web_search]`. Defaults preserve prior behavior (recording on, isolation auto when sandbox restricted, web search off). New item type `webSearch`, events `isolation.applied`. Install `[tui]` extra for `agent tui`.
 
-New JSONL event types: `sandbox.blocked`, `compaction.completed` (plus legacy `compaction`).
+## Phase 6 (not yet)
 
-## Phase 5 (not yet)
-
-Kernel sandbox (Seatbelt/bubblewrap/Windows restricted token), web UI/TUI, web search, multi-agent orchestration, cloud execution, skill marketplace.
+Kernel sandbox (AppContainer/bubblewrap/Seatbelt), multi-agent supervisor/worker, remote SSH/container backend, skill marketplace, full web UI.

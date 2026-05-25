@@ -11,6 +11,10 @@ def default_store_dir() -> Path:
     return Path.home() / ".agent-cli" / "threads"
 
 
+def default_runs_dir() -> Path:
+    return Path.home() / ".agent-cli" / "runs"
+
+
 def resolve_path_within_cwd(cwd: Path, user_path: str) -> Path:
     """Resolve user_path relative to cwd and reject escapes outside cwd."""
     cwd = cwd.resolve()

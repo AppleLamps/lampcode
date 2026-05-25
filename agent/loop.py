@@ -17,6 +17,7 @@ from agent.models import (
     Thread,
     Turn,
     UserMessageItem,
+    WebSearchItem,
 )
 from agent.session import HarnessSession
 from agent.settings import load_mcp_config, load_skills_config
@@ -45,7 +46,7 @@ from tools.registry import (
     tool_requires_approval,
 )
 
-TrackingItem = CommandExecutionItem | FileChangeItem | McpToolCallItem
+TrackingItem = CommandExecutionItem | FileChangeItem | McpToolCallItem | WebSearchItem
 
 
 def run_turn(
@@ -111,7 +112,7 @@ def run_turn(
         pass
 
     client = OpenRouterClient(config)
-    tools = get_tool_schemas(mcp_manager)
+    tools = get_tool_schemas(mcp_manager, config)
     messages = build_thread_messages(
         thread,
         active_skills=active_skills,
@@ -270,7 +271,7 @@ def _run_loop(
                 )
                 continue
 
-            requires_approval = tool_requires_approval(tool_name, mcp_manager)
+            requires_approval = tool_requires_approval(tool_name, mcp_manager, config)
 
             if requires_approval and needs_approval_prompt(
                 tool_name,
@@ -311,6 +312,15 @@ def _run_loop(
             dispatch_result = dispatch_tool(
                 tool_name, arguments, config, mcp_manager=mcp_manager
             )
+            if dispatch_result.isolation_meta:
+                meta = dispatch_result.isolation_meta
+                emitter.isolation_applied(
+                    thread.id,
+                    turn.id,
+                    pid=meta.get("pid"),
+                    cwd=meta.get("cwd", str(config.cwd)),
+                    stripped_env_count=meta.get("stripped_env_count", 0),
+                )
             result_text = _apply_dispatch_results(
                 dispatch_result,
                 tracking_items,
@@ -399,6 +409,15 @@ def _create_tracking_items(
                 change_type="update",
             )
         ]
+    if tool_name == "web_search":
+        return [
+            WebSearchItem(
+                query=arguments.get("query", ""),
+                status="pending",
+                tool_call_id=tool_call_id,
+                tool_arguments=raw_args,
+            )
+        ]
     return []
 
 
@@ -409,6 +428,8 @@ def _mark_denied(items: list[TrackingItem], store, thread, turn_id) -> None:
             item.output = "User denied this action."
         elif isinstance(item, McpToolCallItem):
             item.output = "User denied this action."
+        elif isinstance(item, WebSearchItem):
+            item.error = "User denied this action."
         else:
             item.summary = "User denied this action."
         store.append_item(thread, turn_id, item)
@@ -444,6 +465,16 @@ def _apply_dispatch_results(
             item.output = result.command_item.output
             item.exit_code = result.command_item.exit_code
             item.duration_ms = result.command_item.duration_ms
+            store.append_item(thread, turn_id, item)
+            emitter.item_completed(thread.id, turn_id, item.type, item.id, item.status)
+        return result.text
+
+    if result.web_search_item and tracking_items:
+        item = tracking_items[0]
+        if isinstance(item, WebSearchItem):
+            item.status = result.web_search_item.status
+            item.results = result.web_search_item.results
+            item.error = result.web_search_item.error
             store.append_item(thread, turn_id, item)
             emitter.item_completed(thread.id, turn_id, item.type, item.id, item.status)
         return result.text
@@ -512,6 +543,9 @@ def _precheck_tool(
         decision = check_apply_patch(config.cwd, config.sandbox_mode)
         if decision.blocked:
             return decision.reason
+    elif tool_name == "web_search":
+        if config.sandbox_mode.value == "read-only":
+            return "web search denied in read-only sandbox"
     elif mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
         decision = check_mcp_tool(
@@ -543,6 +577,8 @@ def _handle_blocked_tool(
             cmd = item.command
         elif isinstance(item, McpToolCallItem):
             item.output = reason
+        elif isinstance(item, WebSearchItem):
+            item.error = reason
         else:
             item.summary = reason
         store.append_item(thread, turn.id, item)
@@ -575,6 +611,8 @@ def brief_args(tool_name: str, arguments: dict) -> str:
         return arguments.get("path", "")
     if tool_name == "search_repo":
         return arguments.get("pattern", "")
+    if tool_name == "web_search":
+        return arguments.get("query", "")
     if tool_name.startswith("mcp__"):
         return str(arguments)[:80]
     return str(arguments)

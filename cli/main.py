@@ -11,18 +11,22 @@ from rich.console import Console
 from rich.table import Table
 
 from agent.cancel import CancelToken, CancelledError
-from agent.config import Config, default_config_path
-from agent.events import AgentEvent, EventEmitter
+from agent.config import Config
+from agent.events import AgentEvent, build_event_emitter
 from agent.git import detect_repo_root
 from agent.context import build_system_prompt, load_project_rules
 from agent.loop import brief_args, run_turn
 from agent.mcp.manager import McpManager
 from agent.models import Thread, new_id, utc_now_iso
+from agent.paths import default_config_path
+from agent.recording.replay import format_run_human
+from agent.recording.store import RunStore
 from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
 from agent.store import ThreadStore
+from agent.tui.runner import check_tui_available, launch_tui
 
 app = typer.Typer(no_args_is_help=True, help="Codex-inspired coding agent CLI")
 threads_app = typer.Typer(help="Manage conversation threads")
@@ -30,11 +34,13 @@ config_app = typer.Typer(help="Configuration commands")
 mcp_app = typer.Typer(help="MCP server commands")
 skills_app = typer.Typer(help="Skill discovery commands")
 exec_policy_app = typer.Typer(help="Exec policy rule testing")
+runs_app = typer.Typer(help="Run recording and replay")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
 app.add_typer(exec_policy_app, name="exec-policy")
+app.add_typer(runs_app, name="runs")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -80,6 +86,12 @@ class OutputHandler:
             console.print(f"[yellow][sandbox][/yellow] blocked ({mode}): {reason}")
             if cmd:
                 console.print(f"  command: {cmd}")
+        elif event.type == "isolation.applied" and not self.quiet_tools:
+            console.print(
+                f"[dim][isolation][/dim] pid={event.data.get('pid')} "
+                f"cwd={event.data.get('cwd')} "
+                f"stripped_env={event.data.get('stripped_env_count')}"
+            )
         elif event.type == "error":
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
         elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
@@ -230,7 +242,11 @@ def run(
         console.print()
 
     output = OutputHandler(jsonl_events=jsonl_events, quiet_tools=quiet_tools)
-    emitter = EventEmitter(output.handle)
+    emitter = build_event_emitter(
+        output.handle,
+        recording=config.recording.enabled,
+        recording_keep=config.recording.keep_last_runs_per_thread,
+    )
     cancel_token = CancelToken()
 
     def _handle_sigint(signum, frame) -> None:  # noqa: ARG001
@@ -361,6 +377,17 @@ def doctor(
         f"enabled={cfg.compaction.enabled}, threshold={cfg.compaction.threshold}",
     )
     table.add_row("thread fork", "supported (forked_from metadata in JSONL)")
+    table.add_row(
+        "recording",
+        f"enabled={cfg.recording.enabled}, dir writable="
+        f"{_runs_dir_writable()}",
+    )
+    table.add_row(
+        "isolation",
+        f"config={cfg.isolation.enabled}, effective={cfg.use_isolation}",
+    )
+    tui_ok, tui_msg = check_tui_available()
+    table.add_row("TUI (textual)", "installed" if tui_ok else tui_msg)
     console.print(table)
 
     if deep and enabled_mcp:
@@ -604,6 +631,12 @@ def threads_show(
                 )
                 if item.output:
                     console.print(item.output[:500])
+            elif item.type == "webSearch":
+                console.print(
+                    f"[yellow]Web[/yellow] ({item.status}): {item.query}"
+                )
+                for r in item.results[:3]:
+                    console.print(f"  - {r.title}: {r.url}")
         console.print()
 
 
@@ -642,6 +675,95 @@ def _load_thread(store: ThreadStore, thread_id: str) -> Thread:
 
     console.print(f"[red]Error:[/red] Thread not found: {thread_id}")
     raise typer.Exit(1)
+
+
+def _runs_dir_writable() -> str:
+    from agent.paths import default_runs_dir
+
+    path = default_runs_dir()
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        test = path / ".write_test"
+        test.write_text("ok", encoding="utf-8")
+        test.unlink()
+        return "yes"
+    except OSError:
+        return "no"
+
+
+@app.command("tui")
+def tui_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Resume thread"),
+    resume_last: bool = typer.Option(False, "--resume-last", help="Resume latest thread"),
+) -> None:
+    """Interactive terminal UI for agent sessions."""
+    try:
+        launch_tui(cwd=cwd, thread_id=thread_id, resume_last=resume_last)
+    except SystemExit as exc:
+        raise typer.Exit(exc.code) from exc
+
+
+@runs_app.command("list")
+def runs_list(
+    thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Filter by thread"),
+) -> None:
+    """List recorded run logs."""
+    store = RunStore()
+    records = store.list_runs(thread_id)
+    if not records:
+        console.print("No run logs found.")
+        return
+    table = Table(title="Recorded Runs")
+    table.add_column("Thread")
+    table.add_column("Turn")
+    table.add_column("Updated")
+    for rec in records:
+        table.add_row(rec.thread_id[:8] + "...", rec.turn_id[:8] + "...", str(int(rec.updated_at)))
+    console.print(table)
+
+
+@runs_app.command("show")
+def runs_show(
+    turn_id: str = typer.Argument(..., help="Turn ID (full or prefix)"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+    as_json: bool = typer.Option(False, "--json", help="Print raw events JSONL"),
+    human: bool = typer.Option(True, "--human/--no-human", help="Human transcript"),
+) -> None:
+    """Show a recorded run log."""
+    store = RunStore()
+    try:
+        events = store.load_events(turn_id, thread_id=thread_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    if as_json:
+        for event in events:
+            stdout_console.print(event.to_json())
+    elif human:
+        stdout_console.print(format_run_human(events))
+    else:
+        stdout_console.print(format_run_human(events))
+
+
+@runs_app.command("replay")
+def runs_replay(
+    turn_id: str = typer.Argument(..., help="Turn ID (full or prefix)"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+    human: bool = typer.Option(True, "--human/--no-human"),
+) -> None:
+    """Replay transcript from recorded events (no model call)."""
+    store = RunStore()
+    try:
+        events = store.load_events(turn_id, thread_id=thread_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    if human:
+        stdout_console.print(format_run_human(events))
+    else:
+        for event in events:
+            stdout_console.print(event.to_json())
 
 
 def main() -> None:

@@ -16,9 +16,15 @@ from agent.paths import default_config_path
 from agent.sandbox.policy import SandboxMode
 from agent.settings import (
     CompactionSettings,
+    IsolationSettings,
     OpenRouterSettings,
+    RecordingSettings,
+    WebSearchSettings,
     load_compaction_settings,
+    load_isolation_settings,
     load_openrouter_settings,
+    load_recording_settings,
+    load_web_search_settings,
 )
 
 DEFAULT_MODEL = "anthropic/claude-sonnet-4"
@@ -103,6 +109,9 @@ class Config:
     exec_policy: ExecPolicyConfig = field(default_factory=ExecPolicyConfig)
     compaction: CompactionSettings = field(default_factory=CompactionSettings)
     openrouter: OpenRouterSettings = field(default_factory=OpenRouterSettings)
+    recording: RecordingSettings = field(default_factory=RecordingSettings)
+    isolation: IsolationSettings = field(default_factory=IsolationSettings)
+    web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
@@ -111,6 +120,12 @@ class Config:
     @property
     def auto_approve(self) -> bool:
         return self.approval_mode == "auto"
+
+    @property
+    def use_isolation(self) -> bool:
+        if self.sandbox_mode == SandboxMode.DANGER_FULL_ACCESS:
+            return False
+        return self.isolation.enabled
 
     @classmethod
     def resolve(
@@ -203,6 +218,9 @@ class Config:
 
         exec_policy = load_exec_policy_config(resolved_config_path)
         openrouter = load_openrouter_settings(resolved_config_path)
+        recording = load_recording_settings(resolved_config_path)
+        isolation = load_isolation_settings(resolved_config_path)
+        web_search = load_web_search_settings(resolved_config_path)
 
         return cls(
             cwd=resolved_cwd,
@@ -218,6 +236,9 @@ class Config:
             exec_policy=exec_policy,
             compaction=compaction_cfg,
             openrouter=openrouter,
+            recording=recording,
+            isolation=isolation,
+            web_search=web_search,
             openrouter_api_key=api_key,
             openrouter_base_url=base_url,
             config_path=resolved_config_path,
@@ -252,6 +273,11 @@ class Config:
             "openrouter_max_retries": self.openrouter.max_retries,
             "openrouter_retry_base_delay_sec": self.openrouter.retry_base_delay_sec,
             "openrouter_request_timeout_sec": self.openrouter.request_timeout_sec,
+            "recording_enabled": self.recording.enabled,
+            "recording_keep_last_runs_per_thread": self.recording.keep_last_runs_per_thread,
+            "isolation_enabled": self.isolation.enabled,
+            "isolation_effective": self.use_isolation,
+            "web_search_enabled": self.web_search.enabled,
             "openrouter_base_url": self.openrouter_base_url,
             "config_path": str(self.config_path) if self.config_path else None,
             "openrouter_api_key_set": bool(self.openrouter_api_key),

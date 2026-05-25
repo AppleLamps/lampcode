@@ -87,6 +87,23 @@ class McpToolCallItem(BaseModel):
     tool_call_id: str | None = None
 
 
+class WebSearchResult(BaseModel):
+    title: str
+    url: str
+    snippet: str
+
+
+class WebSearchItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["webSearch"] = "webSearch"
+    query: str
+    results: list[WebSearchResult] = Field(default_factory=list)
+    status: Literal["pending", "approved", "denied", "completed", "failed"] = "pending"
+    tool_call_id: str | None = None
+    tool_arguments: str | None = None
+    error: str | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -96,6 +113,7 @@ Item = Annotated[
         ContextCompactionItem,
         SkillActivationItem,
         McpToolCallItem,
+        WebSearchItem,
     ],
     Field(discriminator="type"),
 ]
@@ -149,6 +167,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
         "contextCompaction": ContextCompactionItem,
         "skillActivation": SkillActivationItem,
         "mcpToolCall": McpToolCallItem,
+        "webSearch": WebSearchItem,
     }
     cls = mapping.get(item_type)
     if cls is None:
