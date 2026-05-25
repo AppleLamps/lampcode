@@ -45,26 +45,33 @@ def init_project(cwd: Path, *, name: str | None = None, yes: bool = False) -> di
     project_name = name or cwd.name
     base = cwd / ".agent-cli"
     skills = base / "skills" / "project-default"
-    created: dict[str, str] = {}
-
-    if base.exists() and not yes:
-        return {"skipped": "already exists — use --yes to overwrite scaffold files"}
+    result: dict[str, str] = {}
 
     base.mkdir(parents=True, exist_ok=True)
+
     config_path = base / "config.toml"
     if not config_path.is_file() or yes:
         config_path.write_text(INIT_CONFIG_TEMPLATE.format(name=project_name), encoding="utf-8")
-        created["config"] = str(config_path)
+        result["config"] = str(config_path)
+    elif config_path.is_file():
+        result["skipped_config"] = "config.toml exists — use --yes to overwrite"
 
     agents_path = cwd / "AGENTS.md"
     if not agents_path.is_file() or yes:
         agents_path.write_text(AGENTS_MD_TEMPLATE, encoding="utf-8")
-        created["agents"] = str(agents_path)
+        result["agents"] = str(agents_path)
+    elif agents_path.is_file():
+        result["skipped_agents"] = "AGENTS.md exists — use --yes to overwrite"
 
     skills.mkdir(parents=True, exist_ok=True)
     skill_md = skills / "SKILL.md"
     if not skill_md.is_file() or yes:
         skill_md.write_text(SKILL_TEMPLATE, encoding="utf-8")
-        created["skill"] = str(skill_md)
+        result["skill"] = str(skill_md)
+    elif skill_md.is_file():
+        result["skipped_skill"] = "skills/project-default exists — use --yes to overwrite"
 
-    return created
+    if not any(k in result for k in ("config", "agents", "skill")) and result:
+        result.setdefault("message", "scaffold already present — no files changed")
+
+    return result

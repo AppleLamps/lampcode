@@ -1,13 +1,19 @@
 # Demo Project
 
-Intentionally broken `calc.add` for testing the agent.
+Intentionally broken `calc.add` for testing the agent harness golden path.
 
-```bash
-pytest -q  # fails
+```powershell
+cd examples/demo-project
+.\setup.ps1          # git init (once)
+agent init --yes     # scaffold if needed
+agent run "fix failing tests" --model-profile deep
+pytest -q            # should pass after agent fixes calc.py
 ```
 
-Fix with:
+Manual check without setup script:
 
-```bash
-agent run "Find why tests fail and fix them" --cwd examples/demo-project
+```powershell
+git init
+agent init --yes
+agent run "fix failing tests" --model-profile deep
 ```

@@ -1,0 +1,24 @@
+profile = "interactive"
+model_profile = "deep"
+sandbox_mode = "workspace-write"
+approval_mode = "interactive"
+
+[project]
+name = "demo-project"
+trust_git_root = true
+
+[model_profiles.fast]
+model = "google/gemini-2.5-flash-preview"
+max_tool_rounds = 15
+
+[model_profiles.deep]
+model = "anthropic/claude-sonnet-4"
+max_tool_rounds = 40
+reasoning_effort = "high"
+
+[model_routing]
+enabled = true
+rules = [
+  { match = "fix test|pytest|failing test", profile = "deep" },
+  { match = "summarize|explain", profile = "fast" },
+]
