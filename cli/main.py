@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import shutil
 import signal
 import sys
@@ -584,6 +585,7 @@ def run(
 
 @app.command("review")
 def review_cmd(
+    prompt: Optional[str] = typer.Argument(None, help="Custom review focus (use '-' for stdin)"),
     uncommitted: bool = typer.Option(False, "--uncommitted", help="Review uncommitted changes"),
     base: Optional[str] = typer.Option(None, "--base", help="Review diff vs branch (e.g. main)"),
     commit: Optional[str] = typer.Option(None, "--commit", help="Review a specific commit SHA"),
@@ -630,15 +632,23 @@ def review_cmd(
     from agent.review import collect_review_context
     from agent.review_runner import run_review
 
+    custom_prompt = ""
+    if prompt == "-":
+        import sys
+
+        custom_prompt = sys.stdin.read().strip()
+    elif prompt:
+        custom_prompt = prompt
+
     if uncommitted:
         mode = "uncommitted"
-        ctx = collect_review_context(config.cwd, mode=mode)
+        ctx = collect_review_context(config.cwd, mode=mode, custom_prompt=custom_prompt)
     elif base is not None:
         mode = "base"
-        ctx = collect_review_context(config.cwd, mode=mode, base=base)
+        ctx = collect_review_context(config.cwd, mode=mode, base=base, custom_prompt=custom_prompt)
     else:
         mode = "commit"
-        ctx = collect_review_context(config.cwd, mode=mode, commit=commit)
+        ctx = collect_review_context(config.cwd, mode=mode, commit=commit, custom_prompt=custom_prompt)
 
     output = OutputHandler(json_stream=json_output, quiet_tools=True)
     emitter = build_event_emitter(output.handle)
@@ -885,10 +895,16 @@ def doctor(
     pty = pty_support_status()
     table.add_row(
         "persistent shell / PTY",
-        f"enabled={cfg.shell.enabled}, backend={pty.get('backend')}, "
+        f"enabled={cfg.shell.enabled}, configured={cfg.shell.backend}, "
+        f"probe={pty.get('backend')}, conpty={pty.get('conpty_available')}, "
         f"max_output={cfg.shell.max_output_chars}, yield_ms={cfg.shell.default_yield_ms}, "
         f"{pty.get('note', '')}",
     )
+    ws = cfg.web_search
+    ws_key = "set" if (ws.api_key or (ws.api_key_env and os.environ.get(ws.api_key_env))) else "missing"
+    if ws.provider == "duckduckgo":
+        ws_key = "n/a"
+    table.add_row("web search", f"provider={ws.provider} key={ws_key}")
     table.add_row(
         "harness",
         f"max_parallel_read_tools={cfg.harness.max_parallel_read_tools}",
@@ -1201,8 +1217,6 @@ def doctor(
         console.print(model_table)
 
     if deep:
-        import os
-
         skip_docker = os.environ.get("AGENT_SKIP_DOCKER_INTEGRATION") == "1"
         if docker_ok and not skip_docker:
             hw_ok, hw_msg = check_docker_hello_world(docker_bin, skip=skip_docker)
@@ -2165,6 +2179,20 @@ def threads_rename(
     console.print(f"Renamed {thread.id} → {title!r}")
 
 
+@exec_policy_app.command("amend")
+def exec_policy_amend(
+    prefix: str = typer.Option(..., "--prefix", help="Command prefix to allow for this project"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """Append a command prefix to the project exec-policy allow list."""
+    from agent.exec_policy import append_allow_prefix, load_allow_prefixes
+
+    root = (cwd or Path.cwd()).resolve()
+    append_allow_prefix(root, prefix)
+    prefixes = load_allow_prefixes(root)
+    stdout_console.print({"cwd": str(root), "prefixes": prefixes})
+
+
 @exec_policy_app.command("test")
 def exec_policy_test(
     command: str = typer.Argument(..., help="Shell command to evaluate"),
@@ -3090,6 +3118,14 @@ def _runs_dir_writable() -> str:
         return "yes"
     except OSError:
         return "no"
+
+
+@app.command("mcp-server")
+def mcp_server_cmd() -> None:
+    """Run stdio MCP server exposing agent_run for external clients."""
+    from agent.mcp_server.server import run_stdio_server
+
+    run_stdio_server()
 
 
 @app.command("tui")
