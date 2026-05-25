@@ -46,7 +46,7 @@ class TracerProvider:
     def __init__(self) -> None:
         self.enabled = False
         self.service_name = "agent-cli"
-        self.service_version = "1.3.0"
+        self.service_version = "1.4.0"
         self.sample_rate = 1.0
         self.export_console = False
         self._memory = InMemorySpanExporter()
@@ -77,7 +77,7 @@ class TracerProvider:
 
             self.service_version = version("agent-cli")
         except Exception:
-            self.service_version = "1.3.0"
+            self.service_version = "1.4.0"
         if not self.enabled:
             return
         try:

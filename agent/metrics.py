@@ -47,6 +47,9 @@ class MetricsCollector:
             "agent_errors_total": {},
             "agent_sandbox_kernel_total": {},
             "agent_auth_oidc_login_total": {},
+            "agent_ide_requests_total": {},
+            "agent_auth_device_code_total": {},
+            "agent_dag_persist_total": {},
         }
         self._gauges: dict[str, int] = {
             "active_turns": 0,
@@ -202,6 +205,10 @@ class MetricsCollector:
                 elif metric in ("agent_sandbox_kernel_total", "agent_auth_oidc_login_total"):
                     key = "backend" if metric == "agent_sandbox_kernel_total" else "result"
                     lines.append(f'{metric}{{{key}="{label}"}} {value}')
+                elif metric == "agent_ide_requests_total":
+                    lines.append(f'{metric}{{route="{label}"}} {value}')
+                elif metric in ("agent_auth_device_code_total", "agent_dag_persist_total"):
+                    lines.append(f'{metric}{{result="{label}"}} {value}')
                 else:
                     lines.append(f'{metric}{{label="{label}"}} {value}')
         for k, v in snap.gauges.items():

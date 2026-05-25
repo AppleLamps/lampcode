@@ -658,7 +658,85 @@ Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for
 3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
 4. Run `agent config validate --strict` in CI/deploy scripts.
 5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
-6. Run `pytest` (470+ tests) before release; check `agent doctor --deep` for TLS/RBAC/kernel/OIDC.
+6. Run `pytest` (530+ tests) before release; check `agent doctor --deep` for TLS/RBAC/kernel/OIDC/IDE.
+
+## Phase 14 — Web IDE lite + enterprise auth + cross-turn DAG v5 (v1.4.0)
+
+### Web IDE lite (serve)
+
+Authenticated file tree + Monaco editor for thread cwd. RBAC: viewer read-only, operator/admin can save.
+
+```toml
+[serve.ide]
+enabled = true
+max_file_bytes = 1048576
+max_tree_entries = 2000
+monaco_cdn = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs"
+```
+
+API: `GET /ide/tree`, `GET /ide/file`, `PUT /ide/file`, `GET /ide/diff?thread_id=&path=`
+
+```powershell
+agent serve --enable-turn-start --enable-ide
+```
+
+### mTLS (optional)
+
+```toml
+[serve.tls]
+enabled = true
+require_client_cert = true
+client_ca_file = "~/.agent-cli/certs/client-ca.pem"
+```
+
+Document reverse-proxy termination (nginx/Traefik) as production alternative.
+
+### OAuth device code (headless CI)
+
+```toml
+[serve.auth.oidc]
+device_code_enabled = true
+device_client_id = "..."    # optional separate public client
+```
+
+```powershell
+agent auth login --device
+agent auth login --device --headless --timeout 600
+```
+
+Tokens stored in `~/.agent-cli/auth/oidc.json` (use keyring when available).
+
+### Cross-turn DAG v5
+
+Worker graphs persist across turns in `~/.agent-cli/dag-state/{thread_id}.json`.
+
+```toml
+[multi_agent]
+dag_enabled = true
+dag_persist_across_turns = true
+dag_max_age_sec = 86400
+dag_auto_resume = false
+```
+
+```powershell
+agent multi-agent dag-status --thread-id <id>
+agent multi-agent dag-clear --thread-id <id> --yes
+agent multi-agent resume --thread-id <id>
+```
+
+Events: `multi_agent.dag.persisted`, `multi_agent.dag.resumed_across_turns`.
+
+Metrics: `agent_ide_requests_total`, `agent_auth_device_code_total`, `agent_dag_persist_total`.
+
+## Tests
+
+```powershell
+pytest   # 530+ tests
+```
+
+## Phase 15 (planned, not implemented)
+
+Windows AppContainer, remote marketplace CDN + revocation, budgeted autonomous swarms, multi-file IDE tabs/LSP/debugger, OAuth refresh rotation.
 
 ## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
 
