@@ -216,7 +216,16 @@ agent profile list
 agent profile show interactive
 ```
 
-OpenRouter fallbacks, retries, and per-turn cost estimates are on by default. `agent doctor` includes a solo-dev readiness table and OpenRouter reachability when a key is set.
+OpenRouter fallbacks, retries, and per-turn cost estimates are on by default. `agent doctor` includes a solo-dev readiness table, OpenRouter reachability when a key is set, and **`agent doctor --models`** for per-profile preflight (tools, context, pricing).
+
+```powershell
+agent run "fix tests" --max-cost 0.50          # stop turn when estimated cost exceeds cap
+agent review --base main --json --fail-on critical,major   # CI exit code 1 on findings
+# config: [harness] post_patch_test = "pytest -q"
+agent threads show <thread-id> --stats
+```
+
+See [docs/json-events.md](docs/json-events.md) for the `--json` event catalog.
 
 ## Demo project golden path
 
@@ -233,12 +242,12 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 944+ tests
+pytest   # 953+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.6.0 (Phase 25).
+See [CHANGELOG.md](CHANGELOG.md) for v2.7.0 (Phase 26).
 
 ## Further reading
 

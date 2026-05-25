@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.7.0] — 2026-05-25
+
+Phase 26 OpenRouter differentiation (solo only).
+
+### Added
+
+- **Model preflight:** `agent doctor --models` table (tools, context, pricing, vision, reasoning); once-per-session tool-capability warning on run.
+- **Budget caps:** `agent run --max-cost`, config `[budget] max_cost_usd_per_turn`; graceful turn stop with `budget_exceeded` in `[done]` / `--json`.
+- **Review CI schema:** `schemas/review.v1.json`; `--fail-on` / `--severity-threshold` exit codes for `agent review --json`.
+- **JSON stream parity:** `docs/json-events.md` catalog; golden fixture for event ordering.
+- **Post-patch test hook:** `[harness] post_patch_test` runs after successful `apply_patch`.
+- **Turn stats:** `agent threads show --stats`; files touched, lines +/-, commands run, tests detected in `[done]` and `run.summary`.
+
+### Changed
+
+- **Review JSON:** `schema_version` field (default `v1`) on structured review output.
+- **HarnessSession:** Restored `approval_cache` alongside turn cost tracking.
+
+### Tests
+
+- `tests/test_phase26.py` — **953** pytest cases (944 baseline + 9 new).
+
 ## [2.6.0] — 2026-05-25
 
 Phase 25 daily UX (solo only).

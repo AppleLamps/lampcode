@@ -15,19 +15,28 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.6.0 — Phase 25 complete)
+## Current state (v2.7.0 — Phase 26 complete)
 
-Phase 25 shipped as **v2.6.0**. Before doing new work, verify:
+Phase 26 shipped as **v2.7.0**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~944 passed, 1 skipped, 0 failed
-git log --oneline -15   # expect Phase 25 commits after Phase 24
+pytest -q               # expect ~953 passed, 1 skipped, 0 failed
+git log --oneline -15   # expect Phase 26 commits after Phase 25
 ```
 
-**Bottom line:** You're on **v2.6.0 / Phase 25 complete**. Next work is **Phase 26** unless you explicitly pivot to enterprise features.
+**Bottom line:** You're on **v2.7.0 / Phase 26 complete**. Next work is **Phase 27** unless you explicitly pivot to enterprise features.
 
-### Phase 25 (v2.6.0) — just shipped
+### Phase 26 (v2.7.0) — just shipped
+
+- **Model preflight:** `agent doctor --models`; once-per-session non-tool model warning
+- **Budget caps:** `--max-cost`, `[budget] max_cost_usd_per_turn`; graceful stop + `budget_exceeded` in summary
+- **Review CI:** `schemas/review.v1.json`, `--fail-on` / `--severity-threshold` exit codes
+- **JSON stream parity:** `docs/json-events.md`, golden fixture
+- **Post-patch test:** `[harness] post_patch_test` after successful `apply_patch`
+- **Turn stats:** `threads show --stats`; files/commands/tests in `[done]` and `--json`
+
+### Phase 25 (v2.6.0)
 
 - **Thread picker:** `agent threads pick`, `--resume`, REPL `/resume` and `/fork`
 - **`agent apply`:** Re-apply last patch from thread history
@@ -96,7 +105,7 @@ git log --oneline -15   # expect Phase 25 commits after Phase 24
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
 - `CHANGELOG.md` — v2.1.0 / v2.2.0 / v2.3.0 notes
 
-**Tests:** 944 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 953 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)
@@ -135,9 +144,32 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 26 direction (planned — see roadmap)
+## Phase 27 direction (planned — see roadmap)
 
-Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phase 26 → v2.7.0).
+Candidates from Phase 26 exit notes (not fully specified):
+
+- **ConPTY / interactive PTY on Windows** — richer terminal than pipe-persistent shell
+- **`agent mcp-server`** — expose harness as MCP tool for external clients
+- **Web search provider upgrade** — Exa/Tavily config slot (OpenRouter-first)
+- **Exec policy amendments** — session-scoped allow rules without Starlark
+- **JSON replay bundle export** — debug-compatible run export
+
+Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** when Phase 27 doc lands.
+
+---
+
+## Phase 26 direction (complete — v2.7.0)
+
+OpenRouter differentiation:
+
+1. Model preflight in doctor + run warnings ✅
+2. Budget caps per turn ✅
+3. Review JSON schema v1 + CI exit codes ✅
+4. JSON stream parity audit ✅
+5. Post-patch test hook ✅
+6. Turn stats ✅
+
+Target release: **v2.7.0** with tests for each feature + full pytest green. ✅
 
 ---
 

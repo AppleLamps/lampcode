@@ -115,6 +115,12 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Cost visibility | ✅ | Pricing seed, `[done]` line, `agent threads cost` |
 | Tool-capable models | ✅ | Warnings for denylist / cache heuristics |
 | Web search | ⚠️ | DuckDuckGo optional — not Responses API quality |
+| Model preflight table | ✅ | `agent doctor --models` (Phase 26) |
+| Per-turn cost cap | ✅ | `--max-cost`, `[budget] max_cost_usd_per_turn` (Phase 26) |
+| Review CI exit codes | ✅ | `--fail-on`, `review.v1.json` schema (Phase 26) |
+| Post-patch test hook | ✅ | `[harness] post_patch_test` (Phase 26) |
+| Turn / thread stats | ✅ | `threads show --stats`, extended `[done]` line (Phase 26) |
+| JSON event catalog | ✅ | `docs/json-events.md` + golden fixture (Phase 26) |
 | Reasoning effort | ✅ | `reasoning_effort` in profiles → OpenRouter `reasoning.effort` |
 | Structured output schema | ✅ | `--output-schema` on `agent run` (Phase 22) |
 
@@ -135,4 +141,6 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Resume picker / apply | ✅ Phase 25 |
 | Ephemeral + notify | ✅ Phase 25 |
 | Memories | ⚠️ v2 scoring + inject (Phase 25) |
+| Budget caps / review CI | ✅ Phase 26 |
+| Turn stats + post-patch hook | ✅ Phase 26 |
 | Enterprise cloud | ❌ By design — see enterprise.md |
