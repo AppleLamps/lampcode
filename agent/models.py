@@ -169,6 +169,13 @@ class WorkspaceSyncItem(BaseModel):
     plan: dict | None = None
 
 
+class PlanProposalItem(BaseModel):
+    type: Literal["planProposal"] = "planProposal"
+    id: str = Field(default_factory=new_id)
+    text: str
+    source_message_id: str | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -183,6 +190,7 @@ Item = Annotated[
         CollabSpawnItem,
         CollabWorkerItem,
         WorkspaceSyncItem,
+        PlanProposalItem,
     ],
     Field(discriminator="type"),
 ]
@@ -241,6 +249,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
         "collabSpawn": CollabSpawnItem,
         "collabWorker": CollabWorkerItem,
         "workspaceSync": WorkspaceSyncItem,
+        "planProposal": PlanProposalItem,
     }
     cls = mapping.get(item_type)
     if cls is None:

@@ -28,6 +28,7 @@ Legacy `--jsonl-events` uses the internal `AgentEvent` shape instead.
 | `approval.decided` | User responded | `decision` |
 | `compaction.completed` | Context compacted | `removed_items`, `estimated_tokens_before`, `estimated_tokens_after` |
 | `compaction.warning` | Multi-compact warning | `message` |
+| `plan.proposed` | Plan mode structured plan | `text`, `summary` |
 | `permission.escalated` | Sandbox scope granted | `scope` |
 | `permission.denied` | Escalation denied | `scope`, `reason` |
 | `error` | Error surfaced | `message` |

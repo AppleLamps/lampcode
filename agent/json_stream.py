@@ -27,6 +27,7 @@ V2_EVENT_TYPES = frozenset(
         "user.input",
         "compaction.completed",
         "compaction.warning",
+        "plan.proposed",
     }
 )
 

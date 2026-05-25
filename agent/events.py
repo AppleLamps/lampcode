@@ -249,6 +249,16 @@ class EventEmitter:
             )
         )
 
+    def plan_proposed(self, thread_id: str, turn_id: str, *, text: str, summary: str) -> None:
+        self.emit(
+            AgentEvent(
+                "plan.proposed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"text": text, "summary": summary},
+            )
+        )
+
     def sandbox_blocked(
         self,
         thread_id: str,
