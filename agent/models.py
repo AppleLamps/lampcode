@@ -83,6 +83,7 @@ class ContextCompactionItem(BaseModel):
     id: str = Field(default_factory=new_id)
     type: Literal["contextCompaction"] = "contextCompaction"
     summarized_items: int | None = None
+    compaction_index: int | None = None
 
 
 class SkillActivationItem(BaseModel):

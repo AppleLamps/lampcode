@@ -240,6 +240,15 @@ class EventEmitter:
             )
         )
 
+    def compaction_warning(self, thread_id: str, message: str) -> None:
+        self.emit(
+            AgentEvent(
+                "compaction.warning",
+                thread_id=thread_id,
+                data={"message": message},
+            )
+        )
+
     def sandbox_blocked(
         self,
         thread_id: str,
