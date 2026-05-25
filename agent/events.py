@@ -712,6 +712,54 @@ class EventEmitter:
             )
         )
 
+    def ide_file_write(
+        self,
+        thread_id: str | None,
+        *,
+        path: str,
+        bytes_written: int,
+        user: str,
+        role: str,
+        email: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "ide.file.write",
+                thread_id=thread_id,
+                data={
+                    "path": path,
+                    "bytes": bytes_written,
+                    "user": user,
+                    "email": email,
+                    "role": role,
+                },
+            )
+        )
+
+    def multi_agent_dag_persisted(
+        self, thread_id: str, turn_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.persisted",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data=extra,
+            )
+        )
+
+    def multi_agent_dag_resumed_across_turns(
+        self, thread_id: str, turn_id: str, *, from_turn: str = "", **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.resumed_across_turns",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"from_turn": from_turn, **extra},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

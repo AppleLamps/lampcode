@@ -95,6 +95,63 @@ class WorkerRegistry:
         self._wait_timeout = config.multi_agent.wait_timeout_sec
         self.spawn_count = 0
         self._fail_fast_triggered = False
+        self._load_persisted_dag()
+
+    def _load_persisted_dag(self) -> None:
+        ma = self._config.multi_agent
+        if not ma.dag_enabled or not ma.dag_persist_across_turns:
+            return
+        if not self._parent_thread:
+            return
+        from agent.metrics import MetricsCollector
+        from agent.multi_agent.dag_state import DagStateStore
+
+        store = DagStateStore()
+        state = store.load(self._parent_thread.id if self._parent_thread else "")
+        if not state:
+            return
+        if store.is_expired(state, ma.dag_max_age_sec):
+            store.clear(state.thread_id)
+            return
+        for node in state.nodes:
+            wid = node.get("worker_id", "")
+            if not wid or wid in self._workers:
+                continue
+            rec = WorkerRecord(
+                worker_id=wid,
+                parent_thread_id=node.get("parent_thread_id", ""),
+                task=node.get("task", ""),
+                depth=int(node.get("depth", 0)),
+                status=node.get("status", "queued"),
+                worker_thread_id=node.get("worker_thread_id", ""),
+                summary=node.get("summary"),
+                execution_backend=node.get("execution_backend"),
+                worker_dependencies=list(node.get("worker_dependencies", [])),
+                attempts=int(node.get("attempts", 0)),
+                error=node.get("error"),
+            )
+            if rec.status == "completed":
+                rec._done.set()
+            self._workers[wid] = rec
+        from agent.multi_agent.dag import DagEdge
+
+        self._edges = [DagEdge.from_dict(e) for e in state.edges]
+        self._dag_status = state.dag_status
+        self.spawn_count = max(self.spawn_count, state.spawn_count)
+        statuses = self._statuses()
+        deps_map = self._dependencies_map()
+        for wid, rec in self._workers.items():
+            if rec.status in ("completed", "failed", "cancelled", "running"):
+                continue
+            if self.dag_enabled and not deps_satisfied(wid, deps_map, statuses):
+                rec.status = "blocked"
+            elif rec.status == "queued":
+                self._pending_queue.append(wid)
+        MetricsCollector.global_collector().inc_labeled("agent_dag_persist_total", "load")
+        if self._emitter and self._parent_thread and self._turn_id:
+            self._emitter.multi_agent_dag_resumed_across_turns(
+                self._parent_thread.id, self._turn_id, from_turn=state.last_turn_id
+            )
 
     @property
     def dag_enabled(self) -> bool:
@@ -144,6 +201,16 @@ class WorkerRegistry:
                 )
         if path and self._emitter:
             self._emitter.collab_checkpoint_saved(parent_thread.id, turn_id, path=str(path))
+        if path and self._config.multi_agent.dag_persist_across_turns:
+            from agent.metrics import MetricsCollector
+            from agent.multi_agent.dag_state import DagStateStore
+
+            DagStateStore().save_from_registry(
+                self, thread_id=parent_thread.id, turn_id=turn_id or ""
+            )
+            MetricsCollector.global_collector().inc_labeled("agent_dag_persist_total", "save")
+            if self._emitter:
+                self._emitter.multi_agent_dag_persisted(parent_thread.id, turn_id or "")
 
     def _validate_new_deps(
         self,

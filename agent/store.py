@@ -157,6 +157,12 @@ class ThreadStore:
         if not path.exists():
             raise FileNotFoundError(f"Thread not found: {thread_id}")
         path.unlink()
+        try:
+            from agent.multi_agent.dag_state import clear_dag_state_for_thread
+
+            clear_dag_state_for_thread(thread_id)
+        except Exception:
+            pass
 
     def rewrite_turns(self, thread: Thread) -> None:
         """Replace turn/item records while preserving meta (used after compaction)."""
