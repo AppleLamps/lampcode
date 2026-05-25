@@ -11,19 +11,26 @@ from agent.sandbox.classifier import (
     mcp_tool_is_mutating,
 )
 from agent.sandbox.policy import SandboxMode
+from agent.session import HarnessSession
 
 
 def check_run_command(
     cmd: str,
     cwd: Path,
     mode: SandboxMode,
+    *,
+    session: HarnessSession | None = None,
 ) -> SandboxDecision:
+    if session and session.has_full_access_escalation():
+        return SandboxDecision(allowed=True)
     if mode == SandboxMode.DANGER_FULL_ACCESS:
         return SandboxDecision(allowed=True)
 
     risk = classify_command(cmd)
 
     if mode == SandboxMode.READ_ONLY:
+        if risk == CommandRisk.NETWORK and session and session.has_network_escalation():
+            return SandboxDecision(allowed=True)
         if risk in (CommandRisk.WRITE, CommandRisk.NETWORK):
             return SandboxDecision(
                 allowed=False,
@@ -33,6 +40,8 @@ def check_run_command(
 
     # workspace-write
     if risk == CommandRisk.NETWORK:
+        if session and session.has_network_escalation():
+            return SandboxDecision(allowed=True)
         return SandboxDecision(
             allowed=False,
             reason="network-like command denied in workspace-write sandbox",
@@ -44,6 +53,11 @@ def check_run_command(
             try:
                 resolve_path_within_cwd(cwd, target)
             except ValueError:
+                if session and (
+                    session.allow_write_outside_cwd or session.turn_allow_write_outside_cwd
+                    or session.has_full_access_escalation()
+                ):
+                    continue
                 return SandboxDecision(
                     allowed=False,
                     reason=f"write target outside workspace: {target!r}",
