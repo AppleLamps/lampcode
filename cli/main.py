@@ -21,6 +21,7 @@ from agent.models import Thread, new_id, utc_now_iso
 from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
+from agent.exec_policy import evaluate_command, should_prompt_for_command
 from agent.store import ThreadStore
 
 app = typer.Typer(no_args_is_help=True, help="Codex-inspired coding agent CLI")
@@ -28,10 +29,12 @@ threads_app = typer.Typer(help="Manage conversation threads")
 config_app = typer.Typer(help="Configuration commands")
 mcp_app = typer.Typer(help="MCP server commands")
 skills_app = typer.Typer(help="Skill discovery commands")
+exec_policy_app = typer.Typer(help="Exec policy rule testing")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
+app.add_typer(exec_policy_app, name="exec-policy")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -64,6 +67,19 @@ class OutputHandler:
             console.print(
                 f"[dim][compaction] summarized {event.data.get('summarized_items', 0)} items[/dim]"
             )
+        elif event.type == "compaction.completed" and not self.quiet_tools:
+            console.print(
+                f"[dim][compaction] removed {event.data.get('removed_items', 0)} items "
+                f"({event.data.get('estimated_tokens_before', '?')} → "
+                f"{event.data.get('estimated_tokens_after', '?')} tokens est.)[/dim]"
+            )
+        elif event.type == "sandbox.blocked":
+            mode = event.data.get("mode", "")
+            reason = event.data.get("reason", "")
+            cmd = event.data.get("command")
+            console.print(f"[yellow][sandbox][/yellow] blocked ({mode}): {reason}")
+            if cmd:
+                console.print(f"  command: {cmd}")
         elif event.type == "error":
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
         elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
@@ -107,6 +123,14 @@ def run(
         "--session-auto-approve",
         help="Approve all shell/write/MCP actions for this thread session",
     ),
+    sandbox: Optional[str] = typer.Option(
+        None,
+        "--sandbox",
+        help="Sandbox mode: danger-full-access | read-only | workspace-write",
+    ),
+    title: Optional[str] = typer.Option(
+        None, "--title", help="Thread title (new threads only)"
+    ),
     show_system_prompt: bool = typer.Option(
         False,
         "--show-system-prompt",
@@ -121,6 +145,7 @@ def run(
             auto_approve=auto_approve if auto_approve else None,
             max_rounds=max_rounds,
             skip_git_check=skip_git_check,
+            sandbox=sandbox,
         )
         config.require_api_key()
     except ValueError as exc:
@@ -160,6 +185,7 @@ def run(
             cwd=str(config.cwd),
             model=config.model,
             repo_root=repo_root,
+            title=title,
             created_at=utc_now_iso(),
             updated_at=utc_now_iso(),
         )
@@ -195,9 +221,10 @@ def run(
         console.print("[dim][approval] session auto-approve enabled[/dim]")
 
     if not jsonl_events:
-        console.print(f"[dim]Thread:[/dim] {thread.id}")
+        console.print(f"[dim]Thread:[/dim] {thread.display_label()} ({thread.id})")
         console.print(f"[dim]Model:[/dim] {config.model}")
         console.print(f"[dim]CWD:[/dim] {thread.cwd}")
+        console.print(f"[dim]Sandbox:[/dim] {config.sandbox_mode.value}")
         if thread.repo_root:
             console.print(f"[dim]Repo:[/dim] {thread.repo_root}")
         console.print()
@@ -299,6 +326,14 @@ def doctor(
     if enabled_mcp and not npx_ok:
         checks.append(("MCP warning", "npx missing but MCP servers configured"))
 
+    if cfg.exec_policy.mode.value == "never" and not cfg.auto_approve:
+        checks.append(
+            (
+                "exec_policy warning",
+                "exec_policy=never disables prompts; use --auto-approve in CI",
+            )
+        )
+
     table = Table(title="agent doctor")
     table.add_column("Check")
     table.add_column("Status")
@@ -309,6 +344,23 @@ def doctor(
         if "warning" in name.lower():
             style = "yellow"
         table.add_row(name, f"[{style}]{status}[/{style}]")
+
+    table.add_row("sandbox mode (effective)", cfg.sandbox_mode.value)
+    table.add_row(
+        "exec policy",
+        f"{cfg.exec_policy.mode.value} "
+        f"(allow={len(cfg.exec_policy.rules.allow)}, deny={len(cfg.exec_policy.rules.deny)})",
+    )
+    table.add_row(
+        "OpenRouter retries",
+        f"max={cfg.openrouter.max_retries}, base_delay={cfg.openrouter.retry_base_delay_sec}s, "
+        f"timeout={cfg.openrouter.request_timeout_sec}s",
+    )
+    table.add_row(
+        "compaction",
+        f"enabled={cfg.compaction.enabled}, threshold={cfg.compaction.threshold}",
+    )
+    table.add_row("thread fork", "supported (forked_from metadata in JSONL)")
     console.print(table)
 
     if deep and enabled_mcp:
@@ -435,17 +487,67 @@ def threads_list() -> None:
 
     table = Table(title="Agent Threads")
     table.add_column("ID", style="cyan")
+    table.add_column("Title / lineage")
     table.add_column("CWD")
     table.add_column("Updated")
     table.add_column("Last message")
     for thread in threads:
         table.add_row(
             thread.id[:8] + "...",
+            thread.display_label(),
             thread.cwd,
             thread.updated_at[:19],
             thread.last_user_message_preview(),
         )
     console.print(table)
+
+
+@threads_app.command("fork")
+def threads_fork(
+    thread_id: str = typer.Argument(..., help="Source thread ID (full or prefix)"),
+    title: Optional[str] = typer.Option(None, "--title", help="Title for forked thread"),
+) -> None:
+    """Fork a thread (branch conversation history)."""
+    store = ThreadStore()
+    source = _load_thread(store, thread_id)
+    forked = store.fork_thread(source, title=title)
+    console.print(f"Forked thread: {forked.id}")
+    if forked.forked_from:
+        console.print(f"  forked_from: {forked.forked_from}")
+    if forked.title:
+        console.print(f"  title: {forked.title}")
+
+
+@threads_app.command("rename")
+def threads_rename(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+    title: str = typer.Argument(..., help="New title"),
+) -> None:
+    """Rename a thread."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    store.rename_thread(thread, title)
+    console.print(f"Renamed {thread.id} → {title!r}")
+
+
+@exec_policy_app.command("test")
+def exec_policy_test(
+    command: str = typer.Argument(..., help="Shell command to evaluate"),
+) -> None:
+    """Test exec policy rules against a command."""
+    cfg = Config.resolve()
+    result = evaluate_command(command, cfg.exec_policy)
+    prompt = should_prompt_for_command(command, cfg.exec_policy)
+    stdout_console.print(
+        {
+            "command": command,
+            "mode": cfg.exec_policy.mode.value,
+            "decision": result["decision"],
+            "reason": result["reason"],
+            "auto_approve": result["auto_approve"],
+            "would_prompt": prompt,
+        }
+    )
 
 
 @threads_app.command("show")
@@ -456,7 +558,12 @@ def threads_show(
     store = ThreadStore()
     thread = _load_thread(store, thread_id)
 
-    console.print(f"[bold]Thread[/bold] {thread.id}")
+    console.print(f"[bold]Thread[/bold] {thread.display_label()}")
+    console.print(f"ID: {thread.id}")
+    if thread.title:
+        console.print(f"Title: {thread.title}")
+    if thread.forked_from:
+        console.print(f"Forked from: {thread.forked_from}")
     console.print(f"CWD: {thread.cwd}")
     if thread.repo_root:
         console.print(f"Repo root: {thread.repo_root}")

@@ -113,12 +113,20 @@ class Thread(BaseModel):
     cwd: str
     model: str
     repo_root: str | None = None
+    forked_from: str | None = None
+    title: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     turns: list[Turn] = Field(default_factory=list)
 
     def touch(self) -> None:
         self.updated_at = utc_now_iso()
+
+    def display_label(self) -> str:
+        base = self.title or self.id[:8] + "..."
+        if self.forked_from:
+            return f"{base} (fork of {self.forked_from[:8]}...)"
+        return base
 
     def last_user_message_preview(self, max_len: int = 80) -> str:
         for turn in reversed(self.turns):

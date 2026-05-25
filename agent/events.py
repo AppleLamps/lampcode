@@ -44,13 +44,23 @@ class EventEmitter:
     def turn_started(self, thread_id: str, turn_id: str) -> None:
         self.emit(AgentEvent("turn.started", thread_id=thread_id, turn_id=turn_id))
 
-    def turn_completed(self, thread_id: str, turn_id: str, status: str) -> None:
+    def turn_completed(
+        self,
+        thread_id: str,
+        turn_id: str,
+        status: str,
+        *,
+        estimated_tokens: int | None = None,
+    ) -> None:
+        data: dict[str, Any] = {"status": status}
+        if estimated_tokens is not None:
+            data["estimated_tokens"] = estimated_tokens
         self.emit(
             AgentEvent(
                 "turn.completed",
                 thread_id=thread_id,
                 turn_id=turn_id,
-                data={"status": status},
+                data=data,
             )
         )
 
@@ -123,6 +133,50 @@ class EventEmitter:
                 "compaction",
                 thread_id=thread_id,
                 data={"summarized_items": summarized_items},
+            )
+        )
+
+    def compaction_completed(
+        self,
+        thread_id: str,
+        *,
+        removed_items: int,
+        summary_chars: int,
+        estimated_tokens_before: int,
+        estimated_tokens_after: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "compaction.completed",
+                thread_id=thread_id,
+                data={
+                    "removed_items": removed_items,
+                    "summary_chars": summary_chars,
+                    "estimated_tokens_before": estimated_tokens_before,
+                    "estimated_tokens_after": estimated_tokens_after,
+                },
+            )
+        )
+
+    def sandbox_blocked(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        mode: str,
+        reason: str,
+        command: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.blocked",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "mode": mode,
+                    "reason": reason,
+                    "command": command,
+                },
             )
         )
 

@@ -4,7 +4,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from agent.models import Item, Thread, Turn, parse_item, utc_now_iso
+from agent.models import Item, Thread, Turn, new_id, parse_item, utc_now_iso
 
 
 def default_store_dir() -> Path:
@@ -25,6 +25,8 @@ class ThreadStore:
             "cwd": thread.cwd,
             "model": thread.model,
             "repo_root": thread.repo_root,
+            "forked_from": thread.forked_from,
+            "title": thread.title,
             "created_at": thread.created_at,
             "updated_at": thread.updated_at,
         }
@@ -93,6 +95,8 @@ class ThreadStore:
             cwd=thread_data["cwd"],
             model=thread_data["model"],
             repo_root=thread_data.get("repo_root"),
+            forked_from=thread_data.get("forked_from"),
+            title=thread_data.get("title"),
             created_at=thread_data["created_at"],
             updated_at=thread_data["updated_at"],
             turns=[],
@@ -184,6 +188,24 @@ class ThreadStore:
             if str(Path(thread.cwd).resolve()) == target:
                 return thread
         return None
+
+    def fork_thread(self, source: Thread, title: str | None = None) -> Thread:
+        forked = source.model_copy(deep=True)
+        forked.id = new_id()
+        forked.forked_from = source.id
+        forked.title = title or (source.title and f"{source.title} (fork)")
+        forked.created_at = utc_now_iso()
+        forked.updated_at = utc_now_iso()
+        for turn in forked.turns:
+            turn.id = new_id()
+            for item in turn.items:
+                item.id = new_id()
+        self.rewrite_turns(forked)
+        return forked
+
+    def rename_thread(self, thread: Thread, title: str) -> None:
+        thread.title = title
+        self.save_thread(thread)
 
     def _update_meta_timestamp(self, thread: Thread) -> None:
         path = self.thread_path(thread.id)

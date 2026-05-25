@@ -6,6 +6,8 @@ from typing import Any
 
 from rich.console import Console
 
+from agent.config import Config
+from agent.exec_policy import ExecPolicyMode, evaluate_command
 from agent.session import HarnessSession
 
 console = Console()
@@ -40,6 +42,42 @@ def classify_command(cmd: str) -> str:
     if TEST_COMMANDS.search(cmd):
         return "test/run"
     return "run"
+
+
+def needs_approval_prompt(
+    tool_name: str,
+    arguments: dict[str, Any],
+    config: Config,
+    *,
+    turn_state: TurnApprovalState | None = None,
+    session: HarnessSession | None = None,
+) -> bool:
+    if config.auto_approve:
+        return False
+    if session and session.session_auto_approve:
+        return False
+    if turn_state and turn_state.approve_all:
+        return False
+
+    if config.exec_policy.mode == ExecPolicyMode.NEVER:
+        return False
+
+    if tool_name == "run_command" and config.exec_policy.mode == ExecPolicyMode.UNTRUSTED:
+        cmd = arguments.get("cmd", "")
+        result = evaluate_command(cmd, config.exec_policy)
+        if result["decision"] == "deny":
+            return True
+        if result["auto_approve"]:
+            return False
+
+    return True
+
+
+def exec_policy_block_reason(cmd: str, config: Config) -> str | None:
+    result = evaluate_command(cmd.strip(), config.exec_policy)
+    if result["decision"] == "deny":
+        return f"Exec policy deny rule matched for command: {cmd!r}"
+    return None
 
 
 def prompt_approval(

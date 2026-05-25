@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
@@ -12,6 +11,16 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.11+
     tomllib = None  # type: ignore[assignment]
 
+from agent.exec_policy import ExecPolicyConfig, ExecPolicyMode, load_exec_policy_config
+from agent.paths import default_config_path
+from agent.sandbox.policy import SandboxMode
+from agent.settings import (
+    CompactionSettings,
+    OpenRouterSettings,
+    load_compaction_settings,
+    load_openrouter_settings,
+)
+
 DEFAULT_MODEL = "anthropic/claude-sonnet-4"
 DEFAULT_MAX_ROUNDS = 25
 DEFAULT_COMMAND_TIMEOUT = 120
@@ -19,10 +28,6 @@ DEFAULT_MAX_TOOL_OUTPUT = 20_000
 DEFAULT_CONTEXT_WINDOW = 128_000
 DEFAULT_COMPACTION_THRESHOLD = 0.7
 ApprovalMode = Literal["interactive", "auto"]
-
-
-def default_config_path() -> Path:
-    return Path.home() / ".agent-cli" / "config.toml"
 
 
 @dataclass
@@ -36,6 +41,7 @@ class FileConfig:
     prefer_ripgrep: bool = True
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW
     compaction_threshold: float = DEFAULT_COMPACTION_THRESHOLD
+    sandbox_mode: str | None = None
     tools: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -54,6 +60,13 @@ class FileConfig:
         if not isinstance(tools, dict):
             tools = {}
 
+        compaction = data.get("compaction", {})
+        threshold = DEFAULT_COMPACTION_THRESHOLD
+        if isinstance(compaction, dict) and "threshold" in compaction:
+            threshold = float(compaction["threshold"])
+        elif "compaction_threshold" in data:
+            threshold = float(data["compaction_threshold"])
+
         return cls(
             model=data.get("model"),
             approval_mode=data.get("approval_mode", "interactive"),
@@ -69,9 +82,8 @@ class FileConfig:
             context_window_tokens=int(
                 data.get("context_window_tokens", DEFAULT_CONTEXT_WINDOW)
             ),
-            compaction_threshold=float(
-                data.get("compaction_threshold", DEFAULT_COMPACTION_THRESHOLD)
-            ),
+            compaction_threshold=threshold,
+            sandbox_mode=data.get("sandbox_mode"),
             tools=tools,
         )
 
@@ -87,6 +99,10 @@ class Config:
     prefer_ripgrep: bool = True
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW
     compaction_threshold: float = DEFAULT_COMPACTION_THRESHOLD
+    sandbox_mode: SandboxMode = SandboxMode.DANGER_FULL_ACCESS
+    exec_policy: ExecPolicyConfig = field(default_factory=ExecPolicyConfig)
+    compaction: CompactionSettings = field(default_factory=CompactionSettings)
+    openrouter: OpenRouterSettings = field(default_factory=OpenRouterSettings)
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
@@ -109,17 +125,18 @@ class Config:
         prefer_ripgrep: bool | None = None,
         context_window_tokens: int | None = None,
         compaction_threshold: float | None = None,
+        sandbox: str | None = None,
         skip_git_check: bool = False,
         config_path: Path | None = None,
     ) -> Config:
-        file_cfg = FileConfig.load(config_path)
+        resolved_config_path = config_path or default_config_path()
+        file_cfg = FileConfig.load(resolved_config_path)
 
         resolved_cwd = cwd or file_cfg.default_cwd or Path.cwd()
         resolved_cwd = Path(resolved_cwd).resolve()
         if not resolved_cwd.is_dir():
             raise ValueError(f"Working directory does not exist: {resolved_cwd}")
 
-        # Environment (middle precedence)
         env_model = os.environ.get("OPENROUTER_MODEL")
         env_approval = os.environ.get("AGENT_APPROVAL_MODE")
         env_max_rounds = os.environ.get("AGENT_MAX_TOOL_ROUNDS")
@@ -128,19 +145,14 @@ class Config:
         env_prefer_rg = os.environ.get("AGENT_PREFER_RIPGREP")
         env_context_window = os.environ.get("AGENT_CONTEXT_WINDOW_TOKENS")
         env_compaction = os.environ.get("AGENT_COMPACTION_THRESHOLD")
+        env_sandbox = os.environ.get("AGENT_SANDBOX_MODE")
 
         api_key = os.environ.get("OPENROUTER_API_KEY")
         base_url = os.environ.get(
             "OPENROUTER_BASE_URL", "https://openrouter.ai/api/v1"
         ).rstrip("/")
 
-        # Merge: defaults < file < env < CLI
-        resolved_model = (
-            model
-            or env_model
-            or file_cfg.model
-            or DEFAULT_MODEL
-        )
+        resolved_model = model or env_model or file_cfg.model or DEFAULT_MODEL
 
         if auto_approve is not None:
             approval_mode: ApprovalMode = "auto" if auto_approve else "interactive"
@@ -179,11 +191,18 @@ class Config:
         if resolved_context is None:
             resolved_context = file_cfg.context_window_tokens
 
+        compaction_cfg = load_compaction_settings(resolved_config_path)
         resolved_compaction = compaction_threshold
         if resolved_compaction is None and env_compaction:
             resolved_compaction = float(env_compaction)
         if resolved_compaction is None:
-            resolved_compaction = file_cfg.compaction_threshold
+            resolved_compaction = compaction_cfg.threshold
+
+        sandbox_value = sandbox or env_sandbox or file_cfg.sandbox_mode
+        resolved_sandbox = SandboxMode.from_str(sandbox_value)
+
+        exec_policy = load_exec_policy_config(resolved_config_path)
+        openrouter = load_openrouter_settings(resolved_config_path)
 
         return cls(
             cwd=resolved_cwd,
@@ -195,9 +214,13 @@ class Config:
             prefer_ripgrep=resolved_prefer_rg,
             context_window_tokens=resolved_context,
             compaction_threshold=resolved_compaction,
+            sandbox_mode=resolved_sandbox,
+            exec_policy=exec_policy,
+            compaction=compaction_cfg,
+            openrouter=openrouter,
             openrouter_api_key=api_key,
             openrouter_base_url=base_url,
-            config_path=config_path or default_config_path(),
+            config_path=resolved_config_path,
             skip_git_check=skip_git_check,
         )
 
@@ -220,6 +243,15 @@ class Config:
             "prefer_ripgrep": self.prefer_ripgrep,
             "context_window_tokens": self.context_window_tokens,
             "compaction_threshold": self.compaction_threshold,
+            "sandbox_mode": self.sandbox_mode.value,
+            "exec_policy": self.exec_policy.mode.value,
+            "exec_policy_allow_rules": len(self.exec_policy.rules.allow),
+            "exec_policy_deny_rules": len(self.exec_policy.rules.deny),
+            "compaction_enabled": self.compaction.enabled,
+            "compaction_keep_recent_turns": self.compaction.keep_recent_turns,
+            "openrouter_max_retries": self.openrouter.max_retries,
+            "openrouter_retry_base_delay_sec": self.openrouter.retry_base_delay_sec,
+            "openrouter_request_timeout_sec": self.openrouter.request_timeout_sec,
             "openrouter_base_url": self.openrouter_base_url,
             "config_path": str(self.config_path) if self.config_path else None,
             "openrouter_api_key_set": bool(self.openrouter_api_key),

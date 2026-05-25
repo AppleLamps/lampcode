@@ -136,7 +136,7 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
             return []
         content = item.output or ""
         if item.status == "denied":
-            content = "User denied this action."
+            content = item.output or "User denied this action."
         return [
             {
                 "role": "tool",
@@ -179,18 +179,28 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    """Heuristic token estimator v2 with content-type weighting."""
     import json
 
-    total_chars = 0
+    total = 0.0
     for msg in messages:
+        role = msg.get("role", "")
         content = msg.get("content")
-        if isinstance(content, str):
-            total_chars += len(content)
-        elif content is not None:
-            total_chars += len(str(content))
+        text = content if isinstance(content, str) else (str(content) if content else "")
+
+        weight = 1.0
+        if role == "tool":
+            weight = 1.3
+        elif role == "system" and ("```" in text or "def " in text or "class " in text):
+            weight = 1.2
+        elif "```" in text:
+            weight = 1.2
+
+        total += len(text) * weight
         for tc in msg.get("tool_calls") or []:
-            total_chars += len(json.dumps(tc))
-    return total_chars // 4
+            total += len(json.dumps(tc)) * 1.3
+
+    return int(total // 4)
 
 
 def build_messages_from_turn_items(

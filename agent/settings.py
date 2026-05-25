@@ -10,7 +10,7 @@ try:
 except ModuleNotFoundError:
     tomllib = None  # type: ignore[assignment]
 
-from agent.config import default_config_path
+from agent.paths import default_config_path
 
 
 @dataclass
@@ -43,6 +43,53 @@ class McpSettings:
 class McpConfig:
     servers: dict[str, McpServerConfig] = field(default_factory=dict)
     settings: McpSettings = field(default_factory=McpSettings)
+
+
+@dataclass
+class CompactionSettings:
+    enabled: bool = True
+    keep_recent_turns: int = 2
+    threshold: float = 0.7
+    summary_max_chars: int = 8000
+
+
+@dataclass
+class OpenRouterSettings:
+    max_retries: int = 3
+    retry_base_delay_sec: float = 1.0
+    request_timeout_sec: int = 120
+
+
+def _load_toml(path: Path) -> dict[str, Any]:
+    if tomllib is None or not path.is_file():
+        return {}
+    with path.open("rb") as f:
+        return tomllib.load(f)
+
+
+def load_compaction_settings(path: Path | None = None) -> CompactionSettings:
+    data = _load_toml(path or default_config_path())
+    compaction = data.get("compaction", {})
+    if not isinstance(compaction, dict):
+        compaction = {}
+    return CompactionSettings(
+        enabled=bool(compaction.get("enabled", True)),
+        keep_recent_turns=int(compaction.get("keep_recent_turns", 2)),
+        threshold=float(compaction.get("threshold", data.get("compaction_threshold", 0.7))),
+        summary_max_chars=int(compaction.get("summary_max_chars", 8000)),
+    )
+
+
+def load_openrouter_settings(path: Path | None = None) -> OpenRouterSettings:
+    data = _load_toml(path or default_config_path())
+    or_cfg = data.get("openrouter", {})
+    if not isinstance(or_cfg, dict):
+        or_cfg = {}
+    return OpenRouterSettings(
+        max_retries=int(or_cfg.get("max_retries", 3)),
+        retry_base_delay_sec=float(or_cfg.get("retry_base_delay_sec", 1.0)),
+        request_timeout_sec=int(or_cfg.get("request_timeout_sec", 120)),
+    )
 
 
 def _parse_mcp_servers(data: dict[str, Any]) -> dict[str, McpServerConfig]:

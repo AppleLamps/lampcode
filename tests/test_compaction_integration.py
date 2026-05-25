@@ -6,6 +6,7 @@ import pytest
 from agent.compaction import compact_thread_if_needed
 from agent.config import Config
 from agent.models import AgentMessageItem, Thread, Turn, UserMessageItem
+from agent.settings import CompactionSettings
 from agent.store import ThreadStore
 
 
@@ -25,14 +26,15 @@ def test_compaction_preserves_recent_turns(tmp_path: Path) -> None:
         cwd=tmp_path,
         model="test",
         context_window_tokens=100,
-        compaction_threshold=0.1,
         openrouter_api_key="x",
+        compaction=CompactionSettings(enabled=True, threshold=0.1, keep_recent_turns=2),
     )
     client = MagicMock()
     client.complete.return_value = "Summary of older work."
 
-    count = compact_thread_if_needed(thread, config, store, client)
-    assert count > 0
+    result = compact_thread_if_needed(thread, config, store, client)
+    assert result.performed
+    assert result.removed_items > 0
     assert len(thread.turns) == 3  # 1 compact + 2 recent
     assert thread.turns[0].items[0].type == "contextCompaction"
     assert "[Compaction Summary]" in thread.turns[0].items[1].text

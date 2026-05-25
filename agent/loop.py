@@ -5,7 +5,7 @@ from typing import Callable
 from agent.cancel import CancelToken, CancelledError
 from agent.compaction import compact_thread_if_needed
 from agent.config import Config
-from agent.context import build_thread_messages, load_project_rules
+from agent.context import build_thread_messages, estimate_tokens, load_project_rules
 from agent.events import EventEmitter
 from agent.mcp.manager import McpManager
 from agent.models import (
@@ -23,7 +23,19 @@ from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.store import ThreadStore
-from approval.gate import TurnApprovalState, format_tool_summary, prompt_approval
+from approval.gate import (
+    TurnApprovalState,
+    exec_policy_block_reason,
+    format_tool_summary,
+    needs_approval_prompt,
+    prompt_approval,
+)
+from agent.sandbox.enforcer import (
+    check_apply_patch,
+    check_mcp_tool,
+    check_run_command,
+    check_write_file,
+)
 from model.openrouter import OpenRouterClient, OpenRouterError
 from tools.registry import (
     DispatchResult,
@@ -160,9 +172,16 @@ def _run_loop(
     for _round in range(config.max_rounds):
         cancel.check()
 
-        summarized = compact_thread_if_needed(thread, config, store, client)
-        if summarized:
-            emitter.compaction(thread.id, summarized)
+        compact_result = compact_thread_if_needed(thread, config, store, client)
+        if compact_result.performed:
+            emitter.compaction(thread.id, compact_result.removed_items)
+            emitter.compaction_completed(
+                thread.id,
+                removed_items=compact_result.removed_items,
+                summary_chars=compact_result.summary_chars,
+                estimated_tokens_before=compact_result.estimated_tokens_before,
+                estimated_tokens_after=compact_result.estimated_tokens_after,
+            )
             messages = build_thread_messages(
                 thread,
                 active_skills=active_skills,
@@ -202,7 +221,9 @@ def _run_loop(
             turn.status = "completed"
             store.append_turn(thread, turn)
             store.save_thread(thread)
-            emitter.turn_completed(thread.id, turn.id, turn.status)
+            emitter.turn_completed(
+                thread.id, turn.id, turn.status, estimated_tokens=estimate_tokens(messages)
+            )
             return turn
 
         assistant_msg = {
@@ -232,9 +253,32 @@ def _run_loop(
                 store.append_item(thread, turn.id, item)
                 emitter.item_started(thread.id, turn.id, item.type, item.id)
 
+            block_reason = _precheck_tool(
+                tool_name, arguments, config, mcp_manager
+            )
+            if block_reason:
+                _handle_blocked_tool(
+                    block_reason,
+                    tracking_items,
+                    store,
+                    thread,
+                    turn,
+                    emitter,
+                    tool_call_id,
+                    messages,
+                    config,
+                )
+                continue
+
             requires_approval = tool_requires_approval(tool_name, mcp_manager)
 
-            if requires_approval:
+            if requires_approval and needs_approval_prompt(
+                tool_name,
+                arguments,
+                config,
+                turn_state=turn_state,
+                session=session,
+            ):
                 summary = format_tool_summary(tool_name, arguments)
                 emitter.approval_requested(thread.id, turn.id, tool_name, summary)
                 approved = prompt_approval(
@@ -259,6 +303,8 @@ def _run_loop(
                     )
                     continue
 
+                _mark_approved(tracking_items)
+            elif requires_approval:
                 _mark_approved(tracking_items)
 
             cancel.check()
@@ -297,7 +343,9 @@ def _run_loop(
     store.append_item(thread, turn.id, fail_item)
     store.append_turn(thread, turn)
     store.save_thread(thread)
-    emitter.turn_completed(thread.id, turn.id, turn.status)
+    emitter.turn_completed(
+        thread.id, turn.id, turn.status, estimated_tokens=estimate_tokens(messages)
+    )
     return turn
 
 
@@ -438,6 +486,81 @@ def _finalize_cancelled(
     store.append_turn(thread, turn)
     store.save_thread(thread)
     emitter.turn_completed(thread.id, turn.id, turn.status)
+
+
+def _precheck_tool(
+    tool_name: str,
+    arguments: dict,
+    config: Config,
+    mcp_manager: McpManager,
+) -> str | None:
+    if tool_name == "run_command":
+        cmd = arguments.get("cmd", "")
+        policy_reason = exec_policy_block_reason(cmd, config)
+        if policy_reason:
+            return policy_reason
+        decision = check_run_command(cmd, config.cwd, config.sandbox_mode)
+        if decision.blocked:
+            return decision.reason
+    elif tool_name == "write_file":
+        decision = check_write_file(
+            arguments.get("path", ""), config.cwd, config.sandbox_mode
+        )
+        if decision.blocked:
+            return decision.reason
+    elif tool_name == "apply_patch":
+        decision = check_apply_patch(config.cwd, config.sandbox_mode)
+        if decision.blocked:
+            return decision.reason
+    elif mcp_manager.is_mcp_tool(tool_name):
+        ref = mcp_manager.tool_map.get(tool_name)
+        decision = check_mcp_tool(
+            tool_name,
+            config.sandbox_mode,
+            require_approval=ref.require_approval if ref else True,
+        )
+        if decision.blocked:
+            return decision.reason
+    return None
+
+
+def _handle_blocked_tool(
+    reason: str,
+    tracking_items: list[TrackingItem],
+    store: ThreadStore,
+    thread: Thread,
+    turn: Turn,
+    emitter: EventEmitter,
+    tool_call_id: str,
+    messages: list,
+    config: Config,
+) -> None:
+    cmd = None
+    for item in tracking_items:
+        item.status = "denied"
+        if isinstance(item, CommandExecutionItem):
+            item.output = reason
+            cmd = item.command
+        elif isinstance(item, McpToolCallItem):
+            item.output = reason
+        else:
+            item.summary = reason
+        store.append_item(thread, turn.id, item)
+        emitter.item_completed(thread.id, turn.id, item.type, item.id, "denied")
+    emitter.sandbox_blocked(
+        thread.id,
+        turn.id,
+        mode=config.sandbox_mode.value,
+        reason=reason,
+        command=cmd,
+    )
+    messages.append(
+        {
+            "role": "tool",
+            "tool_call_id": tool_call_id,
+            "content": f"Blocked by sandbox/policy: {reason}",
+        }
+    )
 
 
 def brief_args(tool_name: str, arguments: dict) -> str:
