@@ -3,45 +3,52 @@ from __future__ import annotations
 import html
 
 
-def render_login_html() -> str:
-    return """<!DOCTYPE html>
+def render_login_html(*, oidc_enabled: bool = False) -> str:
+    sso_block = ""
+    if oidc_enabled:
+        sso_block = """
+<p><a href="/auth/oidc/login"><button type="button">Sign in with SSO</button></a></p>
+<hr/>
+<p>Or use a break-glass access token:</p>
+"""
+    return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>agent-cli login</title>
 <style>
-body { font-family: system-ui, sans-serif; max-width: 420px; margin: 4rem auto; padding: 1rem; }
-label { display: block; margin: 0.5rem 0 0.25rem; }
-input { width: 100%; padding: 0.5rem; box-sizing: border-box; }
-button { margin-top: 1rem; padding: 0.5rem 1rem; }
-.error { color: #b91c1c; margin-top: 0.5rem; }
+body {{ font-family: system-ui, sans-serif; max-width: 420px; margin: 4rem auto; padding: 1rem; }}
+label {{ display: block; margin: 0.5rem 0 0.25rem; }}
+input {{ width: 100%; padding: 0.5rem; box-sizing: border-box; }}
+button {{ margin-top: 1rem; padding: 0.5rem 1rem; }}
+.error {{ color: #b91c1c; margin-top: 0.5rem; }}
 </style>
 </head>
 <body>
 <h1>agent-cli</h1>
-<p>Sign in with your access token.</p>
+{sso_block}
 <label for="token">Token</label>
 <input id="token" type="password" autocomplete="current-password"/>
 <button id="loginBtn">Login</button>
 <div id="err" class="error"></div>
 <script>
-document.getElementById("loginBtn").onclick = async () => {
+document.getElementById("loginBtn").onclick = async () => {{
   const token = document.getElementById("token").value;
-  const res = await fetch("/auth/login", {
+  const res = await fetch("/auth/login", {{
     method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
+    headers: {{ "Content-Type": "application/json" }},
+    body: JSON.stringify({{ token }}),
+  }});
   const body = await res.json();
-  if (!res.ok) {
+  if (!res.ok) {{
     document.getElementById("err").textContent = body.error || "Login failed";
     return;
-  }
+  }}
   sessionStorage.setItem("agent_session", body.session_id);
   sessionStorage.setItem("agent_role", body.role);
   sessionStorage.setItem("agent_user", body.name);
   window.location.href = "/";
-};
+}};
 </script>
 </body>
 </html>"""
@@ -53,6 +60,7 @@ def render_dashboard_html(
     role: str = "admin",
     user_name: str = "legacy",
     session_mode: bool = False,
+    oidc_enabled: bool = False,
 ) -> str:
     token_js = html.escape(token, quote=True)
     role_js = html.escape(role, quote=True)

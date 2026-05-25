@@ -100,12 +100,12 @@ def authorize_request_v2(
 
     principal: AuthPrincipal | None = None
 
-    if mode in ("session", "both") and session_store is not None:
+    if mode in ("session", "both", "oidc", "oidc+both", "oidc+bearer") and session_store is not None:
         session_id = extract_session_token(headers)
         if session_id:
             principal = session_store.principal_from_session(session_id)
 
-    if principal is None and mode in ("bearer", "both"):
+    if principal is None and mode in ("bearer", "both", "oidc+bearer", "oidc+both"):
         token = extract_bearer_token(headers) or extract_query_token(path)
         if token:
             principal = resolve_principal_from_token(
@@ -115,10 +115,10 @@ def authorize_request_v2(
                 legacy_auth_token=auth_token,
                 default_role=default_role,
             )
-            if principal is None and mode in ("session", "both") and session_store is not None:
+            if principal is None and mode in ("session", "both", "oidc+both") and session_store is not None:
                 principal = session_store.principal_from_session(token)
 
-    if not auth_token and not rbac_enabled and mode == "bearer":
+    if not auth_token and not rbac_enabled and "oidc" not in mode and mode in ("bearer",):
         principal = AuthPrincipal(name="anonymous", role="admin", auth_method="none")
 
     if principal is None:

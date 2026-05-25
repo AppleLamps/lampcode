@@ -20,6 +20,9 @@ class SessionRecord:
     created_at: float
     expires_at: float
     auth_method: str = "session"
+    subject: str | None = None
+    email: str | None = None
+    groups: list[str] = field(default_factory=list)
 
 
 class SessionStore:
@@ -51,7 +54,17 @@ class SessionStore:
             now = time.time()
             for item in data.get("sessions", []):
                 if item.get("expires_at", 0) > now:
-                    rec = SessionRecord(**item)
+                    rec = SessionRecord(
+                        session_id=item["session_id"],
+                        principal_name=item["principal_name"],
+                        role=item["role"],
+                        created_at=item["created_at"],
+                        expires_at=item["expires_at"],
+                        auth_method=item.get("auth_method", "session"),
+                        subject=item.get("subject"),
+                        email=item.get("email"),
+                        groups=list(item.get("groups", [])),
+                    )
                     self._sessions[rec.session_id] = rec
         except (OSError, json.JSONDecodeError, TypeError):
             pass
@@ -70,6 +83,9 @@ class SessionStore:
                         "created_at": s.created_at,
                         "expires_at": s.expires_at,
                         "auth_method": s.auth_method,
+                        "subject": s.subject,
+                        "email": s.email,
+                        "groups": s.groups,
                     }
                     for s in self._sessions.values()
                     if s.expires_at > time.time()
@@ -96,17 +112,29 @@ class SessionStore:
         with self._lock:
             self._login_attempts.setdefault(client_key, []).append(time.time())
 
-    def create_session(self, principal: AuthPrincipal) -> SessionRecord:
+    def create_session(
+        self,
+        principal: AuthPrincipal,
+        *,
+        ttl_sec: int | None = None,
+        subject: str | None = None,
+        email: str | None = None,
+        groups: list[str] | None = None,
+    ) -> SessionRecord:
         now = time.time()
         raw = secrets.token_urlsafe(32)
         session_id = hashlib.sha256(raw.encode()).hexdigest()[:32]
+        ttl = ttl_sec if ttl_sec is not None else self.ttl_sec
         rec = SessionRecord(
             session_id=session_id,
             principal_name=principal.name,
             role=principal.role,
             created_at=now,
-            expires_at=now + self.ttl_sec,
-            auth_method="session",
+            expires_at=now + ttl,
+            auth_method=principal.auth_method,
+            subject=subject,
+            email=email,
+            groups=list(groups or []),
         )
         with self._lock:
             self._purge_expired()
@@ -160,4 +188,9 @@ class SessionStore:
         rec = self.get_session(session_id)
         if not rec:
             return None
-        return AuthPrincipal(name=rec.principal_name, role=rec.role, auth_method="session")
+        return AuthPrincipal(name=rec.principal_name, role=rec.role, auth_method=rec.auth_method)
+
+    def list_sessions(self) -> list[SessionRecord]:
+        with self._lock:
+            self._purge_expired()
+            return list(self._sessions.values())

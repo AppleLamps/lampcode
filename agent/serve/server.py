@@ -16,11 +16,12 @@ from agent.models import Thread
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
 from agent.serve.approvals import ApprovalRegistry, map_api_decision
-from agent.serve.auth import authorize_request_v2, extract_bearer_token
+from agent.serve.auth import authorize_request_v2, extract_bearer_token, extract_query_token, extract_session_token
 from agent.serve.dashboard import render_dashboard_html, render_login_html
 from agent.serve.turn_runner import TurnRunner
 from agent.serve.sessions import SessionStore
 from agent.serve.users import merge_rbac_users
+from agent.serve.oidc import OidcClient, oidc_mode_active
 from agent.execution.sync.service import resolve_sync_path
 from agent.settings import ServeSettings
 from agent.store import ThreadStore
@@ -38,6 +39,7 @@ class ServeContext:
         auth_token: str,
         session_store: SessionStore | None = None,
         rbac_users: list | None = None,
+        oidc_client: OidcClient | None = None,
     ) -> None:
         self.store = store
         self.run_store = run_store
@@ -45,6 +47,7 @@ class ServeContext:
         self.auth_token = auth_token
         self.session_store = session_store
         self.rbac_users = rbac_users or []
+        self.oidc_client = oidc_client
 
 
 class AgentHttpHandler(BaseHTTPRequestHandler):
@@ -92,19 +95,41 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         self._dispatch("POST")
 
     def do_GET_inner(self) -> None:
-        if not self._authorize():
-            return
         parsed = urlparse(self.path)
         path = unquote(parsed.path.rstrip("/")) or "/"
 
+        if path == "/auth/oidc/login":
+            self._oidc_login_redirect()
+            return
+
+        if path == "/auth/oidc/callback":
+            self._oidc_callback()
+            return
+
         if path == "/login":
-            self._html_response(render_login_html())
+            ctx = self._get_ctx()
+            self._html_response(
+                render_login_html(oidc_enabled=ctx.oidc_client is not None)
+            )
+            return
+
+        if not self._authorize():
             return
 
         if path == "/auth/me":
             p = self.principal
+            rec = None
+            if p and self._get_ctx().session_store:
+                sid = extract_session_token(dict(self.headers)) or extract_query_token(self.path)
+                if sid:
+                    rec = self._get_ctx().session_store.get_session(sid)
             self._json_response(
-                {"name": p.name if p else "anonymous", "role": p.role if p else "admin"}
+                {
+                    "name": p.name if p else "anonymous",
+                    "role": p.role if p else "admin",
+                    "email": rec.email if rec else None,
+                    "auth_method": rec.auth_method if rec else None,
+                }
             )
             return
 
@@ -121,13 +146,21 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             if ctx.settings.enable_turn_start:
                 role = self.principal.role if self.principal else "admin"
                 name = self.principal.name if self.principal else "legacy"
-                session_mode = ctx.settings.auth_mode in ("session", "both")
+                session_mode = "session" in ctx.settings.auth_mode or "oidc" in ctx.settings.auth_mode
+                display_name = name
+                if self.principal and ctx.session_store:
+                    sid = extract_session_token(dict(self.headers))
+                    if sid:
+                        rec = ctx.session_store.get_session(sid)
+                        if rec and rec.email:
+                            display_name = f"{rec.email} ({rec.role})"
                 self._html_response(
                     render_dashboard_html(
                         token=ctx.auth_token if ctx.auth_token and not session_mode else "",
                         role=role,
-                        user_name=name,
+                        user_name=display_name,
                         session_mode=session_mode,
+                        oidc_enabled=ctx.oidc_client is not None,
                     )
                 )
                 return
@@ -216,6 +249,10 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             self._auth_login()
             return
 
+        if path == "/auth/logout":
+            self._auth_logout()
+            return
+
         if not self._authorize():
             return
 
@@ -242,8 +279,9 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
     def _auth_login(self) -> None:
         ctx = self._get_ctx()
-        if ctx.settings.auth_mode not in ("session", "both"):
-            self._error(404, "Session auth disabled")
+        mode = ctx.settings.auth_mode.lower()
+        if not any(x in mode for x in ("session", "both", "bearer", "oidc")):
+            self._error(404, "Token auth disabled")
             return
         length = int(self.headers.get("Content-Length", 0))
         body = self.rfile.read(length).decode("utf-8") if length else "{}"
@@ -278,6 +316,73 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             }
         )
 
+    def _auth_logout(self) -> None:
+        ctx = self._get_ctx()
+        session_id = extract_session_token(dict(self.headers))
+        if session_id and ctx.session_store:
+            ctx.session_store.revoke_session(session_id)
+        self._json_response({"ok": True})
+
+    def _oidc_login_redirect(self) -> None:
+        ctx = self._get_ctx()
+        if not ctx.oidc_client:
+            self._error(404, "OIDC not configured")
+            return
+        url, _ = ctx.oidc_client.start_login()
+        self.send_response(302)
+        self.send_header("Location", url)
+        self.end_headers()
+
+    def _oidc_callback(self) -> None:
+        ctx = self._get_ctx()
+        if not ctx.oidc_client or not ctx.session_store:
+            self._error(404, "OIDC not configured")
+            return
+        parsed = urlparse(self.path)
+        qs = parse_qs(parsed.query)
+        code = qs.get("code", [None])[0]
+        state = qs.get("state", [None])[0]
+        if not code or not state:
+            MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "missing_params")
+            self._error(400, "missing code or state")
+            return
+        oidc_state = ctx.oidc_client.validate_state(state)
+        if oidc_state is None:
+            MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "invalid_state")
+            self._error(400, "invalid state")
+            return
+        try:
+            claims = ctx.oidc_client.exchange_code(code, oidc_state)
+            principal = ctx.oidc_client.principal_from_claims(claims)
+            oidc = ctx.settings.oidc
+            email_key = oidc.role_mapping.claim_email_key if oidc else "email"
+            groups_key = oidc.role_mapping.claim_groups_key if oidc else "groups"
+            groups_raw = claims.get(groups_key, [])
+            if isinstance(groups_raw, str):
+                groups_raw = [groups_raw]
+            rec = ctx.session_store.create_session(
+                principal,
+                ttl_sec=oidc.session_ttl_sec if oidc else None,
+                subject=str(claims.get("sub", "")),
+                email=str(claims.get(email_key, "")),
+                groups=[str(g) for g in groups_raw] if isinstance(groups_raw, list) else [],
+            )
+            MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "success")
+            self.send_response(302)
+            self.send_header("Location", "/")
+            self.send_header("Set-Cookie", f"agent_session={rec.session_id}; Path=/; HttpOnly; SameSite=Lax")
+            self.end_headers()
+        except Exception:
+            MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "failure")
+            self._error(401, "OIDC login failed")
+
+    def _public_paths(self) -> set[str]:
+        paths = {"/auth/login", "/login", "/auth/oidc/login", "/auth/oidc/callback"}
+        mode = self._get_ctx().settings.auth_mode.lower()
+        if any(x in mode for x in ("session", "both", "oidc")):
+            return paths
+        return set()
+
     def _authorize(self) -> bool:
         ctx = self._get_ctx()
         with trace_span(
@@ -285,12 +390,12 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             method=getattr(self, "command", "GET"),
             path=self.path.split("?")[0],
         ):
-            public = {"/auth/login", "/login"}
+            public = self._public_paths()
             result = authorize_request_v2(
                 self.path,
                 dict(self.headers),
                 auth_token=ctx.auth_token,
-                public_paths=public if ctx.settings.auth_mode in ("session", "both") else None,
+                public_paths=public if public else None,
                 auth_mode=ctx.settings.auth_mode,
                 rbac_enabled=ctx.settings.rbac.enabled,
                 rbac_users=ctx.rbac_users,
@@ -585,11 +690,16 @@ def serve(
     token = auth_token if auth_token is not None else cfg.auth_token
     rbac_users = merge_rbac_users(cfg.rbac.users)
     session_store = None
-    if cfg.auth_mode in ("session", "both"):
+    oidc_client = None
+    mode_lower = cfg.auth_mode.lower()
+    if cfg.oidc and cfg.oidc.enabled:
+        oidc_client = OidcClient(cfg.oidc)
+    if any(x in mode_lower for x in ("session", "both", "oidc")):
+        ttl = cfg.oidc.session_ttl_sec if cfg.oidc else cfg.session_ttl_sec
         persist = Path.home() / ".agent-cli" / "sessions.json" if cfg.session_persist else None
-        session_store = SessionStore.global_store(ttl_sec=cfg.session_ttl_sec, persist_path=persist)
+        session_store = SessionStore.global_store(ttl_sec=ttl, persist_path=persist)
 
-    if not token and not cfg.rbac.enabled and cfg.auth_mode == "bearer":
+    if not token and not cfg.rbac.enabled and cfg.auth_mode == "bearer" and not oidc_client:
         token = secrets.token_urlsafe(24)
         print(f"[agent serve] generated auth token: {token}")
 
@@ -600,6 +710,7 @@ def serve(
         auth_token=token or "",
         session_store=session_store,
         rbac_users=rbac_users,
+        oidc_client=oidc_client,
     )
 
     class Handler(AgentHttpHandler):
@@ -632,7 +743,9 @@ def serve(
     print(f"agent serve listening on {scheme}://{bind_host}:{bind_port}")
     if cfg.rbac.enabled:
         print(f"  RBAC: enabled ({len(rbac_users)} users, default_role={cfg.rbac.default_role})")
-    if cfg.auth_mode in ("session", "both"):
+    if oidc_client:
+        print("  Auth: OIDC SSO enabled")
+    if any(x in cfg.auth_mode for x in ("session", "both", "oidc")):
         print("  Auth: session + bearer" if cfg.auth_mode == "both" else "  Auth: session")
     elif token:
         print("  Auth: Bearer token required")

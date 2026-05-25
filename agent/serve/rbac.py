@@ -78,7 +78,7 @@ def resolve_principal_from_token(
 
 def permission_for_route(method: str, path: str) -> Permission | None:
     clean = path.split("?")[0].rstrip("/") or "/"
-    if clean in ("/auth/login", "/login"):
+    if clean in ("/auth/login", "/login", "/auth/oidc/login", "/auth/oidc/callback"):
         return None
     if method == "GET":
         if clean.endswith("/events"):
