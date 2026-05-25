@@ -10,7 +10,7 @@ stderr_console = Console(stderr=True)
 stdout_console = Console()
 
 
-def format_run_summary(turn: Turn) -> str:
+def format_run_summary(turn: Turn, *, budget_exceeded: bool = False, stats: dict | None = None) -> str:
     """Single-line run completion summary for agent run."""
     u = turn.usage
     model = u.model_used or "unknown"
@@ -18,10 +18,25 @@ def format_run_summary(turn: Turn) -> str:
     cost = u.estimated_cost_usd or 0.0
     inp = u.input_tokens or 0
     out = u.output_tokens or 0
-    return (
-        f"[done] model={model} fallback={fb} cost≈${cost:.3f} "
-        f"tokens in={inp} out={out}"
-    )
+    parts = [
+        f"[done] model={model} fallback={fb} cost≈${cost:.3f} tokens in={inp} out={out}",
+    ]
+    if budget_exceeded:
+        parts.append("budget_exceeded=true")
+    if stats:
+        from agent.turn_stats import TurnStats
+
+        if isinstance(stats, TurnStats):
+            stats = stats.to_dict()
+        brief = (
+            f"files={stats.get('files_touched', 0)} "
+            f"+{stats.get('lines_added', 0)}/-{stats.get('lines_removed', 0)} "
+            f"cmds={stats.get('commands_run', 0)}"
+        )
+        if stats.get("tests_detected"):
+            brief += " tests=yes"
+        parts.append(brief)
+    return " ".join(parts)
 
 
 class OutputHandler:
