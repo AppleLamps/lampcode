@@ -174,10 +174,19 @@ class HooksSettings:
 
 
 @dataclass
+class NotifySettings:
+    command: str = ""
+    on_approval: bool = False
+    timeout_sec: int = 10
+
+
+@dataclass
 class MemoriesSettings:
     enabled: bool = False
     max_inject: int = 5
     path: str = "~/.agent-cli/memories.json"
+    auto_suggest: bool = False
+    suggest_on_auto_approve: bool = True
 
 
 @dataclass
@@ -659,6 +668,29 @@ def load_memories_settings(
         enabled=bool(merged.get("enabled", False)),
         max_inject=int(merged.get("max_inject", 5)),
         path=str(merged.get("path", "~/.agent-cli/memories.json")),
+        auto_suggest=bool(merged.get("auto_suggest", False)),
+        suggest_on_auto_approve=bool(merged.get("suggest_on_auto_approve", True)),
+    )
+
+
+def load_notify_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> NotifySettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_n = user_data.get("notify", {})
+    project_n = project_data.get("notify", {})
+    if not isinstance(user_n, dict):
+        user_n = {}
+    if not isinstance(project_n, dict):
+        project_n = {}
+    merged = {**user_n, **project_n}
+    return NotifySettings(
+        command=str(merged.get("command", "")),
+        on_approval=bool(merged.get("on_approval", False)),
+        timeout_sec=int(merged.get("timeout_sec", 10)),
     )
 
 

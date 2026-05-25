@@ -45,6 +45,24 @@ def resolve_user_input(
             return options[0], options[0], None
         return "(auto-approved)", None, None
 
+    if input_fn:
+        prompt_lines = [question]
+        if options:
+            for i, opt in enumerate(options, 1):
+                prompt_lines.append(f"  {i}. {opt}")
+            prompt_lines.append("Enter number:")
+        else:
+            prompt_lines.append(">")
+        prompt = "\n".join(prompt_lines) + "\n"
+        raw = input_fn(prompt).strip()
+        if options and raw.isdigit():
+            idx = int(raw) - 1
+            if 0 <= idx < len(options):
+                return options[idx], options[idx], None
+        if not raw:
+            return None, None, "empty response"
+        return raw, None, None
+
     is_tty = sys.stdin.isatty() and sys.stdout.isatty()
     if headless_json or not is_tty:
         return (
@@ -65,14 +83,11 @@ def resolve_user_input(
         prompt_lines.append(">")
 
     prompt = "\n".join(prompt_lines) + "\n"
-    if input_fn:
-        raw = input_fn(prompt).strip()
-    else:
-        try:
-            print(prompt, end="", flush=True)
-            raw = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            return None, None, "user input cancelled"
+    try:
+        print(prompt, end="", flush=True)
+        raw = input().strip()
+    except (EOFError, KeyboardInterrupt):
+        return None, None, "user input cancelled"
 
     if options and raw.isdigit():
         idx = int(raw) - 1

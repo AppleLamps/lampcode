@@ -35,6 +35,7 @@ class ReplSession:
         profile: str | None = None,
         model_profile: str | None = None,
         resume_turn: bool = False,
+        ephemeral: bool = False,
     ) -> None:
         self.config = config
         self.store = store or ThreadStore()
@@ -47,6 +48,7 @@ class ReplSession:
         self.model_profile_override = model_profile
         self.resume_turn = resume_turn
         self._pending_resume_turn = resume_turn
+        self.ephemeral = ephemeral
         self.plan_mode = False
         self.output = OutputHandler(quiet_tools=False)
         self._completer_installed = install_repl_completer(config.cwd)
@@ -67,9 +69,23 @@ class ReplSession:
         if self.thread:
             return self.thread
         cfg = self._resolve_config()
-        self.thread = Thread(id=new_id(), cwd=str(cfg.cwd), model=cfg.model)
-        self.store.create_thread(self.thread)
+        self.thread = Thread(
+            id=f"ephemeral-{new_id()}" if self.ephemeral else new_id(),
+            cwd=str(cfg.cwd),
+            model=cfg.model,
+        )
+        if not self.ephemeral:
+            self.store.create_thread(self.thread)
         return self.thread
+
+    def _load_thread_by_id(self, thread_id: str) -> Thread | None:
+        try:
+            return self.store.load_thread(thread_id)
+        except FileNotFoundError:
+            matches = [t for t in self.store.list_threads() if t.id.startswith(thread_id)]
+            if len(matches) == 1:
+                return matches[0]
+        return None
 
     def handle_line(self, line: str) -> bool:
         """Returns False when REPL should exit."""
@@ -109,6 +125,10 @@ class ReplSession:
                 break
         self._print(format_run_summary(turn))
         return True
+
+    def _prompt_input(self, prompt: str) -> str:
+        self._print(prompt.rstrip())
+        return self._input().strip()
 
     def _handle_command(self, cmd: str) -> bool:
         parts = cmd.split(maxsplit=1)
@@ -175,9 +195,52 @@ class ReplSession:
             else:
                 self._print(f"Plan mode: {'on' if self.plan_mode else 'off'}")
             return True
+        if name == "/resume":
+            from agent.threads_picker import pick_thread_or_last
+
+            picked = pick_thread_or_last(
+                self.store,
+                self.config.cwd,
+                use_last=arg.lower() == "last",
+                input_fn=self._prompt_input,
+            )
+            if picked is None:
+                self._print("No thread selected")
+            else:
+                self.thread = picked
+                self._print(f"Resumed thread {picked.id[:8]}… ({picked.display_label()})")
+            return True
+        if name == "/fork":
+            from agent.threads_picker import pick_thread
+
+            source = self.thread
+            if arg:
+                loaded = self._load_thread_by_id(arg)
+                if loaded:
+                    source = loaded
+            if source is None:
+                source = pick_thread(self.store, self.config.cwd, input_fn=self._prompt_input)
+            if source is None:
+                self._print("No thread selected")
+            else:
+                forked = self.store.fork_thread(source)
+                self.thread = forked
+                self._print(f"Forked to {forked.id[:8]}…")
+            return True
+        if name == "/ephemeral":
+            if arg.lower() in ("on", "true", "1", "enable"):
+                self.ephemeral = True
+                self.thread = None
+                self._print("Ephemeral mode ON (threads not persisted)")
+            elif arg.lower() in ("off", "false", "0", "disable"):
+                self.ephemeral = False
+                self._print("Ephemeral mode OFF")
+            else:
+                self._print(f"Ephemeral mode: {'on' if self.ephemeral else 'off'}")
+            return True
         self._print(
             "Unknown command. Try /quit, /thread, /cost, /model, /profile, "
-            "/model-profile, /skills, /usage, /plan"
+            "/model-profile, /skills, /usage, /plan, /resume, /fork, /ephemeral"
         )
         return True
 
@@ -202,18 +265,24 @@ def run_repl(
     profile: str | None = None,
     model_profile: str | None = None,
     resume_last: bool = False,
+    resume: bool = False,
     resume_turn: bool = False,
+    ephemeral: bool = False,
 ) -> None:
     cwd = (cwd or Path.cwd()).resolve()
     merged = merge_layered_config(cwd, cli_profile=profile, cli_model_profile=model_profile)
     kwargs = apply_merged_to_resolve_kwargs(merged)
     config = Config.resolve(cwd=cwd, **kwargs)
-    store = ThreadStore()
+    store = ThreadStore.ephemeral() if ephemeral else ThreadStore()
     thread = None
     if resume_last:
         threads = [t for t in store.list_threads() if Path(t.cwd).resolve() == cwd]
         if threads:
             thread = max(threads, key=lambda t: t.updated_at)
+    elif resume:
+        from agent.threads_picker import pick_thread
+
+        thread = pick_thread(store, cwd)
     ReplSession(
         config=config,
         store=store,
@@ -221,4 +290,5 @@ def run_repl(
         profile=profile,
         model_profile=model_profile,
         resume_turn=resume_turn,
+        ephemeral=ephemeral,
     ).run()

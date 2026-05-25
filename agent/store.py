@@ -12,9 +12,17 @@ def default_store_dir() -> Path:
 
 
 class ThreadStore:
-    def __init__(self, base_dir: Path | None = None) -> None:
+    def __init__(self, base_dir: Path | None = None, *, persistent: bool = True) -> None:
+        self.persistent = persistent
         self.base_dir = base_dir or default_store_dir()
-        self.base_dir.mkdir(parents=True, exist_ok=True)
+        if self.persistent:
+            self.base_dir.mkdir(parents=True, exist_ok=True)
+
+    @classmethod
+    def ephemeral(cls) -> ThreadStore:
+        import tempfile
+
+        return cls(base_dir=Path(tempfile.mkdtemp(prefix="agent-cli-ephemeral-")), persistent=False)
 
     def thread_path(self, thread_id: str) -> Path:
         return self.base_dir / f"{thread_id}.jsonl"
@@ -32,6 +40,8 @@ class ThreadStore:
         }
 
     def save_thread(self, thread: Thread) -> None:
+        if not self.persistent:
+            return
         path = self.thread_path(thread.id)
         thread.touch()
         records: list[dict[str, Any]] = []
@@ -51,6 +61,8 @@ class ThreadStore:
                 f.write(json.dumps(record) + "\n")
 
     def append_item(self, thread: Thread, turn_id: str, item: Item) -> None:
+        if not self.persistent:
+            return
         path = self.thread_path(thread.id)
         thread.touch()
         record = {
@@ -63,6 +75,8 @@ class ThreadStore:
         self._update_meta_timestamp(thread)
 
     def append_turn(self, thread: Thread, turn: Turn) -> None:
+        if not self.persistent:
+            return
         path = self.thread_path(thread.id)
         thread.touch()
         record = {
@@ -74,6 +88,8 @@ class ThreadStore:
         self._update_meta_timestamp(thread)
 
     def create_thread(self, thread: Thread) -> None:
+        if not self.persistent:
+            return
         path = self.thread_path(thread.id)
         meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
         with path.open("w", encoding="utf-8") as f:
@@ -166,6 +182,8 @@ class ThreadStore:
 
     def rewrite_turns(self, thread: Thread) -> None:
         """Replace turn/item records while preserving meta (used after compaction)."""
+        if not self.persistent:
+            return
         path = self.thread_path(thread.id)
         thread.touch()
         meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
@@ -190,10 +208,14 @@ class ThreadStore:
 
     def find_latest_for_cwd(self, cwd: str) -> Thread | None:
         target = str(Path(cwd).resolve())
-        for thread in self.list_threads():
-            if str(Path(thread.cwd).resolve()) == target:
-                return thread
-        return None
+        matches = [
+            thread
+            for thread in self.list_threads()
+            if str(Path(thread.cwd).resolve()) == target
+        ]
+        if not matches:
+            return None
+        return max(matches, key=lambda thread: thread.updated_at)
 
     def fork_thread(self, source: Thread, title: str | None = None) -> Thread:
         forked = source.model_copy(deep=True)

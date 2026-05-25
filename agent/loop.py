@@ -102,6 +102,7 @@ def run_turn(
     headless_json: bool = False,
     output_schema: dict | None = None,
     thread_title: str | None = None,
+    remember: bool = False,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -185,7 +186,12 @@ def run_turn(
         store.save_thread(thread)
 
     from agent.hooks.runner import HooksRunner
-    from agent.memories import extract_memory_from_message, inject_memories_prompt
+    from agent.memories import (
+        extract_memory_from_message,
+        inject_memories_prompt,
+        suggest_memory_from_turn,
+    )
+    from agent.notify import fire_notify
 
     hooks_runner = HooksRunner.from_cwd(
         config.cwd,
@@ -198,7 +204,11 @@ def run_turn(
     effective_allowed = allowed_tools
     if plan_mode:
         effective_allowed = list(config.plan_mode.allowed_tools)
-    memories_text = inject_memories_prompt(user_text, config.memories) if config.memories.enabled else ""
+    memories_text = (
+        inject_memories_prompt(user_text, config.memories, cwd=str(config.cwd))
+        if config.memories.enabled
+        else ""
+    )
 
     client = OpenRouterClient(config)
     tools = get_tool_schemas(
@@ -336,8 +346,21 @@ def run_turn(
         if config.memories.enabled:
             for item in reversed(completed_turn.items):
                 if item.type == "agentMessage":
-                    extract_memory_from_message(item.text, thread_id=thread.id)
+                    extract_memory_from_message(
+                        item.text,
+                        thread_id=thread.id,
+                        cwd=str(config.cwd),
+                    )
                     break
+            if completed_turn.status == "completed":
+                suggest_memory_from_turn(
+                    completed_turn,
+                    thread_id=thread.id,
+                    cwd=str(config.cwd),
+                    settings=config.memories,
+                    auto_approve=config.auto_approve,
+                    remember_flag=remember,
+                )
         session.clear_turn_escalations()
         if config.shell.enabled:
             from agent.execution.shell_session import ShellSessionManager
@@ -348,6 +371,13 @@ def run_turn(
             {"status": completed_turn.status, "turn_id": completed_turn.id},
             thread_id=thread.id,
             turn_id=completed_turn.id,
+        )
+        fire_notify(
+            config.notify,
+            thread_id=thread.id,
+            turn_id=completed_turn.id,
+            status=completed_turn.status,
+            cwd=config.cwd,
         )
         return completed_turn
     except CancelledError:
@@ -372,7 +402,7 @@ def run_turn(
             )
             if path and emitter:
                 emitter.collab_checkpoint_saved(thread.id, turn.id, path=str(path))
-        _finalize_cancelled(thread, turn, store, emitter)
+        _finalize_cancelled(thread, turn, store, emitter, config=config)
         raise
     finally:
         ActiveTurnRegistry.global_registry().unregister(thread.id)
@@ -1168,6 +1198,8 @@ def _finalize_cancelled(
     turn: Turn,
     store: ThreadStore,
     emitter: EventEmitter,
+    *,
+    config: Config | None = None,
 ) -> None:
     turn.status = "cancelled"
     msg = AgentMessageItem(text="Turn cancelled by user.")
@@ -1176,6 +1208,16 @@ def _finalize_cancelled(
     store.append_turn(thread, turn)
     store.save_thread(thread)
     emitter.turn_completed(thread.id, turn.id, turn.status)
+    if config is not None:
+        from agent.notify import fire_notify
+
+        fire_notify(
+            config.notify,
+            thread_id=thread.id,
+            turn_id=turn.id,
+            status=turn.status,
+            cwd=config.cwd,
+        )
 
 
 def _run_parallel_read_tool_round(
@@ -1394,7 +1436,10 @@ def _precheck_tool(
             return decision.reason, decision.retryable
     elif tool_name == "write_file":
         decision = check_write_file(
-            arguments.get("path", ""), config.cwd, config.sandbox_mode
+            arguments.get("path", ""),
+            config.cwd,
+            config.sandbox_mode,
+            memories=config.memories,
         )
         if decision.blocked:
             return decision.reason, decision.retryable

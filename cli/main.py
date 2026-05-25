@@ -152,6 +152,15 @@ def run(
     resume_last: bool = typer.Option(
         False, "--resume-last", help="Resume most recent thread for same cwd"
     ),
+    resume: bool = typer.Option(
+        False, "--resume", help="Pick a thread to resume (same cwd filter)"
+    ),
+    ephemeral: bool = typer.Option(
+        False, "--ephemeral", help="Do not persist thread JSONL to the store"
+    ),
+    remember: bool = typer.Option(
+        False, "--remember", help="Suggest saving a memory after a successful turn"
+    ),
     model: Optional[str] = typer.Option(None, "--model", help="OpenRouter model slug"),
     auto_approve: bool = typer.Option(
         False, "--auto-approve", help="Skip approval prompts for commands and writes"
@@ -286,10 +295,20 @@ def run(
             "Use --skip-git-check to suppress."
         )
 
-    store = ThreadStore()
+    store = ThreadStore.ephemeral() if ephemeral else ThreadStore()
     thread: Thread | None = None
 
-    if thread_id:
+    if ephemeral:
+        thread = Thread(
+            id=f"ephemeral-{new_id()}",
+            cwd=str(config.cwd),
+            model=config.model,
+            repo_root=repo_root,
+            title=title,
+            created_at=utc_now_iso(),
+            updated_at=utc_now_iso(),
+        )
+    elif thread_id:
         thread = _load_thread(store, thread_id)
     elif resume_last:
         thread = store.find_latest_for_cwd(str(config.cwd))
@@ -297,6 +316,13 @@ def run(
             console.print(
                 f"[red]Error:[/red] No previous thread found for cwd: {config.cwd}"
             )
+            raise typer.Exit(1)
+    elif resume:
+        from agent.threads_picker import pick_thread
+
+        thread = pick_thread(store, config.cwd)
+        if not thread:
+            console.print("[red]Error:[/red] No thread selected")
             raise typer.Exit(1)
 
     if thread:
@@ -317,6 +343,9 @@ def run(
             updated_at=utc_now_iso(),
         )
         store.create_thread(thread)
+
+    if ephemeral and not jsonl_events and not json_output:
+        console.print("[dim]Ephemeral run — thread will not be saved[/dim]")
 
     skills_cfg = load_skills_config(config.config_path)
     active_skills = select_skills(
@@ -433,6 +462,7 @@ def run(
                 plan_mode=plan,
                 headless_json=json_output,
                 output_schema=schema_obj,
+                remember=remember,
             )
         else:
             turn = run_turn(
@@ -449,6 +479,7 @@ def run(
                 plan_mode=plan,
                 headless_json=json_output,
                 output_schema=schema_obj,
+                remember=remember,
             )
     except CancelledError:
         if not machine_output:
@@ -675,12 +706,18 @@ def memories_delete_cmd(memory_id: str = typer.Argument(..., help="Memory id or 
 
 
 @memories_app.command("search")
-def memories_search_cmd(query: str = typer.Argument(..., help="Search query")) -> None:
-    """Search memories by keyword overlap."""
+def memories_search_cmd(
+    query: str = typer.Argument(..., help="Search query"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Boost memories from this cwd"),
+) -> None:
+    """Search memories by keyword overlap, recency, and cwd."""
     from agent.memories import MemoryStore
 
-    for mem in MemoryStore().search(query):
-        console.print(f"{mem.id[:8]}  {mem.text}")
+    store = MemoryStore()
+    cwd_str = str((cwd or Path.cwd()).resolve())
+    for entry in store.search_scored(query, cwd=cwd_str)[:10]:
+        mem = entry.memory
+        console.print(f"{mem.id[:8]}  score={entry.score:.1f}  {mem.text}")
 
 
 @config_app.command("validate")
@@ -1971,14 +2008,62 @@ def threads_list() -> None:
     console.print(table)
 
 
+@threads_app.command("pick")
+def threads_pick(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Filter threads to this cwd"),
+    all_cwds: bool = typer.Option(False, "--all", help="Show threads from all cwds"),
+) -> None:
+    """Interactively pick a thread from saved history."""
+    from agent.threads_picker import format_thread_picker_table, list_threads_for_picker, pick_thread
+
+    store = ThreadStore()
+    target = (cwd or Path.cwd()).resolve()
+    threads = list_threads_for_picker(store, target, filter_cwd=not all_cwds)
+    if not threads:
+        console.print("No threads found.")
+        raise typer.Exit(1)
+
+    table = Table(title="Pick a thread")
+    table.add_column("#", style="cyan")
+    table.add_column("ID")
+    table.add_column("Title")
+    table.add_column("Model")
+    table.add_column("Updated")
+    table.add_column("Cost")
+    for row in format_thread_picker_table(threads):
+        table.add_row(
+            str(row["index"]),
+            row["id"],
+            row["title"],
+            row["model"],
+            row["updated"],
+            row["cost"],
+        )
+    console.print(table)
+    picked = pick_thread(store, target, filter_cwd=not all_cwds)
+    if not picked:
+        raise typer.Exit(1)
+    console.print(f"Selected: {picked.id}")
+
+
 @threads_app.command("fork")
 def threads_fork(
-    thread_id: str = typer.Argument(..., help="Source thread ID (full or prefix)"),
+    thread_id: Optional[str] = typer.Argument(None, help="Source thread ID (full or prefix)"),
     title: Optional[str] = typer.Option(None, "--title", help="Title for forked thread"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Cwd filter when picking interactively"),
 ) -> None:
     """Fork a thread (branch conversation history)."""
+    from agent.threads_picker import pick_thread
+
     store = ThreadStore()
-    source = _load_thread(store, thread_id)
+    source: Thread | None = None
+    if thread_id:
+        source = _load_thread(store, thread_id)
+    else:
+        source = pick_thread(store, (cwd or Path.cwd()).resolve())
+        if not source:
+            console.print("[red]Error:[/red] No thread selected")
+            raise typer.Exit(1)
     forked = store.fork_thread(source, title=title)
     console.print(f"Forked thread: {forked.id}")
     if forked.forked_from:
@@ -3060,12 +3145,47 @@ def init_cmd(
     console.print("Next: set OPENROUTER_API_KEY and run `agent run \"your task\"`")
 
 
+@app.command("apply")
+def apply_cmd(
+    thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Thread to read patches from"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory for apply"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview patches without applying"),
+    last: bool = typer.Option(True, "--last/--turn", help="Use last completed patch turn"),
+) -> None:
+    """Apply the last agent patch from a saved thread."""
+    from agent.apply_last import apply_last_for_thread_id
+
+    store = ThreadStore()
+    if not thread_id:
+        thread = store.find_latest_for_cwd(str((cwd or Path.cwd()).resolve()))
+        if not thread:
+            console.print("[red]Error:[/red] No thread found for cwd")
+            raise typer.Exit(1)
+        thread_id = thread.id
+    if not last:
+        console.print("[yellow]Only --last is supported in v2.6.0[/yellow]")
+    result = apply_last_for_thread_id(store, thread_id, cwd=cwd, dry_run=dry_run)
+    if result.error:
+        console.print(f"[red]Error:[/red] {result.error}")
+        raise typer.Exit(1)
+    for block in result.preview_lines:
+        stdout_console.print(block)
+    if dry_run:
+        console.print("[dim]Dry run — no files changed[/dim]")
+        return
+    if result.outcome:
+        for patch_result in result.outcome.results:
+            console.print(f"[green]Applied[/green] {patch_result.path} ({patch_result.change_type})")
+
+
 @app.command("repl")
 def repl_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
     profile: Optional[str] = typer.Option(None, "--profile"),
     model_profile: Optional[str] = typer.Option(None, "--model-profile"),
     resume_last: bool = typer.Option(False, "--resume-last"),
+    resume: bool = typer.Option(False, "--resume", help="Pick a thread to resume"),
+    ephemeral: bool = typer.Option(False, "--ephemeral", help="Do not persist threads"),
     resume_turn: bool = typer.Option(
         False, "--resume-turn", help="Resume cancelled turn from checkpoint on next prompt"
     ),
@@ -3085,6 +3205,8 @@ def repl_cmd(
         profile=profile,
         model_profile=model_profile,
         resume_last=resume_last,
+        resume=resume,
+        ephemeral=ephemeral,
         resume_turn=resume_turn,
     )
 

@@ -27,6 +27,7 @@ from agent.settings import (
     HooksSettings,
     HarnessSettings,
     MemoriesSettings,
+    NotifySettings,
     PlanModeSettings,
     SandboxProfileSettings,
     TelemetrySettings,
@@ -42,6 +43,7 @@ from agent.settings import (
     load_hooks_settings,
     load_harness_settings,
     load_memories_settings,
+    load_notify_settings,
     load_plan_mode_settings,
     load_sandbox_profile_settings,
     load_kernel_sandbox_settings,
@@ -137,6 +139,7 @@ class Config:
     hooks: HooksSettings = field(default_factory=HooksSettings)
     harness: HarnessSettings = field(default_factory=HarnessSettings)
     memories: MemoriesSettings = field(default_factory=MemoriesSettings)
+    notify: NotifySettings = field(default_factory=NotifySettings)
     plan_mode: PlanModeSettings = field(default_factory=PlanModeSettings)
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
     web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
@@ -319,6 +322,7 @@ class Config:
         shell_cfg = load_shell_settings(resolved_config_path, project_path=project_path)
         hooks_cfg = load_hooks_settings(resolved_config_path, project_path=project_path)
         memories_cfg = load_memories_settings(resolved_config_path, project_path=project_path)
+        notify_cfg = load_notify_settings(resolved_config_path, project_path=project_path)
         plan_mode_cfg = load_plan_mode_settings(resolved_config_path, project_path=project_path)
         harness_cfg = load_harness_settings(resolved_config_path, project_path=project_path)
         isolation = load_isolation_settings(resolved_config_path)
@@ -377,6 +381,7 @@ class Config:
             hooks=hooks_cfg,
             harness=harness_cfg,
             memories=memories_cfg,
+            notify=notify_cfg,
             plan_mode=plan_mode_cfg,
             isolation=isolation,
             web_search=web_search,

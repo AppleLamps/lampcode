@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.memories import memories_store_path
 from agent.paths import resolve_path_within_cwd
+from agent.settings import MemoriesSettings
 from agent.sandbox.classifier import (
     CommandRisk,
     SandboxDecision,
@@ -87,8 +89,27 @@ def check_mcp_tool(
     return SandboxDecision(allowed=True)
 
 
-def check_write_file(path: str, cwd: Path, mode: SandboxMode) -> SandboxDecision:
+def _is_memories_path(path: str, memories: MemoriesSettings | None) -> bool:
+    if not memories or not memories.enabled:
+        return False
+    try:
+        target = Path(path).expanduser().resolve()
+        store_path = memories_store_path(memories).resolve()
+        return target == store_path
+    except OSError:
+        return False
+
+
+def check_write_file(
+    path: str,
+    cwd: Path,
+    mode: SandboxMode,
+    *,
+    memories: MemoriesSettings | None = None,
+) -> SandboxDecision:
     if mode == SandboxMode.DANGER_FULL_ACCESS:
+        return SandboxDecision(allowed=True)
+    if _is_memories_path(path, memories):
         return SandboxDecision(allowed=True)
     if mode == SandboxMode.READ_ONLY:
         return SandboxDecision(

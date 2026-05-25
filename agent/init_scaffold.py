@@ -20,6 +20,14 @@ max_tool_rounds = 15
 model = "anthropic/claude-sonnet-4"
 max_tool_rounds = 40
 reasoning_effort = "high"
+
+# [memories]
+# enabled = false
+# max_inject = 5
+
+# [notify]
+# command = "powershell -Command Write-Host Turn done: $env:AGENT_STATUS"
+# on_approval = false
 """
 
 AGENTS_MD_TEMPLATE = """# Project rules
