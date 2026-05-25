@@ -157,19 +157,44 @@ def probe_openrouter_reachability(
     http_get: Any = None,
 ) -> tuple[str, str]:
     """Lightweight OpenRouter API check for agent doctor."""
-    if not api_key:
+    health = check_openrouter_health(api_key, http_get=http_get)
+    if health.key_validity == "missing":
         return ("missing", "set OPENROUTER_API_KEY")
+    if health.reachability != "ok":
+        return (health.reachability, health.detail)
+    if health.key_validity != "ok":
+        return (health.key_validity, health.detail)
+    return ("reachable", health.detail)
+
+
+@dataclass
+class OpenRouterHealth:
+    reachability: str  # ok | unreachable | error
+    key_validity: str  # ok | invalid | missing | unknown
+    detail: str = ""
+
+
+def check_openrouter_health(
+    api_key: str | None,
+    *,
+    http_get: Any = None,
+) -> OpenRouterHealth:
+    """Split reachability vs API key validity for agent doctor."""
+    if not api_key:
+        return OpenRouterHealth("unknown", "missing", "set OPENROUTER_API_KEY")
     get = http_get or _default_get
     try:
         resp = get("https://openrouter.ai/api/v1/models", api_key=api_key)
         code = int(getattr(resp, "status_code", 200))
         if code == 200:
-            return ("reachable", "models API ok")
+            return OpenRouterHealth("ok", "ok", "models API ok")
         if code == 401:
-            return ("auth failed", "invalid API key")
-        return ("error", f"HTTP {code}")
+            return OpenRouterHealth("ok", "invalid", "invalid API key (401)")
+        if code == 403:
+            return OpenRouterHealth("ok", "invalid", "forbidden (403)")
+        return OpenRouterHealth("error", "unknown", f"HTTP {code}")
     except Exception as exc:
-        return ("unreachable", str(exc)[:120])
+        return OpenRouterHealth("unreachable", "unknown", str(exc)[:120])
 
 
 def recommend_model(

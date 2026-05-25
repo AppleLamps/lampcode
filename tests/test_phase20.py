@@ -44,7 +44,7 @@ def test_probe_openrouter_reachable() -> None:
 def test_probe_openrouter_auth_failed() -> None:
     resp = MagicMock(status_code=401)
     status, _ = probe_openrouter_reachability("bad-key", http_get=lambda *a, **k: resp)
-    assert status == "auth failed"
+    assert status == "invalid"
 
 
 def test_probe_openrouter_unreachable() -> None:
@@ -189,7 +189,7 @@ def test_build_pr_description_summary() -> None:
     md = build_pr_description(thread, include_diff=False)
     assert "## Fix calc" in md
     assert "Patched calc.add" in md
-    assert "fix tests" in md
+    assert "## Summary" in md
 
 
 def test_build_pr_description_forked_from() -> None:
@@ -244,13 +244,15 @@ def test_threads_pr_description_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPa
 def test_doctor_shows_openrouter_reachability(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("OPENROUTER_API_KEY", "k")
     with patch(
-        "agent.providers.openrouter.probe_openrouter_reachability",
-        return_value=("reachable", "models API ok"),
+        "cli.main.check_openrouter_health",
+        return_value=__import__(
+            "agent.providers.openrouter", fromlist=["OpenRouterHealth"]
+        ).OpenRouterHealth("ok", "ok", "models API ok"),
     ):
         result = runner.invoke(app, ["doctor"])
     out = (result.stdout or "") + (result.stderr or "")
     assert result.exit_code == 0
-    assert "OpenRouter API" in out
+    assert "OpenRouter reachability" in out
 
 
 def test_load_env_file_missing_returns_zero(tmp_path: Path) -> None:

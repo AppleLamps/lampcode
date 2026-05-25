@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.2.0] — 2026-05-25
+
+Phase 21 harness gaps (solo only — no new serve/OIDC/RBAC/scheduler features).
+
+### Added
+
+- **`agent threads pr-description`:** Bullet summary (`summarize_thread_for_pr`), `--summary-only` flag.
+- **Single-agent turn checkpoint/resume:** `[turn_checkpoint]` config; save on cancel; `--resume-turn`, `agent threads resume-turn`, `agent threads checkpoint-status`.
+- **REPL tab completion:** `@skill` prefix filter + `/commands` via readline when available.
+- **Patch UX:** `preview_patch`, approval/run summaries with +/− stats and diff preview on `apply_patch`.
+- **Doctor:** Split OpenRouter reachability vs API key validity checks.
+
+### Tests
+
+- `tests/test_phase21.py` — coverage for each Phase 21 feature.
+
 ## [2.1.0] — 2026-05-25
 
 Phase 20 solo-first release: golden-path harness polish, REPL/TUI parity, OpenRouter UX, docs split, and test hardening. **No Phase 21 / new enterprise features.**

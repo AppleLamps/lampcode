@@ -139,7 +139,9 @@ agent threads show <id> --usage
 agent threads fork <id> --title "experiment"
 agent threads rename <id> "fix calc bug"
 agent threads cost <id>
-agent threads pr-description <id>    # PR body from transcript + git diff
+agent threads pr-description <id>    # PR body (use --summary-only for bullets)
+agent threads resume-turn <id>       # Resume cancelled turn from checkpoint
+agent threads checkpoint-status <id>
 ```
 
 Fork lineage stored as `forked_from` in JSONL metadata.
@@ -207,7 +209,7 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 850+ tests
+pytest   # 870+ tests
 ```
 
 ## Release notes
