@@ -1,6 +1,6 @@
 # Harness roadmap (Phases 24–26)
 
-Step-by-step implementation plans for solo harness work after **v2.5.0 / Phase 24**.
+Step-by-step implementation plans for solo harness work after **v2.6.0 / Phase 25**.
 
 **North star:** Match Codex reliability mechanics (exec, sandbox, compaction, orchestration), then beat it on OpenRouter model choice, cost control, and CI/review scriptability.
 

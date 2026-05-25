@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.6.0] — 2026-05-25
+
+Phase 25 daily UX (solo only).
+
+### Added
+
+- **Thread picker:** `agent threads pick`, `agent run --resume`, `agent repl --resume`; REPL `/resume`, `/fork`, `/resume last`.
+- **`agent apply`:** Re-apply last agent patch from a thread (`--dry-run`, `--thread-id`).
+- **`--ephemeral` runs:** Non-persistent one-shot runs and REPL `/ephemeral on` (no JSONL under `~/.agent-cli/threads/`).
+- **Turn notifications:** `[notify] command` with `AGENT_THREAD_ID`, `AGENT_TURN_ID`, `AGENT_STATUS`, `AGENT_CWD`.
+- **Memories v2:** Scoring by tags + recency + cwd; improved inject; memories path allowed in workspace-write sandbox.
+
+### Changed
+
+- **`find_latest_for_cwd`:** Uses `updated_at` instead of file mtime (aligned with REPL `--resume-last`).
+- **`resolve_user_input`:** Supports injected `input_fn` without TTY (picker/tests).
+
+### Tests
+
+- `tests/test_phase25.py` — **944** pytest cases (934 baseline + 10 new).
+
 ## [2.5.0] — 2026-05-25
 
 Phase 24 reliability core (solo only).

@@ -15,19 +15,27 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.5.0 — Phase 24 complete)
+## Current state (v2.6.0 — Phase 25 complete)
 
-Phase 24 shipped as **v2.5.0**. Before doing new work, verify:
+Phase 25 shipped as **v2.6.0**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~934 passed, 1 skipped, 0 failed
-git log --oneline -15   # expect Phase 24 commits after Phase 23
+pytest -q               # expect ~944 passed, 1 skipped, 0 failed
+git log --oneline -15   # expect Phase 25 commits after Phase 24
 ```
 
-**Bottom line:** You're on **v2.5.0 / Phase 24 complete**. Next work is **Phase 25** (exec policy depth, memories v2, web search) unless you explicitly pivot to enterprise features.
+**Bottom line:** You're on **v2.6.0 / Phase 25 complete**. Next work is **Phase 26** unless you explicitly pivot to enterprise features.
 
-### Phase 24 (v2.5.0) — just shipped
+### Phase 25 (v2.6.0) — just shipped
+
+- **Thread picker:** `agent threads pick`, `--resume`, REPL `/resume` and `/fork`
+- **`agent apply`:** Re-apply last patch from thread history
+- **`--ephemeral`:** Non-persistent runs and REPL mode
+- **Turn notifications:** `[notify] command` on turn completion
+- **Memories v2:** Scoring, cwd-aware inject, sandbox allowlist for memories path
+
+### Phase 24 (v2.5.0)
 
 - **Unified exec v1:** stdin, output caps, yield_ms, session meta on shell tool
 - **Approval cache + sandbox retry:** skip duplicate prompts; one escalation retry after approved denial
@@ -88,7 +96,7 @@ git log --oneline -15   # expect Phase 24 commits after Phase 23
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
 - `CHANGELOG.md` — v2.1.0 / v2.2.0 / v2.3.0 notes
 
-**Tests:** 934 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 944 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)
@@ -127,18 +135,23 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 25 direction (planned — see roadmap)
+## Phase 26 direction (planned — see roadmap)
 
-Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phases 25–26 → v2.6.0–v2.7.0).
+Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phase 26 → v2.7.0).
 
-Summary — prioritize **depth over breadth**:
+---
 
-### P0 (Phase 25 / v2.6.0)
-1. Exec policy depth — richer TOML rules without full Starlark
-2. Memories v2 — smarter retrieval/inject (still opt-in)
-3. Web search quality — optional provider upgrade path
+## Phase 25 direction (complete — v2.6.0)
 
-Target release: **v2.6.0**. Details: [phase-25.md](roadmap/phase-25.md). Phase 26: [phase-26.md](roadmap/phase-26.md).
+Daily UX polish:
+
+### P0 ✅
+1. Resume/fork interactive picker
+2. `agent apply` + `--ephemeral` runs
+3. Turn notifications
+4. Memories v2
+
+Target release: **v2.6.0** with tests for each feature + full pytest green. ✅
 
 ---
 

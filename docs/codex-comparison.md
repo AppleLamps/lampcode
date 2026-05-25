@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.5.0 (Phase 24 reliability core).  
+**Current release:** v2.6.0 (Phase 25 daily UX).  
 **Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
 
 ---
@@ -18,7 +18,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | Core tools: shell + patch + read/list | ✅ | `run_command`, `apply_patch`, `read_file`, `search_repo`, `write_file` |
 | Approvals (exec/patch) | ✅ | `y` / `n` / `a` (turn) / `A` (session); `--auto-approve` |
 | Sandbox modes | ✅ | `read-only` / `workspace-write` / `danger-full-access` (heuristic + optional kernel — see Tier 2) |
-| Thread persistence + resume | ✅ | JSONL threads; `--thread-id`, `--resume-last`; single-agent `--resume-turn` (Phase 21) |
+| Thread persistence + resume | ✅ | JSONL threads; `--resume-last`, `--resume` picker, REPL `/resume` (Phase 25) |
 | Compaction | ✅ | Auto at threshold; compaction items in transcript; `/compact` hint in REPL |
 | Config + profiles | ✅ | `[model_profiles.*]`, `--profile`, `--model-profile`, `[model_routing]` |
 | MCP tools | ✅ | `mcp__{server}__{tool}`; `agent mcp list|tools` |
@@ -60,7 +60,10 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **`request_permissions` (mid-turn escalation)** | ✅ | Approval gate + session flags; auto-deny in read-only review (Phase 22) |
 | **Thread fork** | ✅ | `agent threads fork`; `forked_from` in JSONL |
 | **Hooks (`hooks.json`)** | ✅ | `on_tool_pending`, `on_turn_completed`, `on_pre_compact`, `on_post_compact` (Phase 24) |
-| **Memories (cross-session)** | ⚠️ partial | CRUD + keyword inject; opt-in `[memories] enabled`; no ML extraction pipeline |
+| **Memories (cross-session)** | ⚠️ partial | v2 scoring + cwd inject; opt-in `[memories] enabled`; sandbox allowlist (Phase 25) |
+| **`agent apply` (last patch)** | ✅ | `agent apply --dry-run` from thread history (Phase 25) |
+| **Ephemeral runs** | ✅ | `agent run --ephemeral`; REPL `/ephemeral on` (Phase 25) |
+| **Turn notifications** | ✅ | `[notify] command` on completion (Phase 25) |
 | **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `[plan_mode]` tool filter (Phase 22) |
 | **REPL `@skill` tab completion** | ✅ | readline completer when available (Phase 21) |
 | **Turn checkpoint / resume polish** | ✅ | `[turn_checkpoint]`; cancel saves messages; `--resume-turn` (Phase 21) |
@@ -129,5 +132,7 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Orchestration | ✅ Approval cache + sandbox retry (Phase 24) |
 | Compaction quality | ✅ AGENTS-aware + multi-compact warning (Phase 24) |
 | Parallel reads | ✅ Read-only tool batching (Phase 24) |
-| Memories | ⚠️ Minimal v1 |
+| Resume picker / apply | ✅ Phase 25 |
+| Ephemeral + notify | ✅ Phase 25 |
+| Memories | ⚠️ v2 scoring + inject (Phase 25) |
 | Enterprise cloud | ❌ By design — see enterprise.md |
