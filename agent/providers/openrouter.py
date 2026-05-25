@@ -278,3 +278,105 @@ def tool_support_warning(model_id: str, models: list[dict[str, Any]] | None = No
         f"Model {model_id!r} may not support tool calling — "
         "agent run/repl tools may fail. Pick a model with tool support."
     )
+
+
+def _model_record(model_id: str, models: list[dict[str, Any]] | None) -> dict[str, Any] | None:
+    if not models:
+        return None
+    mid = model_id.lower()
+    for m in models:
+        if str(m.get("id", "")).lower() == mid:
+            return m
+    return None
+
+
+def model_context_window(model_id: str, models: list[dict[str, Any]] | None = None) -> int | None:
+    record = _model_record(model_id, models)
+    if not record:
+        return None
+    top = record.get("top_provider") or {}
+    if isinstance(top, dict) and top.get("context_length"):
+        return int(top["context_length"])
+    if record.get("context_length"):
+        return int(record["context_length"])
+    return None
+
+
+def model_has_vision(model_id: str, models: list[dict[str, Any]] | None = None) -> bool | None:
+    record = _model_record(model_id, models)
+    if not record:
+        return None
+    arch = record.get("architecture") or {}
+    if isinstance(arch, dict):
+        modality = str(arch.get("modality", "")).lower()
+        if modality:
+            return "image" in modality or "vision" in modality
+    return None
+
+
+def model_has_reasoning(model_id: str, models: list[dict[str, Any]] | None = None) -> bool | None:
+    record = _model_record(model_id, models)
+    if not record:
+        return None
+    supported = record.get("supported_parameters") or record.get("supportedParameters") or []
+    if isinstance(supported, list):
+        params = {str(p).lower() for p in supported}
+        return "reasoning" in params or "include_reasoning" in params
+    return None
+
+
+def model_price_per_million(
+    model_id: str,
+    pricing: dict[str, SwarmBudgetPricing],
+    *,
+    direction: str,
+) -> float | None:
+    price = pricing.get(model_id)
+    if not price:
+        for key, val in pricing.items():
+            if key in model_id or model_id.endswith(key.split("/")[-1]):
+                price = val
+                break
+    if not price:
+        return None
+    return price.input_per_million if direction == "input" else price.output_per_million
+
+
+def build_model_preflight_rows(
+    *,
+    profiles: dict[str, Any],
+    default_model: str,
+    models: list[dict[str, Any]] | None,
+    pricing: dict[str, SwarmBudgetPricing],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    seen: set[str] = set()
+
+    def add_row(profile: str, model_id: str) -> None:
+        if not model_id or model_id in seen:
+            return
+        seen.add(model_id)
+        tools = "yes" if model_supports_tools(model_id, models) else "no"
+        ctx = model_context_window(model_id, models)
+        ctx_str = f"{ctx:,}" if ctx else "—"
+        inp = model_price_per_million(model_id, pricing, direction="input")
+        out = model_price_per_million(model_id, pricing, direction="output")
+        vision = model_has_vision(model_id, models)
+        reasoning = model_has_reasoning(model_id, models)
+        rows.append(
+            {
+                "profile": profile,
+                "model": model_id,
+                "tools": tools,
+                "context": ctx_str,
+                "input_$1m": f"{inp:.2f}" if inp is not None else "—",
+                "output_$1m": f"{out:.2f}" if out is not None else "—",
+                "vision": "yes" if vision else ("no" if vision is False else "—"),
+                "reasoning": "yes" if reasoning else ("no" if reasoning is False else "—"),
+            }
+        )
+
+    for name, profile in profiles.items():
+        add_row(name, getattr(profile, "model", "") or "")
+    add_row("(default)", default_model)
+    return rows
