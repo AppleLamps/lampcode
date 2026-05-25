@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from agent.config import Config
-from agent.settings import load_serve_settings
+from agent.settings import load_serve_settings, load_skills_config
 
 
 @dataclass
@@ -172,6 +172,38 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
                 ValidationIssue(
                     "warning",
                     f"Kernel sandbox enabled but {cap.get('backend')} unavailable — will fail_open={cfg.sandbox_kernel.fail_open}",
+                )
+            )
+
+    if cfg.multi_agent.enabled and not cfg.multi_agent.budgets.enabled:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "multi_agent enabled but swarm budgets disabled — enable [multi_agent.budgets] for production",
+            )
+        )
+
+    skills_cfg = load_skills_config(cfg.config_path)
+    mp = skills_cfg.marketplace
+    if mp.remote_registry_url and not mp.remote_registry_signature_key:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "skills.marketplace.remote_registry_url set without remote_registry_signature_key",
+            )
+        )
+
+    if serve.oidc and getattr(serve.oidc, "refresh_rotation", True):
+        from agent.auth.storage import keyring_available, select_backend
+
+        storage = __import__("agent.settings", fromlist=["load_auth_storage_settings"]).load_auth_storage_settings(
+            cfg.config_path
+        )
+        if select_backend(storage) == "file" and not keyring_available():
+            result.issues.append(
+                ValidationIssue(
+                    "warning",
+                    "OIDC refresh enabled but keyring unavailable — tokens use file fallback (~/.agent-cli/auth/oidc.json)",
                 )
             )
 

@@ -658,7 +658,7 @@ Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for
 3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
 4. Run `agent config validate --strict` in CI/deploy scripts.
 5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
-6. Run `pytest` (530+ tests) before release; check `agent doctor --deep` for TLS/RBAC/kernel/OIDC/IDE.
+6. Run `pytest` (580+ tests) before release; check `agent doctor --deep` for TLS/RBAC/kernel/OIDC/IDE/keyring/marketplace/budgets.
 
 ## Phase 14 — Web IDE lite + enterprise auth + cross-turn DAG v5 (v1.4.0)
 
@@ -728,15 +728,74 @@ Events: `multi_agent.dag.persisted`, `multi_agent.dag.resumed_across_turns`.
 
 Metrics: `agent_ide_requests_total`, `agent_auth_device_code_total`, `agent_dag_persist_total`.
 
+## Phase 15 — OAuth rotation + marketplace CDN + budgeted swarms (v1.5.0)
+
+### OAuth refresh rotation + secure storage
+
+Keyring-first token storage with file fallback (`~/.agent-cli/auth/oidc.json`, mode 0600 on Unix).
+
+```toml
+[serve.auth.oidc]
+refresh_rotation = true
+refresh_skew_sec = 300
+prefer_keyring = true
+
+[auth.storage]
+backend = "auto"                  # auto | keyring | file
+service_name = "agent-cli"
+```
+
+```powershell
+agent auth login --device
+agent auth login --device --headless --timeout 600
+agent auth status
+agent auth refresh --force
+agent auth logout
+```
+
+### Remote marketplace CDN + revocations
+
+```toml
+[skills.marketplace]
+remote_registry_url = "https://skills.example.com/registry.json"
+remote_registry_signature_key = "publisher1"
+revocation_list_url = "https://skills.example.com/revocations.json"
+```
+
+```powershell
+agent skills marketplace sync --force
+agent skills marketplace list --remote
+agent skills install docs-helper@1.0.0 --from-registry
+agent skills revocations check
+agent skills lock update
+agent skills lock verify
+```
+
+### Budgeted swarms v1
+
+```toml
+[multi_agent.budgets]
+enabled = true
+max_workers_spawned = 20
+on_budget_exceeded = "kill"
+```
+
+```powershell
+agent run "coordinate workers" --multi-agent --budget-profile strict
+agent multi-agent budgets show --thread-id <id>
+```
+
+Metrics: `agent_auth_refresh_total`, `agent_marketplace_sync_total`, `agent_swarm_budget_exceeded_total`.
+
 ## Tests
 
 ```powershell
-pytest   # 530+ tests
+pytest   # 580+ tests
 ```
 
-## Phase 15 (planned, not implemented)
+## Phase 16 (planned, not implemented)
 
-Windows AppContainer, remote marketplace CDN + revocation, budgeted autonomous swarms, multi-file IDE tabs/LSP/debugger, OAuth refresh rotation.
+Windows AppContainer sandbox, multi-file IDE tabs/LSP/debugger, cross-thread DAG, unbounded autonomous swarms, online OAuth token introspection.
 
 ## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
 

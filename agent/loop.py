@@ -85,6 +85,7 @@ def run_turn(
     force_sync: bool = False,
     resume_messages: list | None = None,
     resume_spawn_count: int = 0,
+    budget_profile: str | None = None,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -143,6 +144,16 @@ def run_turn(
     tools = get_tool_schemas(
         mcp_manager, config, allow_spawn=config.multi_agent.enabled
     )
+    budget_tracker = None
+    if config.multi_agent.budgets.enabled or (budget_profile and budget_profile.lower() != "off"):
+        from agent.multi_agent.budgets import SwarmBudgetTracker, profile_settings
+
+        if budget_profile:
+            bsettings = profile_settings(budget_profile, config.multi_agent.budgets)
+        else:
+            bsettings = config.multi_agent.budgets
+        if bsettings.enabled:
+            budget_tracker = SwarmBudgetTracker(bsettings, model=config.model)
     messages = build_thread_messages(
         thread,
         active_skills=active_skills,
@@ -237,6 +248,7 @@ def run_turn(
                 resume_messages=resume_messages,
                 resume_spawn_count=resume_spawn_count,
                 user_text=user_text,
+                budget_tracker=budget_tracker,
             )
         pull_result, pull_item = maybe_sync_turn_end(
             config,
@@ -299,6 +311,7 @@ def _run_loop(
     resume_messages: list | None = None,
     resume_spawn_count: int = 0,
     user_text: str = "",
+    budget_tracker: "SwarmBudgetTracker | None" = None,
 ) -> Turn:
     spawn_count = resume_spawn_count
     if resume_messages:
@@ -307,8 +320,15 @@ def _run_loop(
     registry = worker_registry
     if registry:
         registry.spawn_count = spawn_count
+    budget = budget_tracker
     for _round in range(config.max_rounds):
         cancel.check()
+        if budget:
+            metric = budget.tick_wall_clock()
+            if metric and budget.should_kill():
+                return _budget_kill_turn(
+                    thread, turn, store, emitter, registry, budget, metric, cancel
+                )
 
         compact_result = compact_thread_if_needed(thread, config, store, client)
         if compact_result.performed:
@@ -353,6 +373,12 @@ def _run_loop(
         if result.usage:
             turn.usage.input_tokens = result.usage.get("prompt_tokens")
             turn.usage.output_tokens = result.usage.get("completion_tokens")
+        if budget:
+            metric = budget.record_usage(result.usage)
+            if metric and budget.should_kill():
+                return _budget_kill_turn(
+                    thread, turn, store, emitter, registry, budget, metric, cancel
+                )
 
         if not result.tool_calls:
             agent_item = AgentMessageItem(text=result.content)
@@ -361,6 +387,10 @@ def _run_loop(
             turn.status = "completed"
             store.append_turn(thread, turn)
             store.save_thread(thread)
+            if budget:
+                from agent.multi_agent.budget_state import save_budget_state
+
+                save_budget_state(thread.id, budget.to_dict())
             emitter.turn_completed(
                 thread.id, turn.id, turn.status, estimated_tokens=estimate_tokens(messages)
             )
@@ -375,6 +405,12 @@ def _run_loop(
 
         for tc in result.tool_calls:
             cancel.check()
+            if budget:
+                metric = budget.record_tool_call()
+                if metric and budget.should_kill():
+                    return _budget_kill_turn(
+                        thread, turn, store, emitter, registry, budget, metric, cancel
+                    )
             tool_name = tc["function"]["name"]
             tool_call_id = tc["id"]
             raw_args = tc["function"].get("arguments", "")
@@ -488,6 +524,13 @@ def _run_loop(
                 spawn_count += 1
                 if registry:
                     registry.spawn_count = spawn_count
+                if budget:
+                    metric = budget.record_worker_spawn(1)
+                    if metric and budget.should_kill():
+                        return _budget_kill_turn(
+                            thread, turn, store, emitter, registry, budget, metric, cancel
+                        )
+                if registry:
                     collab_item_in = (
                         tracking_items[0]
                         if tracking_items
@@ -564,6 +607,12 @@ def _run_loop(
                     else:
                         spawn_count += len(tasks)
                         registry.spawn_count = spawn_count
+                        if budget:
+                            metric = budget.record_worker_spawn(len(tasks))
+                            if metric and budget.should_kill():
+                                return _budget_kill_turn(
+                                    thread, turn, store, emitter, registry, budget, metric, cancel
+                                )
                         with trace_span("worker.spawn_batch", count=len(tasks)):
                             result_text, _collabs = registry.enqueue_batch(
                                 thread,
@@ -1043,3 +1092,50 @@ def brief_args(tool_name: str, arguments: dict) -> str:
     if tool_name.startswith("mcp__"):
         return str(arguments)[:80]
     return str(arguments)
+
+
+def _budget_kill_turn(
+    thread: Thread,
+    turn: Turn,
+    store: ThreadStore,
+    emitter: EventEmitter,
+    registry: WorkerRegistry | None,
+    budget,
+    metric: str,
+    cancel: CancelToken,
+) -> Turn:
+    from agent.harness.active_turns import ActiveTurnRegistry
+
+    snap = budget.snapshot
+    emitter.multi_agent_budget_exceeded(
+        thread.id,
+        turn.id,
+        metric=metric,
+        limit=snap.last_limit,
+        observed=snap.last_observed,
+    )
+    from agent.multi_agent.budget_state import save_budget_state
+
+    save_budget_state(thread.id, budget.to_dict())
+    if registry:
+        with registry._lock:
+            registry._pending_queue.clear()
+            for rec in registry._workers.values():
+                if rec.status in ("queued", "blocked", "running"):
+                    rec.status = "cancelled"
+                    rec._done.set()
+        registry._dag_status = "cancelled"
+    cancel.cancel()
+    ActiveTurnRegistry.global_registry().cancel(thread.id)
+    msg = (
+        f"Supervisor stopped: budget exceeded ({metric}). "
+        f"Snapshot: {budget.to_dict()}"
+    )
+    agent_item = AgentMessageItem(text=msg)
+    turn.items.append(agent_item)
+    store.append_item(thread, turn.id, agent_item)
+    turn.status = "failed"
+    store.append_turn(thread, turn)
+    store.save_thread(thread)
+    emitter.turn_completed(thread.id, turn.id, turn.status)
+    return turn

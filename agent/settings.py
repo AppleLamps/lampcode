@@ -34,6 +34,33 @@ class MarketplaceSettings:
     require_signature: bool = True
     trusted_publishers: list[str] = field(default_factory=list)
     registry_dir: str = "~/.agent-cli/marketplace"
+    remote_registry_url: str = ""
+    remote_registry_signature_key: str = ""
+    sync_interval_sec: int = 3600
+    offline_cache_dir: str = "~/.agent-cli/marketplace/cache"
+    revocation_list_url: str = ""
+    revocation_list_ttl_sec: int = 900
+    pin_versions_in_lockfile: bool = True
+
+
+@dataclass
+class SwarmBudgetPricing:
+    input_per_million: float = 0.0
+    output_per_million: float = 0.0
+
+
+@dataclass
+class SwarmBudgetSettings:
+    enabled: bool = False
+    max_wall_clock_sec: int = 3600
+    max_supervisor_tool_calls: int = 200
+    max_workers_spawned: int = 20
+    max_openrouter_input_tokens: int = 500_000
+    max_openrouter_output_tokens: int = 200_000
+    max_estimated_cost_usd: float = 0.0
+    on_budget_exceeded: str = "kill"  # kill | warn
+    pricing: dict[str, SwarmBudgetPricing] = field(default_factory=dict)
+
 
 
 @dataclass
@@ -229,6 +256,7 @@ class MultiAgentSettings:
     dag_persist_across_turns: bool = False
     dag_max_age_sec: int = 86400
     dag_auto_resume: bool = False
+    budgets: SwarmBudgetSettings = field(default_factory=SwarmBudgetSettings)
 
 
 @dataclass
@@ -480,6 +508,32 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         dag_persist_across_turns=bool(ma.get("dag_persist_across_turns", False)),
         dag_max_age_sec=int(ma.get("dag_max_age_sec", 86400)),
         dag_auto_resume=bool(ma.get("dag_auto_resume", False)),
+        budgets=_parse_swarm_budgets(ma.get("budgets", {})),
+    )
+
+
+def _parse_swarm_budgets(raw: Any) -> SwarmBudgetSettings:
+    if not isinstance(raw, dict):
+        return SwarmBudgetSettings()
+    pricing_raw = raw.get("pricing", {})
+    pricing: dict[str, SwarmBudgetPricing] = {}
+    if isinstance(pricing_raw, dict):
+        for model, p in pricing_raw.items():
+            if isinstance(p, dict):
+                pricing[str(model)] = SwarmBudgetPricing(
+                    input_per_million=float(p.get("input", p.get("input_per_million", 0))),
+                    output_per_million=float(p.get("output", p.get("output_per_million", 0))),
+                )
+    return SwarmBudgetSettings(
+        enabled=bool(raw.get("enabled", False)),
+        max_wall_clock_sec=int(raw.get("max_wall_clock_sec", 3600)),
+        max_supervisor_tool_calls=int(raw.get("max_supervisor_tool_calls", 200)),
+        max_workers_spawned=int(raw.get("max_workers_spawned", 20)),
+        max_openrouter_input_tokens=int(raw.get("max_openrouter_input_tokens", 500_000)),
+        max_openrouter_output_tokens=int(raw.get("max_openrouter_output_tokens", 200_000)),
+        max_estimated_cost_usd=float(raw.get("max_estimated_cost_usd", 0)),
+        on_budget_exceeded=str(raw.get("on_budget_exceeded", "kill")),
+        pricing=pricing,
     )
 
 
@@ -625,6 +679,9 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             ),
             device_code_enabled=bool(oidc_raw.get("device_code_enabled", False)),
             device_client_id=str(oidc_raw.get("device_client_id", "")),
+            refresh_rotation=bool(oidc_raw.get("refresh_rotation", True)),
+            refresh_skew_sec=int(oidc_raw.get("refresh_skew_sec", 300)),
+            prefer_keyring=bool(oidc_raw.get("prefer_keyring", True)),
         )
     ide_raw = serve.get("ide", {})
     if not isinstance(ide_raw, dict):
@@ -725,6 +782,13 @@ def _parse_skills_config(data: dict[str, Any]) -> SkillsConfig:
             require_signature=bool(mp_raw.get("require_signature", True)),
             trusted_publishers=[str(x) for x in trusted],
             registry_dir=str(mp_raw.get("registry_dir", "~/.agent-cli/marketplace")),
+            remote_registry_url=str(mp_raw.get("remote_registry_url", "")),
+            remote_registry_signature_key=str(mp_raw.get("remote_registry_signature_key", "")),
+            sync_interval_sec=int(mp_raw.get("sync_interval_sec", 3600)),
+            offline_cache_dir=str(mp_raw.get("offline_cache_dir", "~/.agent-cli/marketplace/cache")),
+            revocation_list_url=str(mp_raw.get("revocation_list_url", "")),
+            revocation_list_ttl_sec=int(mp_raw.get("revocation_list_ttl_sec", 900)),
+            pin_versions_in_lockfile=bool(mp_raw.get("pin_versions_in_lockfile", True)),
         ),
     )
 
@@ -758,6 +822,23 @@ def load_mcp_config(
     return McpConfig(
         servers=_parse_mcp_servers(merged),
         settings=_parse_mcp_settings(merged),
+    )
+
+
+def load_auth_storage_settings(path: Path | None = None):
+    from agent.auth.storage import AuthStorageSettings
+
+    data = _load_toml(path or default_config_path())
+    auth = data.get("auth", {})
+    if not isinstance(auth, dict):
+        auth = {}
+    storage = auth.get("storage", {})
+    if not isinstance(storage, dict):
+        storage = {}
+    return AuthStorageSettings(
+        backend=str(storage.get("backend", "auto")),
+        service_name=str(storage.get("service_name", "agent-cli")),
+        file_path=str(storage.get("file_path", "")),
     )
 
 

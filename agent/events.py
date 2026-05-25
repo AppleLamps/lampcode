@@ -760,6 +760,45 @@ class EventEmitter:
             )
         )
 
+    def multi_agent_budget_exceeded(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        metric: str,
+        limit: float | int = 0,
+        observed: float | int = 0,
+        **extra,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.budget.exceeded",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"metric": metric, "limit": limit, "observed": observed, **extra},
+            )
+        )
+
+    def skills_marketplace_synced(
+        self, *, skills: int = 0, cached: bool = False, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "skills.marketplace.synced",
+                data={"skills": skills, "cached": cached, **extra},
+            )
+        )
+
+    def skills_marketplace_revocation_blocked(
+        self, *, name: str, version: str, reason: str = "", **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "skills.marketplace.revocation_blocked",
+                data={"name": name, "version": version, "reason": reason, **extra},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

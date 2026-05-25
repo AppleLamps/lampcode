@@ -36,6 +36,9 @@ class ServeOidcSettings:
     role_mapping: OidcRoleMapping = field(default_factory=OidcRoleMapping)
     device_code_enabled: bool = False
     device_client_id: str = ""
+    refresh_rotation: bool = True
+    refresh_skew_sec: int = 300
+    prefer_keyring: bool = True
 
 
 @dataclass
@@ -243,6 +246,30 @@ class OidcClient:
         if id_token:
             return _decode_jwt_payload(id_token)
         return {}
+
+    def refresh_token(
+        self,
+        refresh_token: str,
+        *,
+        http_client: httpx.Client | None = None,
+    ) -> dict[str, Any]:
+        data = {
+            "grant_type": "refresh_token",
+            "refresh_token": refresh_token,
+            "client_id": self.settings.client_id,
+        }
+        if self.settings.client_secret:
+            data["client_secret"] = self.settings.client_secret
+        client = http_client or httpx.Client(timeout=30)
+        own_client = http_client is None
+        try:
+            resp = client.post(self._token_endpoint(), data=data)
+            if resp.status_code >= 400:
+                raise ValueError(f"refresh failed: {resp.status_code}")
+            return resp.json()
+        finally:
+            if own_client:
+                client.close()
 
     def _device_endpoint(self) -> str:
         issuer = self.settings.issuer_url.rstrip("/")

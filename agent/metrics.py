@@ -50,6 +50,9 @@ class MetricsCollector:
             "agent_ide_requests_total": {},
             "agent_auth_device_code_total": {},
             "agent_dag_persist_total": {},
+            "agent_auth_refresh_total": {},
+            "agent_marketplace_sync_total": {},
+            "agent_swarm_budget_exceeded_total": {},
         }
         self._gauges: dict[str, int] = {
             "active_turns": 0,
@@ -209,6 +212,12 @@ class MetricsCollector:
                     lines.append(f'{metric}{{route="{label}"}} {value}')
                 elif metric in ("agent_auth_device_code_total", "agent_dag_persist_total"):
                     lines.append(f'{metric}{{result="{label}"}} {value}')
+                elif metric == "agent_auth_refresh_total":
+                    lines.append(f'{metric}{{result="{label}"}} {value}')
+                elif metric == "agent_marketplace_sync_total":
+                    lines.append(f'{metric}{{result="{label}"}} {value}')
+                elif metric == "agent_swarm_budget_exceeded_total":
+                    lines.append(f'{metric}{{metric="{label}"}} {value}')
                 else:
                     lines.append(f'{metric}{{label="{label}"}} {value}')
         for k, v in snap.gauges.items():

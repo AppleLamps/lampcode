@@ -40,7 +40,7 @@ from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_t
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.metrics import MetricsCollector
-from agent.settings import load_serve_settings, load_skills_config
+from agent.settings import load_auth_storage_settings, load_serve_settings, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
@@ -65,6 +65,9 @@ serve_users_app = typer.Typer(help="RBAC user management")
 serve_oidc_app = typer.Typer(help="OIDC SSO configuration")
 auth_sessions_app = typer.Typer(help="Session management")
 marketplace_app = typer.Typer(help="Signed skill marketplace")
+skills_lock_app = typer.Typer(help="Skill lockfile for reproducible installs")
+skills_revocations_app = typer.Typer(help="Marketplace revocation list")
+multi_agent_budgets_app = typer.Typer(help="Swarm budget tracking")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -82,6 +85,9 @@ serve_app.add_typer(serve_users_app, name="users")
 serve_app.add_typer(serve_oidc_app, name="oidc")
 auth_app.add_typer(auth_sessions_app, name="sessions")
 skills_app.add_typer(marketplace_app, name="marketplace")
+skills_app.add_typer(skills_lock_app, name="lock")
+skills_app.add_typer(skills_revocations_app, name="revocations")
+multi_agent_app.add_typer(multi_agent_budgets_app, name="budgets")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -277,6 +283,11 @@ def run(
         "--show-system-prompt",
         help="Print resolved system prompt before running (debug)",
     ),
+    budget_profile: Optional[str] = typer.Option(
+        None,
+        "--budget-profile",
+        help="Swarm budget profile: strict | standard | off",
+    ),
 ) -> None:
     """Run the agent on a task."""
     try:
@@ -377,6 +388,8 @@ def run(
         console.print(f"[dim]Execution:[/dim] {backend_display(config)}")
         if config.multi_agent.enabled:
             console.print("[dim]Multi-agent:[/dim] enabled (spawn_worker)")
+        if budget_profile:
+            console.print(f"[dim]Budget profile:[/dim] {budget_profile}")
         if thread.repo_root:
             console.print(f"[dim]Repo:[/dim] {thread.repo_root}")
         console.print()
@@ -422,6 +435,7 @@ def run(
                 quiet_tools=quiet_tools,
                 session_auto_approve=session_auto_approve,
                 force_sync=force_sync,
+                budget_profile=budget_profile,
             )
     except CancelledError:
         if not jsonl_events:
@@ -684,8 +698,48 @@ def doctor(
     key_count = len(list((marketplace_dir(mp.registry_dir) / "keys").glob("*.pub")))
     table.add_row(
         "skill marketplace",
-        f"enabled={mp.enabled}, trusted_keys={key_count}, require_signature={mp.require_signature}",
+        f"enabled={mp.enabled}, trusted_keys={key_count}, require_signature={mp.require_signature}, "
+        f"remote={'yes' if mp.remote_registry_url else 'no'}",
     )
+    if mp.remote_registry_url:
+        from agent.skills.marketplace_remote import load_sync_state, marketplace_dir
+
+        sync = load_sync_state(marketplace_dir(mp.registry_dir))
+        last = (
+            f"{int(__import__('time').time() - sync.last_sync_at)}s ago"
+            if sync.last_sync_at
+            else "never"
+        )
+        table.add_row("marketplace sync", f"last={last}, version={sync.registry_version}")
+    from agent.auth.oidc_tokens import OidcTokenStore
+    from agent.auth.storage import keyring_available
+
+    storage = load_auth_storage_settings(config_path)
+    backend = OidcTokenStore(storage_settings=storage).backend_name
+    table.add_row(
+        "auth storage",
+        f"backend={backend}, keyring={'available' if keyring_available() else 'missing (file fallback)'}",
+    )
+    if not keyring_available() and OidcTokenStore(storage_settings=storage).load():
+        checks.append(
+            (
+                "auth warning",
+                "keyring not installed — OIDC tokens stored in ~/.agent-cli/auth/oidc.json (0600)",
+            )
+        )
+    budgets = cfg.multi_agent.budgets
+    table.add_row(
+        "swarm budgets",
+        f"enabled={budgets.enabled}, max_workers={budgets.max_workers_spawned}, "
+        f"on_exceed={budgets.on_budget_exceeded}",
+    )
+    if cfg.multi_agent.enabled and not budgets.enabled:
+        checks.append(
+            (
+                "budget warning",
+                "multi_agent enabled but budgets disabled — consider [multi_agent.budgets] enabled=true",
+            )
+        )
     cp_dir = Path(cfg.multi_agent.checkpoint_dir).expanduser()
     try:
         cp_dir.mkdir(parents=True, exist_ok=True)
@@ -863,6 +917,7 @@ def auth_login_device(
     from agent.serve.oidc import OidcClient
     import time as _time
 
+    storage = load_auth_storage_settings()
     client = OidcClient(cfg.oidc)
     try:
         flow = client.start_device_flow()
@@ -891,9 +946,11 @@ def auth_login_device(
                 subject=str(claims.get("sub", "")),
                 email=email,
                 role=principal.role,
+                scopes=list(cfg.oidc.scopes),
             )
-            OidcTokenStore().save(record)
-            if not OidcTokenStore.keyring_available():
+            store = OidcTokenStore(storage_settings=storage)
+            store.save(record)
+            if store.backend_name == "file" and not OidcTokenStore.keyring_available():
                 console.print(
                     "[yellow]Warning:[/yellow] keyring not installed — tokens stored as plain JSON"
                 )
@@ -908,6 +965,65 @@ def auth_login_device(
         _time.sleep(flow.interval)
     console.print("[red]Timeout waiting for device authorization[/red]")
     raise typer.Exit(1)
+
+
+@auth_app.command("status")
+def auth_status() -> None:
+    """Show OIDC token storage status (tokens redacted)."""
+    import json
+    import time as _time
+
+    from agent.auth.oidc_tokens import OidcTokenStore
+    from agent.auth.refresh import ensure_fresh_tokens, needs_refresh
+
+    cfg = load_serve_settings()
+    storage = load_auth_storage_settings()
+    store = OidcTokenStore(storage_settings=storage)
+    record = ensure_fresh_tokens(store, cfg.oidc) if cfg.oidc else store.load()
+    if not record:
+        stdout_console.print(json.dumps({"authenticated": False, "backend": store.backend_name}, indent=2))
+        return
+    summary = record.redacted_summary()
+    summary["authenticated"] = True
+    summary["backend"] = store.backend_name
+    summary["needs_refresh"] = needs_refresh(record, skew_sec=getattr(cfg.oidc, "refresh_skew_sec", 300))
+    summary["expires_in_sec"] = max(0, int(record.expires_at - _time.time())) if record.expires_at else None
+    stdout_console.print(json.dumps(summary, indent=2))
+
+
+@auth_app.command("logout")
+def auth_logout() -> None:
+    """Clear stored OIDC tokens."""
+    from agent.auth.oidc_tokens import OidcTokenStore
+
+    storage = load_auth_storage_settings()
+    OidcTokenStore(storage_settings=storage).clear()
+    console.print("[green]Logged out[/green] — OIDC tokens cleared")
+
+
+@auth_app.command("refresh")
+def auth_refresh(
+    force: bool = typer.Option(False, "--force", help="Refresh even if access token is still valid"),
+) -> None:
+    """Refresh OIDC access token using stored refresh token."""
+    import json
+
+    from agent.auth.oidc_tokens import OidcTokenStore
+    from agent.auth.refresh import RefreshError, refresh_tokens
+
+    cfg = load_serve_settings()
+    if not cfg.oidc:
+        console.print("[red]OIDC not configured[/red]")
+        raise typer.Exit(1)
+    storage = load_auth_storage_settings()
+    store = OidcTokenStore(storage_settings=storage)
+    try:
+        record = refresh_tokens(store, cfg.oidc, force=force)
+    except RefreshError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    stdout_console.print(json.dumps(record.redacted_summary(), indent=2))
+    console.print("[green]Token refreshed[/green]")
 
 
 @auth_app.command("hash-token")
@@ -1035,23 +1151,137 @@ def auth_sessions_revoke(session_id: str = typer.Argument(...)) -> None:
 
 
 @marketplace_app.command("list")
-def marketplace_list() -> None:
+def marketplace_list(
+    remote: bool = typer.Option(False, "--remote", help="Show remote-synced registry entries"),
+) -> None:
     """List curated marketplace registry entries."""
     from agent.skills.marketplace import list_marketplace
+    from agent.skills.marketplace_remote import load_local_registry
 
     cfg = Config.resolve()
     skills_cfg = load_skills_config(cfg.config_path)
-    entries = list_marketplace(skills_cfg.marketplace)
+    mp = skills_cfg.marketplace
+    entries = load_local_registry(mp) if remote else list_marketplace(mp)
     if not entries:
         console.print("Marketplace registry empty.")
         return
-    table = Table(title="Marketplace")
+    table = Table(title="Marketplace" + (" (remote)" if remote else ""))
     table.add_column("Name")
     table.add_column("Version")
     table.add_column("Publisher")
     for e in entries:
         table.add_row(str(e.get("name", "")), str(e.get("version", "")), str(e.get("publisher", "")))
     console.print(table)
+
+
+@marketplace_app.command("sync")
+def marketplace_sync(
+    force: bool = typer.Option(False, "--force", help="Bypass sync interval cache"),
+) -> None:
+    """Download and verify remote skill registry + revocations."""
+    import json
+
+    from agent.events import EventEmitter
+    from agent.skills.marketplace_remote import sync_remote_registry, sync_revocations
+
+    cfg = Config.resolve()
+    mp = load_skills_config(cfg.config_path).marketplace
+    emitter = EventEmitter(lambda e: None)
+    reg = sync_remote_registry(mp, force=force)
+    rev = sync_revocations(mp, force=force)
+    if reg.get("ok"):
+        emitter.skills_marketplace_synced(skills=reg.get("skills", 0), cached=reg.get("cached", False))
+    stdout_console.print(json.dumps({"registry": reg, "revocations": rev}, indent=2))
+    if not reg.get("ok"):
+        raise typer.Exit(1)
+
+
+@skills_app.command("install")
+def skills_install(
+    target: str = typer.Argument(..., help="name@version"),
+    from_registry: bool = typer.Option(
+        False, "--from-registry", help="Install from synced marketplace registry"
+    ),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Install a skill from the marketplace registry."""
+    import json
+
+    from agent.events import EventEmitter
+    from agent.skills.marketplace_remote import install_from_registry
+
+    if not from_registry:
+        console.print("[red]Use --from-registry or agent skills marketplace install[/red]")
+        raise typer.Exit(1)
+    if "@" not in target:
+        console.print("[red]Expected name@version[/red]")
+        raise typer.Exit(1)
+    name, version = target.split("@", 1)
+    cfg = Config.resolve(cwd=cwd)
+    mp = load_skills_config(cfg.config_path).marketplace
+    emitter = EventEmitter(lambda e: None)
+    result = install_from_registry(name, version, settings=mp, cwd=cfg.cwd, emitter=emitter)
+    if result.get("revoked"):
+        emitter.skills_marketplace_revocation_blocked(
+            name=name, version=version, reason=str(result.get("error", ""))
+        )
+    stdout_console.print(json.dumps(result, indent=2, default=str))
+    if not result.get("ok"):
+        raise typer.Exit(1)
+
+
+@skills_revocations_app.command("check")
+def skills_revocations_check() -> None:
+    """Check cached skill revocation list."""
+    import json
+
+    from agent.skills.marketplace_remote import load_revocations, sync_revocations
+
+    mp = load_skills_config().marketplace
+    sync_revocations(mp)
+    items = load_revocations(mp)
+    stdout_console.print(json.dumps({"count": len(items), "revocations": items}, indent=2))
+
+
+@skills_lock_app.command("update")
+def skills_lock_update(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Write .agent-cli/skills.lock.json from installed registry entries."""
+    import json
+
+    from agent.skills.marketplace_remote import default_lockfile_path, load_local_registry, write_lockfile
+
+    cfg = Config.resolve(cwd=cwd)
+    mp = load_skills_config(cfg.config_path).marketplace
+    entries = []
+    for item in load_local_registry(mp):
+        entries.append(
+            {
+                "name": item.get("name"),
+                "version": item.get("version"),
+                "sha256": item.get("sha256", ""),
+                "publisher": item.get("publisher", ""),
+            }
+        )
+    path = write_lockfile(entries, cfg.cwd)
+    stdout_console.print(json.dumps({"ok": True, "path": str(path), "skills": len(entries)}, indent=2))
+
+
+@skills_lock_app.command("verify")
+def skills_lock_verify(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Verify skills.lock.json sha256 pins."""
+    import json
+
+    from agent.skills.marketplace_remote import verify_lockfile
+
+    cfg = Config.resolve(cwd=cwd)
+    result = verify_lockfile(cfg.cwd)
+    stdout_console.print(json.dumps(result, indent=2))
+    if not result.get("ok"):
+        raise typer.Exit(1)
 
 
 @marketplace_app.command("install")
@@ -1399,6 +1629,22 @@ def sync_status_cmd(
     stdout_console.print(json.dumps(sync_status(config), indent=2))
 
 
+@multi_agent_budgets_app.command("show")
+def multi_agent_budgets_show(
+    thread_id: str = typer.Option(..., "--thread-id"),
+) -> None:
+    """Show persisted swarm budget snapshot for a thread."""
+    import json
+
+    from agent.multi_agent.budget_state import load_budget_state
+
+    snapshot = load_budget_state(thread_id)
+    if not snapshot:
+        stdout_console.print(json.dumps({"thread_id": thread_id, "found": False}, indent=2))
+        raise typer.Exit(1)
+    stdout_console.print(json.dumps({"thread_id": thread_id, "snapshot": snapshot}, indent=2))
+
+
 @multi_agent_app.command("status")
 def multi_agent_status(
     thread_id: str = typer.Option(..., "--thread-id"),
@@ -1672,6 +1918,15 @@ def serve(
         cfg.tls.auto_generate_self_signed = generate_self_signed
     if enable_ide:
         cfg.ide.enabled = True
+    if cfg.oidc and getattr(cfg.oidc, "refresh_rotation", True):
+        from agent.auth.oidc_tokens import OidcTokenStore
+        from agent.auth.refresh import ensure_fresh_tokens
+
+        storage = load_auth_storage_settings(cfg.config_path if hasattr(cfg, "config_path") else None)
+        try:
+            ensure_fresh_tokens(OidcTokenStore(storage_settings=storage), cfg.oidc)
+        except Exception:
+            pass
     if host == "0.0.0.0" and not allow_remote_bind:
         console.print(
             "[red]Error:[/red] Refusing 0.0.0.0 without --allow-remote-bind"
