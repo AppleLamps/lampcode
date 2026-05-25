@@ -512,12 +512,79 @@ agent doctor --deep
 
 Reports `rsync`/`scp` availability, sync config + estimated cwd size, SSH pool socket dir, and checkpoint dir writability.
 
+## Phase 9 — Incremental sync v2, authenticated serve, supervisor v3
+
+### Incremental sync v2
+
+Manifest-based delta sync with conflict detection. Uses `~/.agent-cli/sync-state/{thread_id}.json` plus `.agent-cli/sync-manifest.json` in cwd.
+
+```toml
+[execution.ssh.sync]
+mode = "incremental"              # full | incremental
+conflict_strategy = "prompt"      # prompt | local-wins | remote-wins | abort
+hash_on_conflict = true
+manifest_path = ".agent-cli/sync-manifest.json"
+max_files_per_sync = 5000
+```
+
+**Backward compatible:** without a manifest file on disk, sync falls back to Phase 8 full-tree push/pull.
+
+```powershell
+agent sync plan --cwd . --ssh-host devbox.local
+agent sync push --incremental
+agent sync pull --incremental
+agent sync resolve --path src/foo.py --strategy local-wins
+```
+
+Conflict prompts: `l` local-wins, `r` remote-wins, `s` skip, `a` abort (CLI/TUI). Emits `execution.sync.plan` before transfer.
+
+**Warning:** conflicts reduce risk but pull can still overwrite local uncommitted work.
+
+### Authenticated serve v2
+
+```toml
+[serve]
+host = "127.0.0.1"
+port = 8765
+auth_token = ""                   # auto-generated at startup if empty
+allow_remote_bind = false
+enable_control = true             # cancel only in Phase 9
+cors = false
+```
+
+```powershell
+agent serve --token my-secret --port 8765
+agent serve --no-control          # read-only like Phase 8
+```
+
+API (Bearer token or `?token=`):
+- `GET /threads/{id}/events` — SSE stream of latest run events
+- `GET /metrics` — JSON counters/gauges
+- `POST /threads/{id}/cancel` — cancel active turn (when control enabled)
+
+Refuses `0.0.0.0` unless `--allow-remote-bind`. No HTTP turn **start** in Phase 9.
+
+### Supervisor v3
+
+```toml
+[multi_agent]
+retry_failed_workers = true
+retry_backoff_sec = 5
+retry_max_attempts = 2
+checkpoint_compact_after_workers = 10
+metrics_enabled = true
+```
+
+- Failed worker retry with exponential backoff on `multi-agent resume --retry-failed`
+- Checkpoint compaction archives older snapshots under `{turn}.archive/`
+- `agent metrics show` prints JSON runtime counters
+
 ## Tests
 
 ```powershell
-pytest   # 230+ tests
+pytest   # 270+ tests
 ```
 
-## Phase 9 (planned, not implemented)
+## Phase 10 (planned, not implemented)
 
-Kernel sandbox (AppContainer/bubblewrap/Seatbelt), skill marketplace, full authenticated web UI with turn control, incremental bidirectional sync with conflict UI, autonomous long-running swarms beyond supervisor checkpoint.
+Kernel sandbox backends (AppContainer, bubblewrap, Seatbelt), skill marketplace, HTTP turn start / full web IDE, worker DAG orchestration, OpenTelemetry metrics exporter.

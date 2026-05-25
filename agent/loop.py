@@ -23,6 +23,8 @@ from agent.models import (
     WebSearchItem,
     WorkspaceSyncItem,
 )
+from agent.harness.active_turns import ActiveTurnRegistry
+from agent.metrics import MetricsCollector
 from agent.multi_agent.checkpoint import save_checkpoint_from_registry
 from agent.multi_agent.registry import WorkerRegistry
 from agent.execution.factory import backend_display
@@ -38,6 +40,7 @@ from approval.gate import (
     format_tool_summary,
     needs_approval_prompt,
     prompt_approval,
+    prompt_sync_conflict,
 )
 from agent.sandbox.enforcer import (
     check_apply_patch,
@@ -96,6 +99,9 @@ def run_turn(
     turn = Turn()
     thread.turns.append(turn)
     emitter.turn_started(thread.id, turn.id)
+    MetricsCollector.global_collector().inc("turns_started")
+    MetricsCollector.global_collector().adjust_gauge("active_turns", 1)
+    ActiveTurnRegistry.global_registry().register(thread.id, turn.id, cancel)
 
     user_item = UserMessageItem(text=user_text)
     turn.items.append(user_item)
@@ -155,11 +161,23 @@ def run_turn(
             session=session,
         )
 
+    def _resolve_sync_conflict(rel: str) -> str | None:
+        summary = f"sync conflict: {rel} [l=local-wins / r=remote-wins / s=skip / a=abort]"
+        emitter.approval_requested(thread.id, turn.id, "sync_conflict", summary)
+        approved = prompt_sync_conflict(
+            rel,
+            auto_approve=config.auto_approve,
+            turn_state=turn_state,
+            session=session,
+        )
+        return approved
+
     sync_result, sync_item = maybe_sync_turn_start(
         config,
         session,
         force=force_sync,
         approve_fn=_approve_sync,
+        conflict_fn=_resolve_sync_conflict,
         emitter=emitter,
         thread_id=thread.id,
         turn_id=turn.id,
@@ -240,6 +258,8 @@ def run_turn(
         _finalize_cancelled(thread, turn, store, emitter)
         raise
     finally:
+        ActiveTurnRegistry.global_registry().unregister(thread.id)
+        MetricsCollector.global_collector().adjust_gauge("active_turns", -1)
         try:
             mcp_manager.disconnect_all()
         except Exception:

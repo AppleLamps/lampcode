@@ -32,6 +32,7 @@ class WorkerCheckpoint:
     model: str | None = None
     item_id: str = ""
     error: str | None = None
+    attempts: int = 0
 
 
 @dataclass
@@ -141,6 +142,7 @@ def snapshot_registry(
                     model=rec.model,
                     item_id=rec.item_id,
                     error=rec.error,
+                    attempts=getattr(rec, "attempts", 0),
                 )
             )
     return SupervisorCheckpoint(
@@ -172,7 +174,7 @@ def restore_registry(
     )
     registry._spawn_count_restore = checkpoint.spawn_count
     for wc in checkpoint.workers:
-        if wc.status == "completed" and not retry_failed:
+        if wc.status == "completed":
             record = WorkerRecord(
                 worker_id=wc.worker_id,
                 parent_thread_id=wc.parent_thread_id,
@@ -187,9 +189,29 @@ def restore_registry(
                 item_id=wc.item_id,
                 error=wc.error,
             )
+            record.attempts = wc.attempts
             record._done.set()
             registry._workers[wc.worker_id] = record
         elif wc.status == "failed" and retry_failed:
+            attempts = wc.attempts + 1
+            if attempts > config.multi_agent.retry_max_attempts:
+                record = WorkerRecord(
+                    worker_id=wc.worker_id,
+                    parent_thread_id=wc.parent_thread_id,
+                    task=wc.task,
+                    depth=wc.depth,
+                    status="failed",
+                    worker_thread_id=wc.worker_thread_id,
+                    summary=wc.summary,
+                    execution_backend=wc.execution_backend,
+                    title=wc.title,
+                    model=wc.model,
+                    item_id=wc.item_id,
+                    error=wc.error,
+                )
+                record._done.set()
+                registry._workers[wc.worker_id] = record
+                continue
             record = WorkerRecord(
                 worker_id=wc.worker_id,
                 parent_thread_id=wc.parent_thread_id,
@@ -204,6 +226,7 @@ def restore_registry(
                 item_id=wc.item_id,
                 error=wc.error,
             )
+            record.attempts = attempts
             registry._workers[wc.worker_id] = record
             registry._pending_queue.append(wc.worker_id)
         elif wc.status in ("queued", "running", "timed_out"):
@@ -250,3 +273,34 @@ def save_checkpoint_from_registry(
         user_text=user_text,
     )
     return CheckpointStore(base).save(cp)
+
+
+def compact_checkpoint_history(
+    thread_id: str,
+    turn_id: str,
+    base: Path,
+    *,
+    keep_archives: int = 3,
+) -> None:
+    """Archive older checkpoint snapshots, keeping latest + rolling archives."""
+    path = checkpoint_path(thread_id, turn_id, base)
+    if not path.is_file():
+        return
+    archive_dir = base / thread_id / f"{turn_id}.archive"
+    archive_dir.mkdir(parents=True, exist_ok=True)
+    ts = int(path.stat().st_mtime)
+    archive_path = archive_dir / f"{ts}.json"
+    if not archive_path.exists():
+        archive_path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+    archives = sorted(archive_dir.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True)
+    for old in archives[keep_archives:]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def compute_retry_backoff(base_sec: int, attempt: int, cap: int = 60) -> int:
+    delay = base_sec * (2 ** max(0, attempt - 1))
+    return min(delay, cap)
+

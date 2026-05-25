@@ -127,6 +127,18 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
                 ),
             )
         )
+    elif etype == "execution.sync.plan":
+        counts = data.get("counts", {})
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=(
+                    f"[sync plan] push={counts.get('push', 0)} "
+                    f"pull={counts.get('pull', 0)} "
+                    f"conflicts={len(data.get('conflicts', []))}"
+                ),
+            )
+        )
     elif etype == "execution.sync.failed":
         state.transcript.append(
             TranscriptLine(

@@ -4,7 +4,11 @@ from agent.config import Config
 from agent.events import EventEmitter
 from agent.loop import _run_loop, run_turn
 from agent.models import Thread, Turn
-from agent.multi_agent.checkpoint import CheckpointStore, restore_registry
+from agent.multi_agent.checkpoint import (
+    CheckpointStore,
+    compute_retry_backoff,
+    restore_registry,
+)
 from agent.mcp.manager import McpManager
 from agent.settings import load_mcp_config, load_skills_config
 from agent.context import build_thread_messages, load_project_rules
@@ -42,6 +46,15 @@ def resume_supervisor_turn(
         parent_thread=thread,
         retry_failed=retry_failed,
     )
+    if retry_failed and config.multi_agent.retry_failed_workers:
+        ma = config.multi_agent
+        import time
+
+        for rec in registry._workers.values():
+            if rec.status == "queued" and rec.attempts > 0:
+                delay = compute_retry_backoff(ma.retry_backoff_sec, rec.attempts)
+                if delay > 0:
+                    time.sleep(delay)
     if registry._pending_queue:
         registry._pump_queue(thread, checkpoint.turn_id)
 

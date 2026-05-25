@@ -42,6 +42,44 @@ def build_scp_pull_argv(config: Config, local_cwd: Path) -> list[str]:
     return argv
 
 
+def build_scp_file_push_argv(
+    config: Config,
+    local_file: Path,
+    remote_rel: str,
+) -> list[str]:
+    ssh = config.execution.ssh
+    argv = ["scp"]
+    if ssh.port != 22:
+        argv.extend(["-P", str(ssh.port)])
+    if ssh.identity_file:
+        argv.extend(["-i", expand_ssh_path(ssh.identity_file)])
+    if ssh.strict_host_key_checking and ssh.known_hosts:
+        argv.extend(["-o", f"UserKnownHostsFile={expand_ssh_path(ssh.known_hosts)}"])
+    remote_base = build_scp_remote_target(config)
+    argv.append(str(local_file))
+    argv.append(f"{remote_base}/{remote_rel}")
+    return argv
+
+
+def build_scp_file_pull_argv(
+    config: Config,
+    local_file: Path,
+    remote_rel: str,
+) -> list[str]:
+    ssh = config.execution.ssh
+    argv = ["scp"]
+    if ssh.port != 22:
+        argv.extend(["-P", str(ssh.port)])
+    if ssh.identity_file:
+        argv.extend(["-i", expand_ssh_path(ssh.identity_file)])
+    if ssh.strict_host_key_checking and ssh.known_hosts:
+        argv.extend(["-o", f"UserKnownHostsFile={expand_ssh_path(ssh.known_hosts)}"])
+    remote_base = build_scp_remote_target(config)
+    argv.append(f"{remote_base}/{remote_rel}")
+    argv.append(str(local_file))
+    return argv
+
+
 class ScpTransport:
     name = "scp"
 
@@ -139,3 +177,91 @@ class ScpTransport:
                 error=str(exc),
                 argv=argv,
             )
+
+    def push_files(
+        self,
+        local_cwd: Path,
+        files: list[str],
+        *,
+        runner=None,
+    ) -> SyncResult:
+        run = runner or self._runner
+        start = time.monotonic()
+        transferred = 0
+        argv_all: list[str] = []
+        for rel in files:
+            local_file = local_cwd / rel
+            if not local_file.is_file():
+                continue
+            argv = build_scp_file_push_argv(self._config, local_file, rel.replace("\\", "/"))
+            argv_all.extend(argv)
+            proc = run(argv, timeout=600)
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout or f"scp push failed for {rel}").strip()
+                duration_ms = int((time.monotonic() - start) * 1000)
+                return SyncResult(
+                    ok=False,
+                    direction="push",
+                    transport="scp",
+                    files=len(files),
+                    duration_ms=duration_ms,
+                    summary=err,
+                    error=err,
+                    argv=argv_all,
+                )
+            transferred += local_file.stat().st_size
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return SyncResult(
+            ok=True,
+            direction="push",
+            transport="scp",
+            files=len(files),
+            bytes_transferred=transferred,
+            duration_ms=duration_ms,
+            summary=f"scp incremental push {len(files)} files",
+            argv=argv_all,
+        )
+
+    def pull_files(
+        self,
+        local_cwd: Path,
+        files: list[str],
+        *,
+        runner=None,
+    ) -> SyncResult:
+        run = runner or self._runner
+        start = time.monotonic()
+        transferred = 0
+        argv_all: list[str] = []
+        for rel in files:
+            local_file = local_cwd / rel
+            local_file.parent.mkdir(parents=True, exist_ok=True)
+            argv = build_scp_file_pull_argv(self._config, local_file, rel.replace("\\", "/"))
+            argv_all.extend(argv)
+            proc = run(argv, timeout=600)
+            if proc.returncode != 0:
+                err = (proc.stderr or proc.stdout or f"scp pull failed for {rel}").strip()
+                duration_ms = int((time.monotonic() - start) * 1000)
+                return SyncResult(
+                    ok=False,
+                    direction="pull",
+                    transport="scp",
+                    files=len(files),
+                    duration_ms=duration_ms,
+                    summary=err,
+                    error=err,
+                    argv=argv_all,
+                )
+            if local_file.is_file():
+                transferred += local_file.stat().st_size
+        duration_ms = int((time.monotonic() - start) * 1000)
+        return SyncResult(
+            ok=True,
+            direction="pull",
+            transport="scp",
+            files=len(files),
+            bytes_transferred=transferred,
+            duration_ms=duration_ms,
+            summary=f"scp incremental pull {len(files)} files",
+            argv=argv_all,
+        )

@@ -118,6 +118,10 @@ class EventEmitter:
         *,
         estimated_tokens: int | None = None,
     ) -> None:
+        from agent.metrics import MetricsCollector
+
+        if status == "completed":
+            MetricsCollector.global_collector().inc("turns_completed")
         data: dict[str, Any] = {"status": status}
         if estimated_tokens is not None:
             data["estimated_tokens"] = estimated_tokens
@@ -424,6 +428,23 @@ class EventEmitter:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 data={"reason": reason},
+            )
+        )
+
+    def execution_sync_plan(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        counts: dict,
+        conflicts: list[str] | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.plan",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"counts": counts, "conflicts": conflicts or []},
             )
         )
 

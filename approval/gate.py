@@ -186,6 +186,9 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
     if tool_name == "sync_push":
         return arguments.get("summary", "sync push to remote workspace")
 
+    if tool_name == "sync_conflict":
+        return arguments.get("summary", f"sync conflict: {arguments.get('path', '')}")
+
     if tool_name == "spawn_worker":
         return f"spawn_worker: {arguments.get('task', '')[:80]}"
 
@@ -198,6 +201,43 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
 
     parts = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     return f"{tool_name}: {parts}"
+
+
+def prompt_sync_conflict(
+    path: str,
+    *,
+    auto_approve: bool = False,
+    turn_state: TurnApprovalState | None = None,
+    session: HarnessSession | None = None,
+) -> str | None:
+    """Return strategy: local-wins, remote-wins, skip, abort, or None if denied."""
+    if auto_approve or (session and session.session_auto_approve):
+        return "local-wins"
+    if turn_state and turn_state.approve_all:
+        return "local-wins"
+
+    summary = f"sync conflict: {path}"
+    if _approval_input:
+        response = _approval_input(f"{summary} [l/r/s/a]")
+    else:
+        console.print(f"[yellow][sync conflict][/yellow] {path}")
+        console.print("[dim]Resolve? [l=local-wins / r=remote-wins / s=skip / a=abort][/dim]", end=" ")
+        try:
+            response = input().strip()
+        except (EOFError, KeyboardInterrupt):
+            console.print()
+            return None
+
+    key = response.strip().lower()
+    if key in ("l", "local", "local-wins"):
+        return "local-wins"
+    if key in ("r", "remote", "remote-wins"):
+        return "remote-wins"
+    if key in ("s", "skip"):
+        return "skip"
+    if key in ("a", "abort"):
+        return "abort"
+    return None
 
 
 def _extract_patch_files(patch: str) -> list[str]:

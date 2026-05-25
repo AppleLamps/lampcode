@@ -113,7 +113,12 @@ class SshJumpSettings:
 
 @dataclass
 class SshSyncSettings:
+    mode: str = "incremental"
     transport: str = "auto"
+    conflict_strategy: str = "prompt"
+    hash_on_conflict: bool = True
+    manifest_path: str = ".agent-cli/sync-manifest.json"
+    max_files_per_sync: int = 5000
     exclude: list[str] = field(
         default_factory=lambda: [
             ".git/objects",
@@ -184,6 +189,21 @@ class MultiAgentSettings:
     allow_worker_spawn: bool = True
     checkpoint_enabled: bool = True
     checkpoint_dir: str = "~/.agent-cli/checkpoints"
+    retry_failed_workers: bool = True
+    retry_backoff_sec: int = 5
+    retry_max_attempts: int = 2
+    checkpoint_compact_after_workers: int = 10
+    metrics_enabled: bool = True
+
+
+@dataclass
+class ServeSettings:
+    host: str = "127.0.0.1"
+    port: int = 8765
+    auth_token: str = ""
+    allow_remote_bind: bool = False
+    enable_control: bool = True
+    cors: bool = False
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -318,7 +338,12 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
             pull_on_turn_end=bool(ssh_raw.get("pull_on_turn_end", True)),
             delete_remote_extra=bool(ssh_raw.get("delete_remote_extra", False)),
             sync=SshSyncSettings(
+                mode=str(sync_raw.get("mode", "incremental")),
                 transport=str(sync_raw.get("transport", "auto")),
+                conflict_strategy=str(sync_raw.get("conflict_strategy", "prompt")),
+                hash_on_conflict=bool(sync_raw.get("hash_on_conflict", True)),
+                manifest_path=str(sync_raw.get("manifest_path", ".agent-cli/sync-manifest.json")),
+                max_files_per_sync=int(sync_raw.get("max_files_per_sync", 5000)),
                 exclude=[str(x) for x in exclude],
                 include_dotfiles=bool(sync_raw.get("include_dotfiles", False)),
                 max_upload_mb=int(sync_raw.get("max_upload_mb", 200)),
@@ -350,6 +375,26 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         allow_worker_spawn=bool(ma.get("allow_worker_spawn", True)),
         checkpoint_enabled=bool(ma.get("checkpoint_enabled", True)),
         checkpoint_dir=str(ma.get("checkpoint_dir", "~/.agent-cli/checkpoints")),
+        retry_failed_workers=bool(ma.get("retry_failed_workers", True)),
+        retry_backoff_sec=int(ma.get("retry_backoff_sec", 5)),
+        retry_max_attempts=int(ma.get("retry_max_attempts", 2)),
+        checkpoint_compact_after_workers=int(ma.get("checkpoint_compact_after_workers", 10)),
+        metrics_enabled=bool(ma.get("metrics_enabled", True)),
+    )
+
+
+def load_serve_settings(path: Path | None = None) -> ServeSettings:
+    data = _load_toml(path or default_config_path())
+    serve = data.get("serve", {})
+    if not isinstance(serve, dict):
+        serve = {}
+    return ServeSettings(
+        host=str(serve.get("host", "127.0.0.1")),
+        port=int(serve.get("port", 8765)),
+        auth_token=str(serve.get("auth_token", "")),
+        allow_remote_bind=bool(serve.get("allow_remote_bind", False)),
+        enable_control=bool(serve.get("enable_control", True)),
+        cors=bool(serve.get("cors", False)),
     )
 
 

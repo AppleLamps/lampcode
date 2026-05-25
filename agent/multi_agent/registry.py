@@ -6,6 +6,7 @@ import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Callable
 
 from agent.config import Config
@@ -33,6 +34,7 @@ class WorkerRecord:
     model: str | None = None
     item_id: str = ""
     error: str | None = None
+    attempts: int = 0
     _done: threading.Event = field(default_factory=threading.Event)
 
     def to_dict(self) -> dict:
@@ -95,6 +97,15 @@ class WorkerRegistry:
             spawn_count=self.spawn_count,
             messages=messages,
         )
+        if path and self._config.multi_agent.checkpoint_compact_after_workers > 0:
+            if self.spawn_count % self._config.multi_agent.checkpoint_compact_after_workers == 0:
+                from agent.multi_agent.checkpoint import compact_checkpoint_history
+
+                compact_checkpoint_history(
+                    parent_thread.id,
+                    turn_id,
+                    Path(self._config.multi_agent.checkpoint_dir).expanduser(),
+                )
         if path and self._emitter:
             self._emitter.collab_checkpoint_saved(parent_thread.id, turn_id, path=str(path))
 

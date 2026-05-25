@@ -133,6 +133,7 @@ class CollabWorkerItem(BaseModel):
     depth: int = 0
     status: Literal["queued", "running", "completed", "failed", "timed_out"] = "queued"
     summary: str | None = None
+    attempts: int = 0
     title: str | None = None
     model: str | None = None
     execution_backend: str | None = None
@@ -150,6 +151,7 @@ class WorkspaceSyncItem(BaseModel):
     files: int | None = None
     bytes_transferred: int | None = None
     duration_ms: int | None = None
+    plan: dict | None = None
 
 
 Item = Annotated[

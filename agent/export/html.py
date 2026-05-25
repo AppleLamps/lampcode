@@ -3,6 +3,7 @@ from __future__ import annotations
 import html
 from typing import TYPE_CHECKING
 
+from agent.harness.active_turns import ActiveTurnRegistry
 from agent.models import Thread
 
 if TYPE_CHECKING:
@@ -128,19 +129,22 @@ code {{ background: #f3f4f6; padding: 0.1rem 0.3rem; }}
 </html>"""
 
 
-def render_index_html(threads: list[Thread]) -> str:
+def render_index_html(threads: list[Thread], *, active_turns: int = 0) -> str:
     rows = []
     for t in threads:
         label = html.escape(t.display_label())
+        badge = ' <span style="color:#16a34a">● active</span>' if ActiveTurnRegistry.global_registry().is_active(t.id) else ""
         rows.append(
-            f'<li><a href="/threads/{html.escape(t.id)}">{label}</a> '
+            f'<li><a href="/threads/{html.escape(t.id)}">{label}</a>{badge} '
             f'<small>{html.escape(t.cwd)}</small></li>'
         )
+    active_note = f"<p>Active turns: {active_turns}</p>" if active_turns else ""
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"/><title>agent-cli threads</title></head>
 <body>
 <h1>Threads</h1>
+{active_note}
 <ul>{''.join(rows) if rows else '<li>No threads</li>'}</ul>
 </body>
 </html>"""

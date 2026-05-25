@@ -24,13 +24,20 @@ from agent.export.markdown import export_run_markdown, export_thread_markdown
 from agent.execution.docker import check_docker_available, check_docker_hello_world
 from agent.execution.factory import backend_display, run_execution_test
 from agent.execution.ssh import check_ssh_available, validate_ssh_config
-from agent.execution.sync import run_sync_pull, run_sync_push, sync_status
+from agent.execution.sync.service import (
+    resolve_sync_path,
+    run_sync_plan,
+    run_sync_pull,
+    run_sync_push,
+    sync_status,
+)
 from agent.execution.sync.planner import detect_sync_tools, estimate_sync_size
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_turn
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
-from agent.settings import load_mcp_config, load_skills_config
+from agent.metrics import MetricsCollector
+from agent.settings import load_serve_settings
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
@@ -47,6 +54,7 @@ runs_app = typer.Typer(help="Run recording and replay")
 execution_app = typer.Typer(help="Execution backend commands")
 sync_app = typer.Typer(help="SSH workspace sync commands")
 multi_agent_app = typer.Typer(help="Multi-agent supervisor commands")
+metrics_app = typer.Typer(help="Runtime metrics")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -56,6 +64,7 @@ app.add_typer(runs_app, name="runs")
 app.add_typer(execution_app, name="execution")
 app.add_typer(sync_app, name="sync")
 app.add_typer(multi_agent_app, name="multi-agent")
+app.add_typer(metrics_app, name="metrics")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -157,6 +166,12 @@ class OutputHandler:
             )
         elif event.type == "execution.sync.failed" and not self.quiet_tools:
             console.print(f"[yellow][sync failed][/yellow] {event.data.get('reason')}")
+        elif event.type == "execution.sync.plan" and not self.quiet_tools:
+            counts = event.data.get("counts", {})
+            console.print(
+                f"[dim][sync plan][/dim] push={counts.get('push', 0)} "
+                f"pull={counts.get('pull', 0)} conflicts={counts.get('conflict', 0)}"
+            )
         elif event.type == "execution.ssh.pool.acquire" and not self.quiet_tools:
             console.print(f"[dim][ssh pool][/dim] acquire {event.data.get('host')}")
         elif event.type == "collab.checkpoint.saved" and not self.quiet_tools:
@@ -537,7 +552,24 @@ def doctor(
         table.add_row("sync scp", tools.get("scp", "n/a"))
         table.add_row(
             "ssh sync",
-            f"enabled={cfg.execution.ssh.sync_enabled}, mode={cfg.execution.ssh.sync_mode}",
+            f"enabled={cfg.execution.ssh.sync_enabled}, mode={cfg.execution.ssh.sync_mode}, "
+            f"incremental={cfg.execution.ssh.sync.mode}",
+        )
+        sync_state_dir = Path.home() / ".agent-cli" / "sync-state"
+        try:
+            sync_state_dir.mkdir(parents=True, exist_ok=True)
+            sync_state_writable = "yes"
+        except OSError:
+            sync_state_writable = "no"
+        table.add_row("sync-state dir", f"writable={sync_state_writable}")
+        serve_cfg = load_serve_settings(cfg.config_path)
+        table.add_row(
+            "serve",
+            f"control={serve_cfg.enable_control}, token={'set' if serve_cfg.auth_token else 'auto'}",
+        )
+        table.add_row(
+            "metrics",
+            f"enabled={cfg.multi_agent.metrics_enabled}",
         )
         if cfg.cwd.is_dir():
             b, n = estimate_sync_size(
@@ -838,18 +870,53 @@ def _resolve_ssh_config(
     return Config.resolve(cwd=cwd, ssh_host=ssh_host, ssh_user=ssh_user, auto_approve=True)
 
 
+@sync_app.command("plan")
+def sync_plan_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+) -> None:
+    """Dry-run sync plan: push/pull/conflict classification."""
+    import json
+
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.backend = "ssh"
+    config.execution.ssh.sync_enabled = True
+    stdout_console.print(json.dumps(run_sync_plan(config, thread_id=thread_id), indent=2))
+
+
+@sync_app.command("resolve")
+def sync_resolve_cmd(
+    path: str = typer.Option(..., "--path"),
+    strategy: str = typer.Option("local-wins", "--strategy"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+) -> None:
+    """Resolve a sync conflict for a single path."""
+    import json
+
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.backend = "ssh"
+    config.execution.ssh.sync_enabled = True
+    stdout_console.print(json.dumps(resolve_sync_path(config, path, strategy, thread_id=thread_id), indent=2))
+
+
 @sync_app.command("push")
 def sync_push_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
     ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
     ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
     force: bool = typer.Option(False, "--force-sync"),
+    incremental: bool = typer.Option(True, "--incremental/--full"),
 ) -> None:
     """Push local workspace to remote SSH host."""
     config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
     config.execution.backend = "ssh"
     config.execution.ssh.sync_enabled = True
-    result, item = run_sync_push(config, force=force)
+    result, item = run_sync_push(config, force=force, incremental=incremental)
     if not result.ok:
         console.print(f"[red]Sync push failed:[/red] {result.error or result.summary}")
         raise typer.Exit(1)
@@ -861,12 +928,13 @@ def sync_pull_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
     ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
     ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    incremental: bool = typer.Option(True, "--incremental/--full"),
 ) -> None:
     """Pull remote workspace to local cwd."""
     config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
     config.execution.backend = "ssh"
     config.execution.ssh.sync_enabled = True
-    result, item = run_sync_pull(config)
+    result, item = run_sync_pull(config, incremental=incremental)
     if not result.ok:
         console.print(f"[red]Sync pull failed:[/red] {result.error or result.summary}")
         raise typer.Exit(1)
@@ -1047,16 +1115,41 @@ def runs_export(
 def serve(
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
     port: int = typer.Option(8765, "--port", help="Bind port"),
+    token: Optional[str] = typer.Option(None, "--token", help="Auth bearer token"),
+    no_control: bool = typer.Option(False, "--no-control", help="Disable cancel API"),
+    allow_remote_bind: bool = typer.Option(
+        False, "--allow-remote-bind", help="Allow binding to 0.0.0.0"
+    ),
 ) -> None:
-    """Read-only HTTP viewer for threads and run logs."""
+    """HTTP dashboard for threads, runs, SSE events, and turn cancel."""
+    from agent.serve.server import serve as run_serve
+
+    cfg = load_serve_settings()
+    cfg.host = host
+    cfg.port = port
+    cfg.enable_control = not no_control
+    cfg.allow_remote_bind = allow_remote_bind
+    if token:
+        cfg.auth_token = token
+    if host == "0.0.0.0" and not allow_remote_bind:
+        console.print(
+            "[red]Error:[/red] Refusing 0.0.0.0 without --allow-remote-bind"
+        )
+        raise typer.Exit(1)
     if host == "0.0.0.0":
         console.print(
-            "[yellow]Warning:[/yellow] Binding to 0.0.0.0 exposes read-only data on all interfaces."
+            "[yellow]Warning:[/yellow] Binding to 0.0.0.0 exposes the dashboard on all interfaces."
         )
     try:
-        serve(host=host, port=port)
+        run_serve(host=host, port=port, settings=cfg, auth_token=token or cfg.auth_token or None)
     except KeyboardInterrupt:
         raise typer.Exit(0) from None
+
+
+@metrics_app.command("show")
+def metrics_show() -> None:
+    """Print JSON runtime metrics counters."""
+    stdout_console.print(MetricsCollector.global_collector().to_json())
 
 
 def _runs_dir_writable() -> str:
