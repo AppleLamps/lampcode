@@ -29,6 +29,15 @@ class UserMessageItem(BaseModel):
     text: str
 
 
+class UserInputItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["userInput"] = "userInput"
+    question: str
+    answer: str
+    selected_option: str | None = None
+    options: list[str] = Field(default_factory=list)
+
+
 class AgentMessageItem(BaseModel):
     id: str = Field(default_factory=new_id)
     type: Literal["agentMessage"] = "agentMessage"
@@ -162,6 +171,7 @@ class WorkspaceSyncItem(BaseModel):
 Item = Annotated[
     Union[
         UserMessageItem,
+        UserInputItem,
         AgentMessageItem,
         CommandExecutionItem,
         FileChangeItem,
@@ -219,6 +229,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
     item_type = data.get("type")
     mapping = {
         "userMessage": UserMessageItem,
+        "userInput": UserInputItem,
         "agentMessage": AgentMessageItem,
         "commandExecution": CommandExecutionItem,
         "fileChange": FileChangeItem,

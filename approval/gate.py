@@ -266,6 +266,16 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
     if tool_name == "list_workers":
         return "list_workers"
 
+    if tool_name == "request_user_input":
+        opts = arguments.get("options") or []
+        return f"request_user_input: {arguments.get('question', '')[:80]} ({len(opts)} options)"
+
+    if tool_name == "request_permissions":
+        return (
+            f"request_permissions [{arguments.get('scope')}]: "
+            f"{arguments.get('reason', '')[:80]}"
+        )
+
     parts = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     return f"{tool_name}: {parts}"
 

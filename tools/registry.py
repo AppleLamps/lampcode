@@ -41,6 +41,7 @@ def get_tool_schemas(
     config: Config | None = None,
     *,
     allow_spawn: bool = False,
+    allowed_tools: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
     if config:
@@ -56,6 +57,9 @@ def get_tool_schemas(
         schemas.extend(MULTI_AGENT_TOOL_SCHEMAS)
     if mcp_manager:
         schemas.extend(mcp_manager.get_tool_schemas())
+    if allowed_tools is not None:
+        allowed = set(allowed_tools)
+        schemas = [s for s in schemas if s.get("function", {}).get("name") in allowed]
     return schemas
 
 
@@ -70,6 +74,8 @@ def tool_requires_approval(
         return True
     if name == "git_commit":
         return True
+    if name in ("request_user_input", "request_permissions"):
+        return True
     if mcp_manager and mcp_manager.is_mcp_tool(name):
         return mcp_manager.requires_approval(name)
     spec = TOOL_REGISTRY.get(name)
@@ -81,6 +87,8 @@ def dispatch_tool(
     arguments: dict[str, Any],
     config: Config,
     mcp_manager: McpManager | None = None,
+    *,
+    thread_id: str | None = None,
 ) -> DispatchResult:
     if mcp_manager and mcp_manager.is_mcp_tool(name):
         output, exit_code, error = mcp_manager.call_tool(
@@ -127,6 +135,8 @@ def dispatch_tool(
         return DispatchResult(text=output, command_item=item)
 
     if name not in TOOL_REGISTRY:
+        if name in ("request_user_input", "request_permissions"):
+            return DispatchResult(text=f"{name} is handled by the harness loop")
         return DispatchResult(text=f"Unknown tool: {name}")
 
     if name == "run_command":
@@ -144,6 +154,10 @@ def dispatch_tool(
             timeout=config.command_timeout,
             max_output=config.max_tool_output,
             config=config,
+            thread_id=thread_id,
+            session_id=arguments.get("session_id"),
+            stdin=arguments.get("stdin"),
+            new_session=bool(arguments.get("new_session")),
         )
         item.output = output
         item.exit_code = exit_code
@@ -263,6 +277,18 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                             "type": "string",
                             "description": "Optional subdirectory relative to project root.",
                         },
+                        "session_id": {
+                            "type": "string",
+                            "description": "Persistent shell session id (when [shell] enabled).",
+                        },
+                        "stdin": {
+                            "type": "string",
+                            "description": "Optional stdin for persistent shell session.",
+                        },
+                        "new_session": {
+                            "type": "boolean",
+                            "description": "Start a new persistent shell session.",
+                        },
                     },
                     "required": ["cmd"],
                 },
@@ -354,6 +380,62 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                         "glob": {"type": "string"},
                     },
                     "required": ["pattern"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "request_user_input": ToolSpec(
+        name="request_user_input",
+        requires_approval=True,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "request_user_input",
+                "description": "Ask the user a structured question mid-turn.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "question": {"type": "string"},
+                        "options": {
+                            "type": "array",
+                            "items": {"type": "string"},
+                            "description": "Optional multiple-choice options.",
+                        },
+                        "allow_free_text": {
+                            "type": "boolean",
+                            "description": "Allow free-text answer when options provided.",
+                        },
+                    },
+                    "required": ["question"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "request_permissions": ToolSpec(
+        name="request_permissions",
+        requires_approval=True,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "request_permissions",
+                "description": "Request temporary sandbox permission escalation.",
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "scope": {
+                            "type": "string",
+                            "enum": ["network", "write_outside_cwd", "full_access"],
+                        },
+                        "reason": {"type": "string"},
+                        "duration": {
+                            "type": "string",
+                            "enum": ["turn", "session"],
+                            "description": "Escalation duration scope.",
+                        },
+                    },
+                    "required": ["scope", "reason"],
                 },
             },
         },

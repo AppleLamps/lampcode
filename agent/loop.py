@@ -8,6 +8,7 @@ from agent.compaction import compact_thread_if_needed
 from agent.config import Config
 from agent.context import build_thread_messages, estimate_tokens, load_project_rules
 from agent.events import EventEmitter
+from agent.profiles import project_config_path
 from agent.mcp.manager import McpManager
 from agent.models import (
     AgentMessageItem,
@@ -19,6 +20,7 @@ from agent.models import (
     SkillActivationItem,
     Thread,
     Turn,
+    UserInputItem,
     UserMessageItem,
     WebSearchItem,
     WorkspaceSyncItem,
@@ -91,6 +93,13 @@ def run_turn(
     resume_spawn_count: int = 0,
     budget_profile: str | None = None,
     resume_checkpoint: TurnCheckpoint | None = None,
+    allowed_tools: list[str] | None = None,
+    system_prompt_append: str = "",
+    read_only_review: bool = False,
+    plan_mode: bool = False,
+    headless_json: bool = False,
+    output_schema: dict | None = None,
+    thread_title: str | None = None,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -169,9 +178,32 @@ def run_turn(
     except Exception:
         pass
 
+    if thread_title:
+        thread.title = thread_title
+        store.save_thread(thread)
+
+    from agent.hooks.runner import HooksRunner
+    from agent.memories import extract_memory_from_message, inject_memories_prompt
+
+    hooks_runner = HooksRunner.from_cwd(
+        config.cwd,
+        config_path=config.config_path,
+        project_path=project_config_path(config.cwd) if config.cwd else None,
+        emitter=emitter,
+    )
+    hooks_runner.thread_id = thread.id
+
+    effective_allowed = allowed_tools
+    if plan_mode:
+        effective_allowed = list(config.plan_mode.allowed_tools)
+    memories_text = inject_memories_prompt(user_text, config.memories) if config.memories.enabled else ""
+
     client = OpenRouterClient(config)
     tools = get_tool_schemas(
-        mcp_manager, config, allow_spawn=config.multi_agent.enabled
+        mcp_manager,
+        config,
+        allow_spawn=config.multi_agent.enabled,
+        allowed_tools=effective_allowed,
     )
     budget_tracker = None
     if config.multi_agent.budgets.enabled or (budget_profile and budget_profile.lower() != "off"):
@@ -190,6 +222,8 @@ def run_turn(
         project_rules=rules_text,
         execution_backend=config.execution.backend,
         sync_enabled=config.execution.ssh.sync_enabled,
+        memories_text=memories_text,
+        system_prompt_append=system_prompt_append,
     )
 
     def _approve_sync() -> bool:
@@ -278,6 +312,13 @@ def run_turn(
                 resume_spawn_count=resume_spawn_count,
                 user_text=user_text,
                 budget_tracker=budget_tracker,
+                allowed_tools=effective_allowed,
+                read_only_review=read_only_review,
+                hooks_runner=hooks_runner,
+                headless_json=headless_json,
+                output_schema=output_schema,
+                memories_text=memories_text,
+                system_prompt_append=system_prompt_append,
             )
         pull_result, pull_item = maybe_sync_turn_end(
             config,
@@ -290,6 +331,22 @@ def run_turn(
             completed_turn.items.append(pull_item)
             store.append_item(thread, turn.id, pull_item)
         clear_turn_checkpoint(config.turn_checkpoint, thread.id, turn.id)
+        if config.memories.enabled:
+            for item in reversed(completed_turn.items):
+                if item.type == "agentMessage":
+                    extract_memory_from_message(item.text, thread_id=thread.id)
+                    break
+        session.clear_turn_escalations()
+        if config.shell.enabled:
+            from agent.execution.shell_session import ShellSessionManager
+
+            ShellSessionManager.global_manager().close_thread(thread.id)
+        hooks_runner.run(
+            "on_turn_completed",
+            {"status": completed_turn.status, "turn_id": completed_turn.id},
+            thread_id=thread.id,
+            turn_id=completed_turn.id,
+        )
         return completed_turn
     except CancelledError:
         save_turn_checkpoint(
@@ -322,6 +379,10 @@ def run_turn(
             mcp_manager.disconnect_all()
         except Exception:
             pass
+        try:
+            session.clear_turn_escalations()
+        except Exception:
+            pass
 
 
 def _run_loop(
@@ -350,6 +411,13 @@ def _run_loop(
     resume_spawn_count: int = 0,
     user_text: str = "",
     budget_tracker: "SwarmBudgetTracker | None" = None,
+    allowed_tools: list[str] | None = None,
+    read_only_review: bool = False,
+    hooks_runner: "HooksRunner | None" = None,
+    headless_json: bool = False,
+    output_schema: dict | None = None,
+    memories_text: str = "",
+    system_prompt_append: str = "",
 ) -> Turn:
     spawn_count = resume_spawn_count
     if resume_messages:
@@ -385,6 +453,8 @@ def _run_loop(
                 project_rules=project_rules,
                 execution_backend=config.execution.backend,
                 sync_enabled=config.execution.ssh.sync_enabled,
+                memories_text=memories_text,
+                system_prompt_append=system_prompt_append,
             )
 
         def delta_handler(text: str) -> None:
@@ -468,9 +538,33 @@ def _run_loop(
             arguments = parse_tool_arguments(raw_args)
             source = "mcp" if mcp_manager.is_mcp_tool(tool_name) else "builtin"
 
+            if allowed_tools is not None and tool_name not in allowed_tools:
+                emitter.tool_pending(
+                    thread.id, turn.id, tool_name, arguments, source=source
+                )
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "blocked", source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": f"Tool {tool_name} is not available in this mode.",
+                    }
+                )
+                continue
+
             emitter.tool_pending(
                 thread.id, turn.id, tool_name, arguments, source=source
             )
+            if hooks_runner:
+                hooks_runner.run(
+                    "on_tool_pending",
+                    {"tool_name": tool_name, "arguments": arguments},
+                    tool_name=tool_name,
+                    thread_id=thread.id,
+                    turn_id=turn.id,
+                )
 
             tracking_items = _create_tracking_items(
                 tool_name, arguments, config, tool_call_id, raw_args, mcp_manager, thread.id
@@ -481,7 +575,7 @@ def _run_loop(
                 emitter.item_started(thread.id, turn.id, item.type, item.id)
 
             block_reason = _precheck_tool(
-                tool_name, arguments, config, mcp_manager
+                tool_name, arguments, config, mcp_manager, session=session, read_only_review=read_only_review
             )
             if block_reason:
                 _handle_blocked_tool(
@@ -719,6 +813,49 @@ def _run_loop(
                 )
                 continue
 
+            if tool_name == "request_user_input":
+                result_text = _handle_request_user_input(
+                    thread,
+                    turn,
+                    store,
+                    emitter,
+                    arguments,
+                    config,
+                    headless_json=headless_json,
+                    session=session,
+                    turn_state=turn_state,
+                )
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "completed" if "error" not in result_text else "failed", source=source
+                )
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call_id, "content": result_text}
+                )
+                continue
+
+            if tool_name == "request_permissions":
+                result_text = _handle_request_permissions(
+                    thread,
+                    turn,
+                    emitter,
+                    arguments,
+                    config,
+                    session=session,
+                    turn_state=turn_state,
+                    read_only_review=read_only_review,
+                )
+                emitter.tool_completed(
+                    thread.id,
+                    turn.id,
+                    tool_name,
+                    "completed" if "denied" not in result_text.lower() else "denied",
+                    source=source,
+                )
+                messages.append(
+                    {"role": "tool", "tool_call_id": tool_call_id, "content": result_text}
+                )
+                continue
+
             if tool_name == "run_command" and not backend_announced:
                 backend_announced = True
                 img = (
@@ -745,7 +882,7 @@ def _run_loop(
 
             with trace_span("tool.execute", tool=tool_name, backend=config.execution.backend):
                 dispatch_result = dispatch_tool(
-                    tool_name, arguments, config, mcp_manager=mcp_manager
+                    tool_name, arguments, config, mcp_manager=mcp_manager, thread_id=thread.id
                 )
             _emit_execution_events(
                 dispatch_result, thread.id, turn.id, config, emitter
@@ -979,13 +1116,20 @@ def _precheck_tool(
     arguments: dict,
     config: Config,
     mcp_manager: McpManager,
+    *,
+    session: HarnessSession | None = None,
+    read_only_review: bool = False,
 ) -> str | None:
+    if read_only_review and tool_name in ("apply_patch", "write_file", "git_commit"):
+        return f"{tool_name} blocked in read-only review mode (pass --fix to allow writes)"
+    if tool_name == "request_permissions" and read_only_review:
+        return "permission escalation denied in read-only review mode"
     if tool_name == "run_command":
         cmd = arguments.get("cmd", "")
         policy_reason = exec_policy_block_reason(cmd, config)
         if policy_reason:
             return policy_reason
-        decision = check_run_command(cmd, config.cwd, config.sandbox_mode)
+        decision = check_run_command(cmd, config.cwd, config.sandbox_mode, session=session)
         if decision.blocked:
             return decision.reason
     elif tool_name == "write_file":
@@ -1200,3 +1344,107 @@ def _budget_kill_turn(
     store.save_thread(thread)
     emitter.turn_completed(thread.id, turn.id, turn.status)
     return turn
+
+
+def _handle_request_user_input(
+    thread: Thread,
+    turn: Turn,
+    store: ThreadStore,
+    emitter: EventEmitter,
+    arguments: dict,
+    config: Config,
+    *,
+    headless_json: bool,
+    session: HarnessSession,
+    turn_state: TurnApprovalState,
+) -> str:
+    from agent.user_input import resolve_user_input
+
+    question = arguments.get("question", "")
+    options = arguments.get("options")
+    if options is not None and not isinstance(options, list):
+        options = None
+    allow_free = bool(arguments.get("allow_free_text", True))
+
+    if not config.auto_approve and needs_approval_prompt(
+        "request_user_input", arguments, config, turn_state=turn_state, session=session
+    ):
+        summary = format_tool_summary("request_user_input", arguments)
+        emitter.approval_requested(thread.id, turn.id, "request_user_input", summary)
+        if not prompt_approval(
+            "request_user_input",
+            arguments,
+            auto_approve=config.auto_approve,
+            turn_state=turn_state,
+            session=session,
+        ):
+            return json.dumps({"error": "user denied input prompt"})
+
+    answer, selected, err = resolve_user_input(
+        question,
+        options,
+        allow_free_text=allow_free,
+        auto_approve=config.auto_approve,
+        headless_json=headless_json,
+    )
+    if err:
+        emitter.error(thread.id, err)
+        return json.dumps({"error": err})
+
+    item = UserInputItem(
+        question=question,
+        answer=answer or "",
+        selected_option=selected,
+        options=[str(o) for o in options] if options else [],
+    )
+    turn.items.append(item)
+    store.append_item(thread, turn.id, item)
+    emitter.user_input(
+        thread.id, turn.id, question=question, answer=answer or "", selected_option=selected
+    )
+    return json.dumps({"answer": answer, "selected_option": selected})
+
+
+def _handle_request_permissions(
+    thread: Thread,
+    turn: Turn,
+    emitter: EventEmitter,
+    arguments: dict,
+    config: Config,
+    *,
+    session: HarnessSession,
+    turn_state: TurnApprovalState,
+    read_only_review: bool,
+) -> str:
+    if read_only_review:
+        emitter.permission_denied(
+            thread.id, turn.id, scope=arguments.get("scope", ""), reason="read-only review mode"
+        )
+        return json.dumps({"granted": False, "reason": "read-only review mode"})
+
+    scope = arguments.get("scope", "")
+    reason = arguments.get("reason", "")
+    duration = arguments.get("duration", "turn")
+    if scope not in ("network", "write_outside_cwd", "full_access"):
+        return json.dumps({"granted": False, "reason": f"invalid scope: {scope}"})
+
+    summary = format_tool_summary("request_permissions", arguments)
+    if not config.auto_approve and needs_approval_prompt(
+        "request_permissions", arguments, config, turn_state=turn_state, session=session
+    ):
+        emitter.approval_requested(thread.id, turn.id, "request_permissions", summary)
+        if not prompt_approval(
+            "request_permissions",
+            arguments,
+            auto_approve=config.auto_approve,
+            turn_state=turn_state,
+            session=session,
+        ):
+            emitter.permission_denied(thread.id, turn.id, scope=scope, reason="user denied")
+            return json.dumps({"granted": False, "reason": "user denied"})
+
+    session.grant_permission(scope, duration=duration)
+    emitter.permission_escalated(
+        thread.id, turn.id, scope=scope, duration=duration, reason=reason
+    )
+    return json.dumps({"granted": True, "scope": scope, "duration": duration})
