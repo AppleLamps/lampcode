@@ -127,6 +127,21 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
             result.issues.append(ValidationIssue("error", f"TLS cert missing: {cert}"))
         if not key.is_file():
             result.issues.append(ValidationIssue("error", f"TLS key missing: {key}"))
+        if serve.tls.require_client_cert:
+            from agent.serve.tls import expand_path, validate_client_ca
+
+            ca = expand_path(serve.tls.client_ca_file)
+            ok, msg = validate_client_ca(ca)
+            if not ok:
+                result.issues.append(ValidationIssue("error", f"mTLS client CA invalid: {msg}"))
+
+    if serve.ide.enabled and not serve.rbac.enabled:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "IDE enabled without RBAC — all authenticated users get admin-equivalent access when RBAC off",
+            )
+        )
 
     if serve.oidc and serve.oidc.enabled:
         if not serve.oidc.issuer_url or not serve.oidc.client_id:

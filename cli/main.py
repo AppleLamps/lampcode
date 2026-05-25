@@ -845,6 +845,71 @@ def skills_show(
     stdout_console.print(match.body)
 
 
+@auth_app.command("login")
+def auth_login_device(
+    device: bool = typer.Option(False, "--device", help="OAuth device code flow"),
+    headless: bool = typer.Option(False, "--headless", help="Non-interactive poll only"),
+    timeout: int = typer.Option(600, "--timeout", help="Poll timeout seconds"),
+) -> None:
+    """Login via OIDC device code (headless CI). Stores tokens in ~/.agent-cli/auth/oidc.json."""
+    if not device:
+        console.print("[red]Use --device for device code login[/red]")
+        raise typer.Exit(1)
+    cfg = load_serve_settings()
+    if not cfg.oidc or not cfg.oidc.device_code_enabled:
+        console.print("[red]device_code_enabled not set in serve.auth.oidc config[/red]")
+        raise typer.Exit(1)
+    from agent.auth.oidc_tokens import OidcTokenRecord, OidcTokenStore
+    from agent.serve.oidc import OidcClient
+    import time as _time
+
+    client = OidcClient(cfg.oidc)
+    try:
+        flow = client.start_device_flow()
+    except Exception as exc:
+        console.print(f"[red]Device flow start failed:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    console.print(f"[green]Visit:[/green] {flow.verification_uri_complete or flow.verification_uri}")
+    console.print(f"[green]User code:[/green] {flow.user_code}")
+    if headless:
+        console.print("[dim]Headless mode — poll until timeout[/dim]")
+    deadline = _time.time() + timeout
+    while _time.time() < deadline:
+        status, token_data = client.poll_device_token(flow.device_code)
+        if status == "success" and token_data:
+            claims = client.claims_from_token_response(token_data)
+            principal = client.principal_from_claims(claims)
+            rm = cfg.oidc.role_mapping
+            email = str(claims.get(rm.claim_email_key, ""))
+            record = OidcTokenRecord(
+                issuer_url=cfg.oidc.issuer_url,
+                client_id=client.device_client_id(),
+                access_token=str(token_data.get("access_token", "")),
+                refresh_token=str(token_data.get("refresh_token", "")),
+                id_token=str(token_data.get("id_token", "")),
+                expires_at=_time.time() + float(token_data.get("expires_in", 3600)),
+                subject=str(claims.get("sub", "")),
+                email=email,
+                role=principal.role,
+            )
+            OidcTokenStore().save(record)
+            if not OidcTokenStore.keyring_available():
+                console.print(
+                    "[yellow]Warning:[/yellow] keyring not installed — tokens stored as plain JSON"
+                )
+            console.print(f"[green]Logged in as[/green] {email or principal.name} ({principal.role})")
+            return
+        if status == "expired":
+            console.print("[red]Device code expired[/red]")
+            raise typer.Exit(1)
+        if status == "error":
+            console.print("[red]Device authorization failed[/red]")
+            raise typer.Exit(1)
+        _time.sleep(flow.interval)
+    console.print("[red]Timeout waiting for device authorization[/red]")
+    raise typer.Exit(1)
+
+
 @auth_app.command("hash-token")
 def auth_hash_token(
     token: str = typer.Argument(..., help="Plain token to hash for RBAC config"),
@@ -1387,6 +1452,40 @@ def multi_agent_graph(
     )
 
 
+@multi_agent_app.command("dag-status")
+def multi_agent_dag_status(
+    thread_id: str = typer.Option(..., "--thread-id"),
+) -> None:
+    """Show cross-turn persisted DAG state for a thread."""
+    import json
+
+    from agent.multi_agent.dag_state import DagStateStore
+
+    state = DagStateStore().load(thread_id)
+    if not state:
+        stdout_console.print(json.dumps({"status": "empty"}, indent=2))
+        return
+    stdout_console.print(json.dumps(state.to_dict(), indent=2))
+
+
+@multi_agent_app.command("dag-clear")
+def multi_agent_dag_clear(
+    thread_id: str = typer.Option(..., "--thread-id"),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """Clear persisted cross-turn DAG state."""
+    if not yes:
+        if not typer.confirm(f"Clear DAG state for {thread_id}?"):
+            raise typer.Exit(0)
+    from agent.multi_agent.dag_state import DagStateStore
+
+    cleared = DagStateStore().clear(thread_id)
+    if cleared:
+        console.print(f"[green]Cleared[/green] DAG state for {thread_id}")
+    else:
+        console.print("[dim]No DAG state file found[/dim]")
+
+
 @multi_agent_app.command("resume")
 def multi_agent_resume_cmd(
     thread_id: str = typer.Option(..., "--thread-id"),
@@ -1550,6 +1649,9 @@ def serve(
     generate_self_signed: bool = typer.Option(
         False, "--generate-self-signed", help="Generate dev self-signed cert before start"
     ),
+    enable_ide: bool = typer.Option(
+        False, "--enable-ide", help="Enable web IDE lite (file tree + Monaco editor)"
+    ),
 ) -> None:
     """HTTP dashboard for threads, runs, SSE events, turn cancel, and optional turn start."""
     if ctx.invoked_subcommand is not None:
@@ -1568,6 +1670,8 @@ def serve(
     if tls or generate_self_signed:
         cfg.tls.enabled = True
         cfg.tls.auto_generate_self_signed = generate_self_signed
+    if enable_ide:
+        cfg.ide.enabled = True
     if host == "0.0.0.0" and not allow_remote_bind:
         console.print(
             "[red]Error:[/red] Refusing 0.0.0.0 without --allow-remote-bind"
