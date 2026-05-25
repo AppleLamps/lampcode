@@ -29,16 +29,32 @@ class OutputHandler:
         self,
         *,
         jsonl_events: bool = False,
+        json_stream: bool = False,
         quiet_tools: bool = False,
         stderr: Console | None = None,
         stdout: Console | None = None,
     ) -> None:
         self.jsonl_events = jsonl_events
+        self.json_stream = json_stream
         self.quiet_tools = quiet_tools
         self._stderr = stderr or stderr_console
         self._stdout = stdout or stdout_console
+        self._stream_handler = None
+        if json_stream:
+            from agent.json_stream import JsonStreamHandler
+
+            self._stream_handler = JsonStreamHandler()
+
+    @property
+    def stream_handler(self):
+        return self._stream_handler
 
     def handle(self, event: AgentEvent) -> None:
+        if self.json_stream and self._stream_handler:
+            line = self._stream_handler.handle(event)
+            if line:
+                self._stdout.print(line)
+            return
         if self.jsonl_events:
             self._stdout.print(event.to_json())
             return

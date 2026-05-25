@@ -973,3 +973,86 @@ class EventEmitter:
                 data=data,
             )
         )
+
+    def approval_decided(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        tool_name: str,
+        approved: bool,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "approval.decided",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"tool_name": tool_name, "approved": approved},
+            )
+        )
+
+    def permission_escalated(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        scope: str,
+        duration: str,
+        reason: str = "",
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "permission.escalated",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"scope": scope, "duration": duration, "reason": reason},
+            )
+        )
+
+    def permission_denied(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        scope: str,
+        reason: str,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "permission.denied",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"scope": scope, "reason": reason},
+            )
+        )
+
+    def user_input(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        question: str,
+        answer: str,
+        selected_option: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "user.input",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "question": question,
+                    "answer": answer,
+                    "selected_option": selected_option,
+                },
+            )
+        )
+
+    def thread_started(self, thread_id: str, *, title: str | None = None) -> None:
+        self.emit(
+            AgentEvent(
+                "thread.started",
+                thread_id=thread_id,
+                data={"title": title} if title else {},
+            )
+        )
