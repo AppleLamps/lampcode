@@ -10,9 +10,15 @@ from typing import Any
 
 from agent.settings import MemoriesSettings, load_memories_settings
 
+INJECT_CHAR_CAP = 4000
+
 
 def _default_path(settings: MemoriesSettings) -> Path:
     return Path(settings.path).expanduser()
+
+
+def suggest_queue_path(cwd: Path) -> Path:
+    return cwd.resolve() / ".agent-cli" / "memory-suggestions.json"
 
 
 def _load_store(path: Path) -> list[dict[str, Any]]:
@@ -135,6 +141,63 @@ class MemoryStore:
         return scored
 
 
+class SuggestQueue:
+    def __init__(self, cwd: Path, *, max_pending: int = 20) -> None:
+        self.path = suggest_queue_path(cwd)
+        self.max_pending = max_pending
+
+    def list_pending(self) -> list[Memory]:
+        return [Memory.from_dict(x) for x in _load_store(self.path)]
+
+    def pending_count(self) -> int:
+        return len(_load_store(self.path))
+
+    def enqueue(
+        self,
+        text: str,
+        *,
+        source_thread_id: str | None = None,
+        cwd: str | None = None,
+        tags: list[str] | None = None,
+    ) -> Memory:
+        mem = Memory(
+            id=str(uuid.uuid4()),
+            created_at=datetime.now(timezone.utc).isoformat(),
+            source_thread_id=source_thread_id,
+            text=text.strip(),
+            tags=tags or [],
+            cwd=cwd,
+        )
+        items = _load_store(self.path)
+        items.append(mem.to_dict())
+        while len(items) > self.max_pending:
+            items.pop(0)
+        _save_store(self.path, items)
+        return mem
+
+    def accept(self, memory_id: str, *, store: MemoryStore) -> Memory | None:
+        items = _load_store(self.path)
+        match = next((x for x in items if x.get("id") == memory_id), None)
+        if match is None:
+            return None
+        items = [x for x in items if x.get("id") != memory_id]
+        _save_store(self.path, items)
+        return store.add(
+            match["text"],
+            source_thread_id=match.get("source_thread_id"),
+            tags=match.get("tags") or [],
+            cwd=match.get("cwd"),
+        )
+
+    def reject(self, memory_id: str) -> bool:
+        items = _load_store(self.path)
+        new_items = [x for x in items if x.get("id") != memory_id]
+        if len(new_items) == len(items):
+            return False
+        _save_store(self.path, new_items)
+        return True
+
+
 def _tokenize(text: str) -> list[str]:
     return [t for t in re.findall(r"[a-z0-9]{3,}", text.lower()) if t]
 
@@ -152,11 +215,17 @@ def _score_memory(mem: Memory, tokens: list[str], *, target_cwd: str | None) -> 
     text_lower = mem.text.lower()
     tag_blob = " ".join(mem.tags).lower()
     score = 0.0
+    matched = 0
     for token in tokens:
         if token in text_lower:
-            score += 1.0
+            score += 1.5
+            matched += 1
         if token in tag_blob:
-            score += 2.0
+            score += 3.0
+            matched += 1
+    if tokens:
+        overlap = matched / len(tokens)
+        score += overlap * 2.0
     score += _recency_bonus(mem.created_at)
     if target_cwd and mem.cwd:
         if str(Path(mem.cwd).resolve()) == target_cwd:
@@ -175,6 +244,28 @@ def inject_memories_prompt(
         return ""
     store = MemoryStore(settings=settings)
     matches = store.search(query, limit=settings.max_inject, cwd=cwd)
+    return _format_inject_block(matches)
+
+
+def inject_memories_dry_run(
+    query: str,
+    settings: MemoriesSettings | None = None,
+    *,
+    cwd: str | None = None,
+) -> str:
+    settings = settings or MemoriesSettings()
+    if not settings.enabled:
+        return "(memories disabled)"
+    store = MemoryStore(settings=settings)
+    scored = store.search_scored(query, cwd=cwd)[: settings.max_inject]
+    matches = [entry.memory for entry in scored]
+    block = _format_inject_block(matches)
+    if len(block) > INJECT_CHAR_CAP:
+        block = block[: INJECT_CHAR_CAP - 20] + "\n[... truncated ...]"
+    return block or "(no matching memories)"
+
+
+def _format_inject_block(matches: list[Memory]) -> str:
     if not matches:
         return ""
     lines = ["# Relevant memories", ""]
@@ -222,9 +313,13 @@ def suggest_memory_from_turn(
         return None
     if remember_flag or _looks_like_success_summary(agent_text):
         snippet = _first_meaningful_line(agent_text)
-        if snippet:
+        if not snippet:
+            return None
+        if remember_flag:
             store = MemoryStore(settings=settings)
             return store.add(snippet, source_thread_id=thread_id, cwd=cwd)
+        queue = SuggestQueue(Path(cwd), max_pending=settings.suggest_max_pending)
+        return queue.enqueue(snippet, source_thread_id=thread_id, cwd=cwd)
     return None
 
 

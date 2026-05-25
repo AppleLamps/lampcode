@@ -106,6 +106,7 @@ class CompactionSettings:
     keep_recent_turns: int = 2
     threshold: float = 0.7
     summary_max_chars: int = 8000
+    auto_mid_turn: bool = True
 
 
 DEFAULT_OPENROUTER_PRICING: dict[str, SwarmBudgetPricing] = {
@@ -188,6 +189,7 @@ class MemoriesSettings:
     path: str = "~/.agent-cli/memories.json"
     auto_suggest: bool = False
     suggest_on_auto_approve: bool = True
+    suggest_max_pending: int = 20
 
 
 @dataclass
@@ -510,6 +512,7 @@ def load_compaction_settings(path: Path | None = None) -> CompactionSettings:
         keep_recent_turns=int(compaction.get("keep_recent_turns", 2)),
         threshold=float(compaction.get("threshold", data.get("compaction_threshold", 0.7))),
         summary_max_chars=int(compaction.get("summary_max_chars", 8000)),
+        auto_mid_turn=bool(compaction.get("auto_mid_turn", True)),
     )
 
 
@@ -707,6 +710,7 @@ def load_memories_settings(
         path=str(merged.get("path", "~/.agent-cli/memories.json")),
         auto_suggest=bool(merged.get("auto_suggest", False)),
         suggest_on_auto_approve=bool(merged.get("suggest_on_auto_approve", True)),
+        suggest_max_pending=int(merged.get("suggest_max_pending", 20)),
     )
 
 
