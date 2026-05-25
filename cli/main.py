@@ -66,12 +66,16 @@ serve_oidc_app = typer.Typer(help="OIDC SSO configuration")
 auth_sessions_app = typer.Typer(help="Session management")
 auth_policy_app = typer.Typer(help="OAuth policy engine")
 serve_policy_app = typer.Typer(help="Serve policy status")
+serve_webhooks_app = typer.Typer(help="Webhook status")
+auth_webhooks_app = typer.Typer(help="OIDC webhook helpers")
+schedule_notifications_app = typer.Typer(help="Schedule notification helpers")
 schedule_app = typer.Typer(help="Scheduled swarm jobs")
 marketplace_app = typer.Typer(help="Signed skill marketplace")
 skills_lock_app = typer.Typer(help="Skill lockfile for reproducible installs")
 skills_revocations_app = typer.Typer(help="Marketplace revocation list")
 multi_agent_budgets_app = typer.Typer(help="Swarm budget tracking")
 programs_app = typer.Typer(help="Cross-thread program DAG")
+programs_sync_app = typer.Typer(help="Cross-machine program sync")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -89,13 +93,17 @@ serve_app.add_typer(serve_users_app, name="users")
 serve_app.add_typer(serve_oidc_app, name="oidc")
 auth_app.add_typer(auth_sessions_app, name="sessions")
 auth_app.add_typer(auth_policy_app, name="policy")
+auth_app.add_typer(auth_webhooks_app, name="webhooks")
 serve_app.add_typer(serve_policy_app, name="policy")
+serve_app.add_typer(serve_webhooks_app, name="webhooks")
 app.add_typer(schedule_app, name="schedule")
+schedule_app.add_typer(schedule_notifications_app, name="notifications")
 skills_app.add_typer(marketplace_app, name="marketplace")
 skills_app.add_typer(skills_lock_app, name="lock")
 skills_app.add_typer(skills_revocations_app, name="revocations")
 multi_agent_app.add_typer(multi_agent_budgets_app, name="budgets")
 app.add_typer(programs_app, name="programs")
+programs_app.add_typer(programs_sync_app, name="sync")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -713,6 +721,20 @@ def doctor(
             f"ruff={'found' if shutil.which('ruff') else 'missing'}, "
             f"eslint={'found' if shutil.which('eslint') else 'missing'}",
         )
+    ct = cfg.multi_agent.cross_thread
+    table.add_row(
+        "program sync",
+        f"enabled={ct.sync_enabled}, backend={ct.sync_backend}, sign={ct.sign_program_state}",
+    )
+    table.add_row(
+        "auth webhooks",
+        f"enabled={serve_cfg.webhooks.enabled}, path={serve_cfg.webhooks.path}",
+    )
+    sched_cfg = load_schedule_settings(config_path)
+    table.add_row(
+        "schedule notifications",
+        f"enabled={sched_cfg.notifications.enabled}, url={'set' if sched_cfg.notifications.webhook_url else 'log-only'}",
+    )
     oidc = serve_cfg.oidc
     if oidc and oidc.enabled:
         table.add_row(
@@ -1368,11 +1390,14 @@ def schedule_disable(job_id: str = typer.Argument(...)) -> None:
 
 
 @schedule_app.command("tick")
-def schedule_tick() -> None:
+def schedule_tick(
+    force: bool = typer.Option(False, "--force", help="Steal stale tick lock"),
+) -> None:
     """Run due scheduled jobs once (for Windows Task Scheduler)."""
     import json
 
     from agent.events import EventEmitter
+    from agent.schedule.lock import acquire_tick_lock, release_tick_lock
     from agent.schedule.runner import run_due_jobs
     from agent.schedule.store import ScheduleStore
     from agent.settings import load_schedule_settings
@@ -1381,9 +1406,16 @@ def schedule_tick() -> None:
     if not sched.enabled:
         console.print("[yellow]schedule.enabled=false — nothing to do[/yellow]")
         raise typer.Exit(0)
-    store = ScheduleStore(Path(sched.state_file).expanduser())
-    results = run_due_jobs(store, sched, config=Config.resolve(), emitter=EventEmitter())
-    stdout_console.print(json.dumps(results, indent=2))
+    acquired, msg = acquire_tick_lock(force=force)
+    if not acquired:
+        console.print(f"[yellow]skipped: {msg}[/yellow]")
+        raise typer.Exit(0)
+    try:
+        store = ScheduleStore(Path(sched.state_file).expanduser())
+        results = run_due_jobs(store, sched, config=Config.resolve(), emitter=EventEmitter())
+        stdout_console.print(json.dumps(results, indent=2))
+    finally:
+        release_tick_lock()
 
 
 @schedule_app.command("run")
@@ -1899,6 +1931,151 @@ def sync_status_cmd(
     config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
     config.execution.ssh.sync_enabled = True
     stdout_console.print(json.dumps(sync_status(config), indent=2))
+
+
+@schedule_notifications_app.command("test")
+def schedule_notifications_test(
+    event: str = typer.Option("failed", "--event"),
+    job_id: str = typer.Option("nightly-tests", "--job-id"),
+) -> None:
+    """Send a test schedule notification payload."""
+    import json
+
+    from agent.schedule.notifications import notify_job_result
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    sample = {
+        "ok": event != "failed",
+        "status": "failed" if event == "failed" else "completed",
+        "error": "simulated failure" if event == "failed" else None,
+        "thread_id": "thread-test",
+        "turn_id": "turn-test",
+        "snippet": "pytest failed: 1 error",
+    }
+    if event == "budget_exceeded":
+        sample = {
+            "ok": False,
+            "error": "budget exceeded",
+            "budget": {"metric": "max_workers_spawned", "limit": 20, "observed": 21},
+        }
+    result = notify_job_result(job_id, sample, sched.notifications)
+    stdout_console.print(json.dumps(result, indent=2))
+
+
+@auth_webhooks_app.command("test")
+def auth_webhooks_test(
+    event: str = typer.Option("role_changed", "--event"),
+    subject: str = typer.Option("user-123", "--subject"),
+) -> None:
+    """Simulate OIDC webhook revocation locally."""
+    import json
+    import os
+
+    from agent.auth.policy.sessions import SessionRevocationRegistry
+    from agent.auth.webhooks.oidc_events import parse_oidc_event
+    from agent.auth.webhooks.revoke import revoke_for_event
+    from agent.events import EventEmitter
+    from agent.settings import load_serve_settings
+    from agent.serve.sessions import SessionStore
+
+    cfg = load_serve_settings()
+    wh = cfg.webhooks
+    payload = parse_oidc_event({"event": event, "subject": subject})
+    SessionStore.reset_for_tests()
+    store = SessionStore.global_store()
+    store.create_session(
+        __import__("agent.serve.rbac", fromlist=["AuthPrincipal"]).AuthPrincipal(
+            name="u", role="operator", auth_method="oidc"
+        ),
+        subject=subject,
+    )
+    result = revoke_for_event(
+        payload,
+        session_store=store,
+        registry=SessionRevocationRegistry(),
+        revoke_on_events=wh.revoke_on_events or [event],
+        emitter=EventEmitter(),
+    )
+    stdout_console.print(json.dumps(result, indent=2))
+
+
+@serve_webhooks_app.command("status")
+def serve_webhooks_status() -> None:
+    import json
+    import os
+
+    from agent.settings import load_serve_settings
+
+    wh = load_serve_settings().webhooks
+    stdout_console.print(
+        json.dumps(
+            {
+                "enabled": wh.enabled,
+                "path": wh.path,
+                "secret_configured": bool(os.environ.get(wh.shared_secret_env)),
+                "revoke_on_events": wh.revoke_on_events,
+            },
+            indent=2,
+        )
+    )
+
+
+@programs_sync_app.command("push")
+def programs_sync_push(
+    program_id: str | None = typer.Option(None, "--program-id"),
+) -> None:
+    import json
+
+    from agent.programs.sync.coordinator import ProgramSyncCoordinator
+
+    cfg = Config.resolve()
+    coord = ProgramSyncCoordinator(cfg)
+    if program_id:
+        stdout_console.print(json.dumps(coord.push(program_id), indent=2))
+        return
+    results = [coord.push(pid) for pid in coord.store.list_programs()]
+    stdout_console.print(json.dumps(results, indent=2))
+
+
+@programs_sync_app.command("pull")
+def programs_sync_pull(
+    program_id: str | None = typer.Option(None, "--program-id"),
+) -> None:
+    import json
+
+    from agent.programs.sync.coordinator import ProgramSyncCoordinator
+
+    cfg = Config.resolve()
+    coord = ProgramSyncCoordinator(cfg)
+    if program_id:
+        stdout_console.print(json.dumps(coord.pull(program_id), indent=2))
+        return
+    results = [coord.pull(pid) for pid in coord.store.list_programs()]
+    stdout_console.print(json.dumps(results, indent=2))
+
+
+@programs_sync_app.command("status")
+def programs_sync_status() -> None:
+    import json
+    from dataclasses import asdict
+
+    from agent.programs.sync.coordinator import ProgramSyncCoordinator
+
+    cfg = Config.resolve()
+    coord = ProgramSyncCoordinator(cfg)
+    stdout_console.print(json.dumps(asdict(coord.status()), indent=2))
+
+
+@programs_sync_app.command("verify-signature")
+def programs_sync_verify_signature(program_id: str = typer.Argument(...)) -> None:
+    import json
+
+    from agent.programs.sync.coordinator import ProgramSyncCoordinator
+
+    cfg = Config.resolve()
+    coord = ProgramSyncCoordinator(cfg)
+    stdout_console.print(json.dumps(coord.verify_signature(program_id), indent=2))
 
 
 @programs_app.command("list")

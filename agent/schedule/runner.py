@@ -8,6 +8,7 @@ from agent.config import Config
 from agent.events import EventEmitter
 from agent.schedule.cron import is_job_due
 from agent.schedule.guards import validate_job_for_run
+from agent.schedule.notifications import notify_job_result
 from agent.schedule.store import ScheduleJob, ScheduleStore, write_run_history
 from agent.settings import ScheduleSettings
 
@@ -49,12 +50,14 @@ def run_due_jobs(
             write_run_history(job.id, payload)
             if emitter:
                 emitter.schedule_job_completed(job.id, status=payload.get("status", "unknown"))
+            notify_job_result(job.id, {"job_id": job.id, "ok": True, **payload}, settings.notifications)
             results.append({"job_id": job.id, "ok": True, **payload})
         except Exception as exc:
             err = {"job_id": job.id, "ok": False, "error": str(exc), "started_at": started}
             write_run_history(job.id, err)
             if emitter:
                 emitter.schedule_job_failed(job.id, error=str(exc))
+            notify_job_result(job.id, err, settings.notifications)
             results.append(err)
     return results
 

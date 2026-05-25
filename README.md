@@ -940,15 +940,87 @@ curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8765/ide/diagnostics?th
 
 Monaco squiggles load automatically when opening files in the dashboard.
 
+## Phase 18 — Program sync + CAE webhooks + schedule notifications (v1.8.0)
+
+### Cross-machine program DAG sync
+
+Replicate supervisor program state via git or S3-compatible storage.
+
+```toml
+[multi_agent.cross_thread]
+enabled = true
+sync_enabled = false
+sync_backend = "git"                 # git | s3 | none
+sync_interval_sec = 60
+sign_program_state = true
+signing_key_id = "program-sync"
+
+[multi_agent.cross_thread.git]
+repo_path = ".agent-cli/program-sync"
+branch = "agent-programs"
+remote = "origin"
+
+[multi_agent.cross_thread.s3]
+endpoint_url = "https://s3.amazonaws.com"
+bucket = "my-agent-programs"
+prefix = "programs/"
+access_key_env = "AGENT_S3_ACCESS_KEY"
+secret_key_env = "AGENT_S3_SECRET_KEY"
+```
+
+```powershell
+agent programs sync push --program-id PROG_ID
+agent programs sync pull --program-id PROG_ID
+agent programs sync status
+agent programs sync verify-signature PROG_ID
+```
+
+### OAuth CAE / role-change webhooks
+
+```toml
+[serve.auth.webhooks]
+enabled = false
+path = "/auth/webhooks/oidc-events"
+shared_secret_env = "AGENT_WEBHOOK_SECRET"
+revoke_on_events = ["role_changed", "session_revoked", "password_changed"]
+revoke_all_subject_sessions = true
+```
+
+```powershell
+$env:AGENT_WEBHOOK_SECRET = "your-secret"
+agent auth webhooks test --event role_changed --subject user-123
+agent serve webhooks status
+```
+
+### Schedule notifications + tick lock
+
+```toml
+[schedule.notifications]
+enabled = false
+webhook_url = "https://hooks.example.com/agent-cli"
+webhook_secret_env = "AGENT_SCHEDULE_WEBHOOK_SECRET"
+on_events = ["failed", "budget_exceeded", "completed"]
+timeout_sec = 10
+retry_count = 2
+```
+
+```powershell
+agent schedule tick              # acquires ~/.agent-cli/schedule/tick.lock
+agent schedule tick --force      # steal stale lock (admin)
+agent schedule notifications test --event failed --job-id nightly-tests
+```
+
+**Task Scheduler note:** run `agent schedule tick` every minute; overlapping runs skip cleanly when lock is held.
+
 ## Tests
 
 ```powershell
-pytest   # 690+ tests
+pytest   # 750+ tests
 ```
 
-## Phase 18 (planned, not implemented)
+## Phase 19 (planned, not implemented)
 
-Cross-machine program DAG sync, Linux bubblewrap advanced policies, full LSP server, OAuth CAE webhooks, email/Slack schedule notifications.
+Full LSP bridge, Linux bubblewrap policy packs, distributed schedule leader election, native email/Slack integrations, real-time websocket program sync.
 
 ## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
 
