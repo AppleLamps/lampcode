@@ -34,7 +34,11 @@ from agent.session import HarnessSession
 from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
-from agent.store import ThreadStore
+from agent.turn_checkpoint import (
+    TurnCheckpoint,
+    clear_turn_checkpoint,
+    save_turn_checkpoint,
+)
 from approval.gate import (
     TurnApprovalState,
     exec_policy_block_reason,
@@ -86,6 +90,7 @@ def run_turn(
     resume_messages: list | None = None,
     resume_spawn_count: int = 0,
     budget_profile: str | None = None,
+    resume_checkpoint: TurnCheckpoint | None = None,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -100,15 +105,39 @@ def run_turn(
     mcp_manager = McpManager(mcp_config)
 
     turn = Turn()
-    thread.turns.append(turn)
-    emitter.turn_started(thread.id, turn.id)
+    resumed_turn = False
+    if resume_checkpoint:
+        existing = next((t for t in thread.turns if t.id == resume_checkpoint.turn_id), None)
+        if existing is None:
+            turn.id = resume_checkpoint.turn_id
+            thread.turns.append(turn)
+        else:
+            turn = existing
+            resumed_turn = True
+        user_text = resume_checkpoint.user_text or user_text
+        resume_messages = resume_checkpoint.messages
+        if (
+            turn.items
+            and turn.items[-1].type == "agentMessage"
+            and "cancelled" in turn.items[-1].text.lower()
+        ):
+            turn.items.pop()
+        turn.status = "running"
+    else:
+        thread.turns.append(turn)
+
+    if not resumed_turn:
+        emitter.turn_started(thread.id, turn.id)
+    else:
+        emitter.turn_started(thread.id, turn.id)
     MetricsCollector.global_collector().inc("turns_started")
     MetricsCollector.global_collector().adjust_gauge("active_turns", 1)
     ActiveTurnRegistry.global_registry().register(thread.id, turn.id, cancel)
 
-    user_item = UserMessageItem(text=user_text)
-    turn.items.append(user_item)
-    store.append_item(thread, turn.id, user_item)
+    if not resumed_turn:
+        user_item = UserMessageItem(text=user_text)
+        turn.items.append(user_item)
+        store.append_item(thread, turn.id, user_item)
 
     all_skills = discover_skills(
         config.cwd,
@@ -260,8 +289,17 @@ def run_turn(
         if pull_item:
             completed_turn.items.append(pull_item)
             store.append_item(thread, turn.id, pull_item)
+        clear_turn_checkpoint(config.turn_checkpoint, thread.id, turn.id)
         return completed_turn
     except CancelledError:
+        save_turn_checkpoint(
+            settings=config.turn_checkpoint,
+            thread_id=thread.id,
+            turn_id=turn.id,
+            user_text=user_text,
+            messages=messages,
+            status="cancelled",
+        )
         if registry and config.multi_agent.checkpoint_enabled:
             path = save_checkpoint_from_registry(
                 registry,
@@ -720,12 +758,21 @@ def _run_loop(
                 turn.id,
                 emitter,
             )
+            patch_preview = None
+            if tool_name == "apply_patch" and dispatch_result.file_items:
+                snippets = [
+                    fi.diff_snippet for fi in dispatch_result.file_items if fi.diff_snippet
+                ]
+                if snippets:
+                    patch_preview = "\n".join(snippets)[:500]
             emitter.tool_completed(
                 thread.id,
                 turn.id,
                 tool_name,
                 tracking_items[0].status if tracking_items else "completed",
                 source=source,
+                diff_preview=patch_preview,
+                summary=result_text[:200] if tool_name == "apply_patch" else None,
             )
 
             messages.append(
@@ -1092,8 +1139,9 @@ def brief_args(tool_name: str, arguments: dict) -> str:
     if tool_name == "write_file":
         return arguments.get("path", "")
     if tool_name == "apply_patch":
-        patch = arguments.get("patch", "")
-        return patch.splitlines()[0][:80] if patch else ""
+        from tools.patch import format_patch_brief
+
+        return format_patch_brief(arguments.get("patch", ""))
     if tool_name == "read_file":
         return arguments.get("path", "")
     if tool_name == "search_repo":

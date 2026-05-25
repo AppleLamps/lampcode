@@ -22,6 +22,7 @@ from agent.settings import (
     MultiAgentSettings,
     OpenRouterSettings,
     RecordingSettings,
+    TurnCheckpointSettings,
     SandboxProfileSettings,
     TelemetrySettings,
     WebSearchSettings,
@@ -31,6 +32,7 @@ from agent.settings import (
     load_multi_agent_settings,
     load_openrouter_settings,
     load_recording_settings,
+    load_turn_checkpoint_settings,
     load_sandbox_profile_settings,
     load_kernel_sandbox_settings,
     load_telemetry_settings,
@@ -120,6 +122,7 @@ class Config:
     compaction: CompactionSettings = field(default_factory=CompactionSettings)
     openrouter: OpenRouterSettings = field(default_factory=OpenRouterSettings)
     recording: RecordingSettings = field(default_factory=RecordingSettings)
+    turn_checkpoint: TurnCheckpointSettings = field(default_factory=TurnCheckpointSettings)
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
     web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
@@ -295,6 +298,9 @@ class Config:
         exec_policy = load_exec_policy_config(resolved_config_path)
         openrouter = load_openrouter_settings(resolved_config_path, project_path=project_path)
         recording = load_recording_settings(resolved_config_path)
+        turn_checkpoint = load_turn_checkpoint_settings(
+            resolved_config_path, project_path=project_path
+        )
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
         execution_cfg = load_execution_settings(resolved_config_path)
@@ -346,6 +352,7 @@ class Config:
             compaction=compaction_cfg,
             openrouter=openrouter,
             recording=recording,
+            turn_checkpoint=turn_checkpoint,
             isolation=isolation,
             web_search=web_search,
             execution=execution_cfg,

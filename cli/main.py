@@ -59,12 +59,13 @@ from agent.init_scaffold import init_project
 from agent.model_routing import resolve_model_profile_from_task
 from agent.output_handler import OutputHandler, format_run_summary, stderr_console, stdout_console
 from agent.repl import run_repl
-from agent.providers.openrouter import ModelsCache, recommend_model, tool_support_warning
+from agent.providers.openrouter import ModelsCache, check_openrouter_health, recommend_model, tool_support_warning
 from agent.skills.doctor import skills_doctor_report
 from tools.registry import TOOL_REGISTRY, get_tool_schemas
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
+from agent.turn_checkpoint import TurnCheckpointStore
 from agent.store import ThreadStore
 from agent.tui.runner import check_tui_available, launch_tui
 
@@ -220,6 +221,11 @@ def run(
     model_profile: Optional[str] = typer.Option(
         None, "--model-profile", help="Model profile: fast | deep | custom from config"
     ),
+    resume_turn: bool = typer.Option(
+        False,
+        "--resume-turn",
+        help="Resume a cancelled single-agent turn from checkpoint (requires --thread-id or --resume-last)",
+    ),
 ) -> None:
     """Run the agent on a task."""
     routed_profile = resolve_model_profile_from_task(
@@ -371,6 +377,32 @@ def run(
                 store,
                 retry_failed=retry_failed,
                 events=emitter,
+            )
+        elif resume_turn:
+            if not thread:
+                console.print("[red]Error:[/red] --resume-turn requires --thread-id or --resume-last")
+                raise typer.Exit(1)
+            cp_store = TurnCheckpointStore(Path(config.turn_checkpoint.dir).expanduser())
+            resume_cp = cp_store.find_latest(thread.id)
+            if not resume_cp:
+                console.print("[red]Error:[/red] No single-agent turn checkpoint found for this thread.")
+                raise typer.Exit(1)
+            if not jsonl_events:
+                console.print(
+                    f"[dim]Resuming cancelled turn {resume_cp.turn_id[:8]}…[/dim]"
+                )
+            turn = run_turn(
+                thread,
+                resume_cp.user_text or prompt,
+                config,
+                store,
+                events=emitter,
+                cancel_token=cancel_token,
+                quiet_tools=quiet_tools,
+                session_auto_approve=session_auto_approve,
+                force_sync=force_sync,
+                budget_profile=budget_profile,
+                resume_checkpoint=resume_cp,
             )
         else:
             turn = run_turn(
@@ -784,8 +816,11 @@ def doctor(
         solo_checks.append(("model tool support", "ok"))
     from agent.providers.openrouter import probe_openrouter_reachability
 
-    or_status, or_detail = probe_openrouter_reachability(api_key)
-    solo_checks.append(("OpenRouter API", f"{or_status}: {or_detail}"))
+    or_health = check_openrouter_health(api_key)
+    solo_checks.append(("OpenRouter reachability", or_health.reachability))
+    solo_checks.append(("OpenRouter API key", or_health.key_validity))
+    if or_health.detail:
+        solo_checks.append(("OpenRouter detail", or_health.detail[:80]))
     for name, status in solo_checks:
         style = "green" if status in ("ok",) or status.endswith("models") else "yellow"
         if status == "MISSING":
@@ -2355,16 +2390,82 @@ def threads_pr_description(
     title: Optional[str] = typer.Option(None, "--title", help="PR title override"),
     out: Optional[Path] = typer.Option(None, "--out", help="Write markdown to file"),
     no_diff: bool = typer.Option(False, "--no-diff", help="Omit git diff stat section"),
+    summary_only: bool = typer.Option(
+        False, "--summary-only", help="Summary bullets only (no conversation log)"
+    ),
 ) -> None:
     """Generate a PR description from thread transcript and git diff stat."""
     store = ThreadStore()
     thread = _load_thread(store, thread_id)
-    md = build_pr_description(thread, title=title, include_diff=not no_diff)
+    md = build_pr_description(
+        thread,
+        title=title,
+        include_diff=not no_diff,
+        include_conversation=not summary_only,
+    )
     if out:
         out.write_text(md, encoding="utf-8")
         console.print(f"Wrote PR description to {out}")
     else:
         stdout_console.print(md, markup=False, highlight=False)
+
+
+@threads_app.command("checkpoint-status")
+def threads_checkpoint_status(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+) -> None:
+    """Show single-agent turn checkpoints for a thread."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    config = Config.resolve(cwd=Path(thread.cwd))
+    cp_store = TurnCheckpointStore(Path(config.turn_checkpoint.dir).expanduser())
+    checkpoints = cp_store.list_for_thread(thread.id)
+    if not checkpoints:
+        console.print("No turn checkpoints saved.")
+        return
+    table = Table(title=f"Turn checkpoints — {thread.id[:8]}…")
+    table.add_column("Turn ID")
+    table.add_column("Status")
+    table.add_column("Saved")
+    table.add_column("Prompt")
+    for cp in checkpoints:
+        table.add_row(
+            cp.turn_id[:12] + "…",
+            cp.status,
+            cp.saved_at[:19],
+            (cp.user_text[:50] + "…") if len(cp.user_text) > 50 else cp.user_text,
+        )
+    console.print(table)
+
+
+@threads_app.command("resume-turn")
+def threads_resume_turn(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+    auto_approve: bool = typer.Option(False, "--auto-approve"),
+) -> None:
+    """Resume the latest cancelled single-agent turn from checkpoint."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    config = Config.resolve(cwd=Path(thread.cwd))
+    config.require_api_key()
+    cp_store = TurnCheckpointStore(Path(config.turn_checkpoint.dir).expanduser())
+    resume_cp = cp_store.find_latest(thread.id)
+    if not resume_cp:
+        console.print("[red]Error:[/red] No turn checkpoint found.")
+        raise typer.Exit(1)
+    output = OutputHandler()
+    emitter = build_event_emitter(output.handle, recording=config.recording.enabled)
+    console.print(f"[dim]Resuming turn {resume_cp.turn_id[:8]}…[/dim]")
+    turn = run_turn(
+        thread,
+        resume_cp.user_text,
+        config,
+        store,
+        events=emitter,
+        session_auto_approve=auto_approve or config.auto_approve,
+        resume_checkpoint=resume_cp,
+    )
+    console.print(format_run_summary(turn), markup=False)
 
 
 @threads_app.command("delete")
@@ -2701,6 +2802,9 @@ def repl_cmd(
     profile: Optional[str] = typer.Option(None, "--profile"),
     model_profile: Optional[str] = typer.Option(None, "--model-profile"),
     resume_last: bool = typer.Option(False, "--resume-last"),
+    resume_turn: bool = typer.Option(
+        False, "--resume-turn", help="Resume cancelled turn from checkpoint on next prompt"
+    ),
 ) -> None:
     """Interactive multi-turn REPL (no Textual required)."""
     try:
@@ -2717,6 +2821,7 @@ def repl_cmd(
         profile=profile,
         model_profile=model_profile,
         resume_last=resume_last,
+        resume_turn=resume_turn,
     )
 
 

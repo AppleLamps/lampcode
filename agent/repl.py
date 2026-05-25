@@ -10,6 +10,7 @@ from agent.events import build_event_emitter
 from agent.loop import run_turn
 from agent.models import Thread, new_id
 from agent.output_handler import OutputHandler, format_run_summary
+from agent.repl_completer import install_repl_completer
 from agent.profiles import (
     apply_merged_to_resolve_kwargs,
     merge_layered_config,
@@ -33,6 +34,7 @@ class ReplSession:
         input_fn: Callable[[], str] | None = None,
         profile: str | None = None,
         model_profile: str | None = None,
+        resume_turn: bool = False,
     ) -> None:
         self.config = config
         self.store = store or ThreadStore()
@@ -43,7 +45,10 @@ class ReplSession:
         self.model_override: str | None = None
         self.profile_override = profile
         self.model_profile_override = model_profile
+        self.resume_turn = resume_turn
+        self._pending_resume_turn = resume_turn
         self.output = OutputHandler(quiet_tools=False)
+        self._completer_installed = install_repl_completer(config.cwd)
 
     def _resolve_config(self) -> Config:
         merged = merge_layered_config(
@@ -75,14 +80,26 @@ class ReplSession:
         thread = self._ensure_thread()
         cfg = self._resolve_config()
         emitter = build_event_emitter(self.output.handle)
+        resume_cp = None
+        prompt = stripped
+        if self._pending_resume_turn:
+            from agent.turn_checkpoint import TurnCheckpointStore
+
+            store_cp = TurnCheckpointStore(Path(cfg.turn_checkpoint.dir).expanduser())
+            resume_cp = store_cp.find_latest(thread.id)
+            if resume_cp:
+                prompt = resume_cp.user_text or stripped
+                self._print(f"[resume] continuing turn {resume_cp.turn_id[:8]}…")
+            self._pending_resume_turn = False
         turn = run_turn(
             thread,
-            stripped,
+            prompt,
             cfg,
             self.store,
             events=emitter,
             harness_session=self.session,
             session_auto_approve=cfg.auto_approve,
+            resume_checkpoint=resume_cp,
         )
         for item in reversed(turn.items):
             if item.type == "agentMessage":
@@ -153,7 +170,10 @@ class ReplSession:
         return True
 
     def run(self) -> None:
-        self._print("agent repl — /quit to exit")
+        hint = "agent repl — /quit to exit"
+        if self._completer_installed:
+            hint += " (Tab completes @skills and /commands)"
+        self._print(hint)
         while True:
             try:
                 line = self._input()
@@ -170,6 +190,7 @@ def run_repl(
     profile: str | None = None,
     model_profile: str | None = None,
     resume_last: bool = False,
+    resume_turn: bool = False,
 ) -> None:
     cwd = (cwd or Path.cwd()).resolve()
     merged = merge_layered_config(cwd, cli_profile=profile, cli_model_profile=model_profile)
@@ -187,4 +208,5 @@ def run_repl(
         thread=thread,
         profile=profile,
         model_profile=model_profile,
+        resume_turn=resume_turn,
     ).run()

@@ -153,6 +153,12 @@ class RecordingSettings:
 
 
 @dataclass
+class TurnCheckpointSettings:
+    enabled: bool = True
+    dir: str = "~/.agent-cli/turn-checkpoints"
+
+
+@dataclass
 class IsolationSettings:
     enabled: bool = True
     strip_env: bool = True
@@ -518,6 +524,26 @@ def load_recording_settings(path: Path | None = None) -> RecordingSettings:
     return RecordingSettings(
         enabled=bool(rec.get("enabled", True)),
         keep_last_runs_per_thread=int(rec.get("keep_last_runs_per_thread", 50)),
+    )
+
+
+def load_turn_checkpoint_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> TurnCheckpointSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_tc = user_data.get("turn_checkpoint", {})
+    project_tc = project_data.get("turn_checkpoint", {})
+    if not isinstance(user_tc, dict):
+        user_tc = {}
+    if not isinstance(project_tc, dict):
+        project_tc = {}
+    merged = {**user_tc, **project_tc}
+    return TurnCheckpointSettings(
+        enabled=bool(merged.get("enabled", True)),
+        dir=str(merged.get("dir", "~/.agent-cli/turn-checkpoints")),
     )
 
 
