@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import json
 import platform
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -11,14 +11,52 @@ from agent.models import (
     ContextCompactionItem,
     FileChangeItem,
     Item,
+    McpToolCallItem,
+    SkillActivationItem,
     Thread,
     UserMessageItem,
 )
+from agent.skills.discovery import Skill
+from agent.skills.injector import build_skills_prompt
+
+
+@dataclass
+class ProjectRules:
+    path: Path
+    content: str
+    char_count: int
+
+
+def find_project_rules(cwd: Path) -> ProjectRules | None:
+    candidates = [
+        cwd / "AGENTS.md",
+        cwd / "agents.md",
+        cwd / ".agents" / "AGENTS.md",
+    ]
+    for path in candidates:
+        if path.is_file():
+            try:
+                content = path.read_text(encoding="utf-8", errors="replace")
+                return ProjectRules(path=path, content=content, char_count=len(content))
+            except OSError:
+                continue
+    return None
+
+
+def load_project_rules(cwd: Path, max_chars: int = 8000) -> tuple[str, ProjectRules | None]:
+    rules = find_project_rules(cwd)
+    if not rules:
+        return "", None
+
+    content = rules.content
+    if len(content) > max_chars:
+        content = content[: max_chars - 20] + "\n[... truncated ...]"
+    return f"# Project Rules\n\n{content}\n", rules
 
 
 def load_project_context(cwd: Path, max_bytes: int = 8192) -> str:
     parts: list[str] = []
-    for name in ("AGENTS.md", "README.md"):
+    for name in ("README.md",):
         path = cwd / name
         if path.is_file():
             try:
@@ -34,7 +72,14 @@ def load_project_context(cwd: Path, max_bytes: int = 8192) -> str:
     return "\n\n".join(parts)
 
 
-def build_system_prompt(cwd: Path, repo_root: str | None = None) -> str:
+def build_system_prompt(
+    cwd: Path,
+    repo_root: str | None = None,
+    *,
+    active_skills: list[Skill] | None = None,
+    skills_max_body: int = 4000,
+    project_rules: str = "",
+) -> str:
     project_context = load_project_context(cwd)
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
 
@@ -56,6 +101,7 @@ Rules:
 - Run relevant tests or commands to verify your work when appropriate.
 - Explain briefly what you are doing as you work.
 - Use the provided tools instead of assuming anything about the codebase.
+- When MCP tools are available, you may use them for specialized tasks.
 
 Safety:
 - Only access paths inside the project working directory.
@@ -64,6 +110,10 @@ Safety:
 
 When you have completed the task, provide a clear final summary of what you found and changed.
 """
+    if project_rules:
+        prompt += f"\n\n{project_rules}\n"
+    if active_skills:
+        prompt += "\n" + build_skills_prompt(active_skills, max_body_chars=skills_max_body)
     if project_context:
         prompt += f"\n\n# Project context\n\n{project_context}\n"
 
@@ -78,10 +128,27 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
     if isinstance(item, AgentMessageItem):
         return [{"role": "assistant", "content": item.text}]
 
+    if isinstance(item, (SkillActivationItem, ContextCompactionItem)):
+        return []
+
     if isinstance(item, CommandExecutionItem):
         if not item.tool_call_id:
             return []
         content = item.output or ""
+        if item.status == "denied":
+            content = "User denied this action."
+        return [
+            {
+                "role": "tool",
+                "tool_call_id": item.tool_call_id,
+                "content": content,
+            }
+        ]
+
+    if isinstance(item, McpToolCallItem):
+        if not item.tool_call_id:
+            return []
+        content = item.output or item.error or ""
         if item.status == "denied":
             content = "User denied this action."
         return [
@@ -108,13 +175,12 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
             }
         ]
 
-    if isinstance(item, ContextCompactionItem):
-        return []
-
     return []
 
 
 def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    import json
+
     total_chars = 0
     for msg in messages:
         content = msg.get("content")
@@ -127,25 +193,10 @@ def estimate_tokens(messages: list[dict[str, Any]]) -> int:
     return total_chars // 4
 
 
-def build_assistant_tool_call_message(
-    text: str,
-    tool_calls: list[dict[str, Any]],
-) -> dict[str, Any]:
-    msg: dict[str, Any] = {"role": "assistant", "content": text or None}
-    if tool_calls:
-        msg["tool_calls"] = tool_calls
-    return msg
-
-
 def build_messages_from_turn_items(
     items: list[Item],
     pending_assistant: dict[str, Any] | None = None,
 ) -> list[dict[str, Any]]:
-    """
-    Build OpenAI messages from turn items, preserving tool-call pairing.
-
-    Groups consecutive tool results under their preceding assistant tool_calls message.
-    """
     messages: list[dict[str, Any]] = []
     idx = 0
     while idx < len(items):
@@ -161,15 +212,17 @@ def build_messages_from_turn_items(
             idx += 1
             continue
 
-        if isinstance(item, ContextCompactionItem):
+        if isinstance(item, (SkillActivationItem, ContextCompactionItem)):
             idx += 1
             continue
 
-        if isinstance(item, (CommandExecutionItem, FileChangeItem)):
-            # Collect batch of tool execution items that share a tool call round
-            batch: list[CommandExecutionItem | FileChangeItem] = []
+        if isinstance(
+            item, (CommandExecutionItem, FileChangeItem, McpToolCallItem)
+        ):
+            batch: list[CommandExecutionItem | FileChangeItem | McpToolCallItem] = []
             while idx < len(items) and isinstance(
-                items[idx], (CommandExecutionItem, FileChangeItem)
+                items[idx],
+                (CommandExecutionItem, FileChangeItem, McpToolCallItem),
             ):
                 batch.append(items[idx])  # type: ignore[arg-type]
                 idx += 1
@@ -199,7 +252,6 @@ def build_messages_from_turn_items(
 
             for exec_item in batch:
                 messages.extend(item_to_messages(exec_item))
-
             continue
 
         idx += 1
@@ -210,7 +262,13 @@ def build_messages_from_turn_items(
     return messages
 
 
-def _tool_name_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
+def _tool_name_for_item(
+    item: CommandExecutionItem | FileChangeItem | McpToolCallItem,
+) -> str:
+    if isinstance(item, McpToolCallItem):
+        from agent.mcp.adapter import exposed_tool_name
+
+        return exposed_tool_name(item.server, item.tool)
     if isinstance(item, CommandExecutionItem):
         return "run_command"
     if item.tool_arguments and "patch" in item.tool_arguments:
@@ -220,9 +278,13 @@ def _tool_name_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
     return "write_file"
 
 
-def _tool_args_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
+def _tool_args_for_item(
+    item: CommandExecutionItem | FileChangeItem | McpToolCallItem,
+) -> str:
     import json
 
+    if isinstance(item, McpToolCallItem):
+        return json.dumps(item.arguments)
     if item.tool_arguments:
         return item.tool_arguments
     if isinstance(item, CommandExecutionItem):
@@ -230,12 +292,24 @@ def _tool_args_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
     return json.dumps({"path": item.path, "content": item.content or ""})
 
 
-def build_thread_messages(thread: Thread, current_turn_items: list[Item] | None = None) -> list[dict[str, Any]]:
-    """Build full message list: system + all completed turns + current turn."""
+def build_thread_messages(
+    thread: Thread,
+    current_turn_items: list[Item] | None = None,
+    *,
+    active_skills: list[Skill] | None = None,
+    skills_max_body: int = 4000,
+    project_rules: str = "",
+) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {
             "role": "system",
-            "content": build_system_prompt(Path(thread.cwd), thread.repo_root),
+            "content": build_system_prompt(
+                Path(thread.cwd),
+                thread.repo_root,
+                active_skills=active_skills,
+                skills_max_body=skills_max_body,
+                project_rules=project_rules,
+            ),
         }
     ]
 

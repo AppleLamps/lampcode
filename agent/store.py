@@ -112,6 +112,8 @@ class ThreadStore:
             if record.get("record_type") == "item":
                 turn_id = record["turn_id"]
                 item = parse_item(record["item"])
+                if item is None:
+                    continue
                 if turn_id not in items_by_turn:
                     items_by_turn[turn_id] = {}
                 items_by_turn[turn_id][item.id] = item

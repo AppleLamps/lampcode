@@ -65,14 +65,14 @@ class EventEmitter:
         )
 
     def tool_pending(
-        self, thread_id: str, turn_id: str, tool_name: str, arguments: dict[str, Any]
+        self, thread_id: str, turn_id: str, tool_name: str, arguments: dict[str, Any], *, source: str = "builtin"
     ) -> None:
         self.emit(
             AgentEvent(
                 "tool.pending",
                 thread_id=thread_id,
                 turn_id=turn_id,
-                data={"tool_name": tool_name, "arguments": arguments},
+                data={"tool_name": tool_name, "arguments": arguments, "source": source},
             )
         )
 
@@ -132,5 +132,60 @@ class EventEmitter:
                 "error",
                 thread_id=thread_id,
                 data={"message": message},
+            )
+        )
+
+    def mcp_server_connected(self, thread_id: str | None, server: str) -> None:
+        self.emit(
+            AgentEvent(
+                "mcp.server.connected",
+                thread_id=thread_id,
+                data={"server": server},
+            )
+        )
+
+    def mcp_server_failed(self, thread_id: str | None, server: str, error: str) -> None:
+        self.emit(
+            AgentEvent(
+                "mcp.server.failed",
+                thread_id=thread_id,
+                data={"server": server, "error": error},
+            )
+        )
+
+    def project_rules_loaded(self, thread_id: str | None, path: str, char_count: int) -> None:
+        self.emit(
+            AgentEvent(
+                "project.rules.loaded",
+                thread_id=thread_id,
+                data={"path": path, "char_count": char_count},
+            )
+        )
+
+    def skill_activation(self, thread_id: str, turn_id: str, skills: list[str]) -> None:
+        self.emit(
+            AgentEvent(
+                "skill.activation",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"skills": skills},
+            )
+        )
+
+    def tool_completed(
+        self,
+        thread_id: str,
+        turn_id: str,
+        tool_name: str,
+        status: str,
+        *,
+        source: str = "builtin",
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "tool.completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"tool_name": tool_name, "status": status, "source": source},
             )
         )

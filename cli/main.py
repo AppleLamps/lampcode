@@ -13,16 +13,25 @@ from rich.table import Table
 from agent.cancel import CancelToken, CancelledError
 from agent.config import Config, default_config_path
 from agent.events import AgentEvent, EventEmitter
-from agent.git import detect_repo_root, is_inside_git_repo
+from agent.git import detect_repo_root
+from agent.context import build_system_prompt, load_project_rules
 from agent.loop import brief_args, run_turn
+from agent.mcp.manager import McpManager
 from agent.models import Thread, new_id, utc_now_iso
+from agent.settings import load_mcp_config, load_skills_config
+from agent.skills.discovery import discover_skills
+from agent.skills.selector import select_skills
 from agent.store import ThreadStore
 
 app = typer.Typer(no_args_is_help=True, help="Codex-inspired coding agent CLI")
 threads_app = typer.Typer(help="Manage conversation threads")
 config_app = typer.Typer(help="Configuration commands")
+mcp_app = typer.Typer(help="MCP server commands")
+skills_app = typer.Typer(help="Skill discovery commands")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
+app.add_typer(mcp_app, name="mcp")
+app.add_typer(skills_app, name="skills")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -59,6 +68,10 @@ class OutputHandler:
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
         elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
             console.print("[yellow]Turn cancelled.[/yellow]")
+        elif event.type == "mcp.server.failed" and not self.quiet_tools:
+            console.print(
+                f"[yellow]MCP server failed:[/yellow] {event.data.get('server')} — {event.data.get('error')}"
+            )
 
 
 @app.command()
@@ -88,6 +101,16 @@ def run(
     ),
     quiet_tools: bool = typer.Option(
         False, "--quiet-tools", help="Hide tool action lines; show approvals + answer"
+    ),
+    session_auto_approve: bool = typer.Option(
+        False,
+        "--session-auto-approve",
+        help="Approve all shell/write/MCP actions for this thread session",
+    ),
+    show_system_prompt: bool = typer.Option(
+        False,
+        "--show-system-prompt",
+        help="Print resolved system prompt before running (debug)",
     ),
 ) -> None:
     """Run the agent on a task."""
@@ -142,6 +165,35 @@ def run(
         )
         store.create_thread(thread)
 
+    skills_cfg = load_skills_config(config.config_path)
+    active_skills = select_skills(
+        discover_skills(
+            config.cwd,
+            enable_project=skills_cfg.enable_project_skills,
+            enable_user=skills_cfg.enable_user_skills,
+        ),
+        prompt,
+        max_active=skills_cfg.max_active,
+    )
+    rules_text, _ = load_project_rules(
+        config.cwd, max_chars=skills_cfg.project_rules_max_chars
+    )
+
+    if show_system_prompt:
+        stdout_console.print(
+            build_system_prompt(
+                config.cwd,
+                thread.repo_root,
+                active_skills=active_skills,
+                skills_max_body=skills_cfg.max_body_chars,
+                project_rules=rules_text,
+            )
+        )
+        stdout_console.print("---")
+
+    if session_auto_approve and not jsonl_events:
+        console.print("[dim][approval] session auto-approve enabled[/dim]")
+
     if not jsonl_events:
         console.print(f"[dim]Thread:[/dim] {thread.id}")
         console.print(f"[dim]Model:[/dim] {config.model}")
@@ -168,6 +220,7 @@ def run(
             events=emitter,
             cancel_token=cancel_token,
             quiet_tools=quiet_tools,
+            session_auto_approve=session_auto_approve,
         )
     except CancelledError:
         if not jsonl_events:
@@ -210,19 +263,41 @@ def config_show(
 
 
 @app.command()
-def doctor() -> None:
-    """Check environment: API key, git, ripgrep, config path."""
+def doctor(
+    deep: bool = typer.Option(False, "--deep", help="Try starting configured MCP servers"),
+) -> None:
+    """Check environment: API key, git, ripgrep, node/npx, skills, config."""
     config_path = default_config_path()
-    api_key = Config.resolve().openrouter_api_key
+    cfg = Config.resolve()
+    api_key = cfg.openrouter_api_key
     git_ok = shutil.which("git") is not None
     rg_ok = shutil.which("rg") is not None
+    node_ok = shutil.which("node") is not None
+    npx_ok = shutil.which("npx") is not None
+    mcp_cfg = load_mcp_config(config_path, cfg.cwd)
+    enabled_mcp = [n for n, s in mcp_cfg.servers.items() if s.enabled]
+    skills_cfg = load_skills_config(config_path)
+    skill_count = len(
+        discover_skills(
+            cfg.cwd,
+            enable_project=skills_cfg.enable_project_skills,
+            enable_user=skills_cfg.enable_user_skills,
+        )
+    )
 
     checks = [
         ("OPENROUTER_API_KEY", "set" if api_key else "MISSING"),
         ("git", "found" if git_ok else "not found"),
         ("ripgrep (rg)", "found" if rg_ok else "not found (Python fallback)"),
+        ("node", "found" if node_ok else "not found"),
+        ("npx", "found" if npx_ok else "not found"),
         ("config file", str(config_path) if config_path.exists() else "not found"),
+        ("MCP servers enabled", str(len(enabled_mcp))),
+        ("skills discovered", str(skill_count)),
     ]
+
+    if enabled_mcp and not npx_ok:
+        checks.append(("MCP warning", "npx missing but MCP servers configured"))
 
     table = Table(title="agent doctor")
     table.add_column("Check")
@@ -231,8 +306,122 @@ def doctor() -> None:
         style = "green" if status not in ("MISSING", "not found") else "yellow"
         if name == "OPENROUTER_API_KEY" and status == "MISSING":
             style = "red"
+        if "warning" in name.lower():
+            style = "yellow"
         table.add_row(name, f"[{style}]{status}[/{style}]")
     console.print(table)
+
+    if deep and enabled_mcp:
+        console.print("[dim]Deep check: connecting MCP servers...[/dim]")
+        manager = McpManager(mcp_cfg)
+        failed: list[str] = []
+        manager.connect_all(
+            on_failed=lambda s, e: failed.append(f"{s}: {e}"),
+        )
+        console.print(f"MCP tools discovered: {len(manager.tool_map)}")
+        if failed:
+            console.print(f"[yellow]Failures:[/yellow] {', '.join(failed)}")
+        manager.disconnect_all()
+
+
+@mcp_app.command("list")
+def mcp_list(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """Show configured MCP servers."""
+    cfg = Config.resolve(cwd=cwd)
+    mcp_cfg = load_mcp_config(cfg.config_path, cfg.cwd)
+    if not mcp_cfg.servers:
+        console.print("No MCP servers configured.")
+        return
+    table = Table(title="MCP Servers")
+    table.add_column("Name")
+    table.add_column("Enabled")
+    table.add_column("Command")
+    table.add_column("Require approval")
+    for name, srv in mcp_cfg.servers.items():
+        table.add_row(
+            name,
+            "yes" if srv.enabled else "no",
+            f"{srv.command} {' '.join(srv.args)}".strip(),
+            "yes" if srv.require_approval else "no",
+        )
+    console.print(table)
+
+
+@mcp_app.command("tools")
+def mcp_tools(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """Connect to MCP servers and list discovered tools."""
+    cfg = Config.resolve(cwd=cwd)
+    mcp_cfg = load_mcp_config(cfg.config_path, cfg.cwd)
+    manager = McpManager(mcp_cfg)
+    try:
+        manager.connect_all(
+            on_failed=lambda s, e: console.print(f"[yellow]{s} failed:[/yellow] {e}"),
+        )
+    except Exception as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if not manager.tool_map:
+        console.print("No MCP tools discovered.")
+    else:
+        table = Table(title="MCP Tools")
+        table.add_column("Exposed name")
+        table.add_column("Server")
+        table.add_column("Tool")
+        for ref in manager.tool_map.values():
+            table.add_row(ref.exposed_name, ref.server, ref.tool)
+        console.print(table)
+    manager.disconnect_all()
+
+
+@skills_app.command("list")
+def skills_list(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """Discover and list available skills."""
+    cfg = Config.resolve(cwd=cwd)
+    skills_cfg = load_skills_config(cfg.config_path)
+    skills = discover_skills(
+        cfg.cwd,
+        enable_project=skills_cfg.enable_project_skills,
+        enable_user=skills_cfg.enable_user_skills,
+    )
+    if not skills:
+        console.print("No skills found.")
+        return
+    table = Table(title="Skills")
+    table.add_column("Name")
+    table.add_column("Source")
+    table.add_column("Description")
+    for skill in skills:
+        table.add_row(skill.name, skill.source, skill.description[:80])
+    console.print(table)
+
+
+@skills_app.command("show")
+def skills_show(
+    name: str = typer.Argument(..., help="Skill name"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """Show a skill's SKILL.md body."""
+    cfg = Config.resolve(cwd=cwd)
+    skills_cfg = load_skills_config(cfg.config_path)
+    skills = discover_skills(
+        cfg.cwd,
+        enable_project=skills_cfg.enable_project_skills,
+        enable_user=skills_cfg.enable_user_skills,
+    )
+    match = next((s for s in skills if s.name == name), None)
+    if not match:
+        console.print(f"[red]Skill not found:[/red] {name}")
+        raise typer.Exit(1)
+    stdout_console.print(f"# {match.name}\n")
+    stdout_console.print(f"*{match.description}*\n")
+    stdout_console.print(match.body)
 
 
 @threads_app.command("list")
@@ -300,6 +489,14 @@ def threads_show(
                     console.print(item.diff_snippet[:300])
             elif item.type == "contextCompaction":
                 console.print("[dim]Context compaction checkpoint[/dim]")
+            elif item.type == "skillActivation":
+                console.print(f"[dim]Skills activated:[/dim] {', '.join(item.skills)}")
+            elif item.type == "mcpToolCall":
+                console.print(
+                    f"[yellow]MCP[/yellow] ({item.status}) {item.server}.{item.tool}"
+                )
+                if item.output:
+                    console.print(item.output[:500])
         console.print()
 
 

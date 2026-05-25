@@ -66,6 +66,27 @@ class ContextCompactionItem(BaseModel):
     summarized_items: int | None = None
 
 
+class SkillActivationItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["skillActivation"] = "skillActivation"
+    skills: list[str] = Field(default_factory=list)
+
+
+class McpToolCallItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["mcpToolCall"] = "mcpToolCall"
+    server: str
+    tool: str
+    arguments: dict[str, Any] = Field(default_factory=dict)
+    status: Literal[
+        "pending", "approved", "denied", "running", "completed", "failed"
+    ] = "pending"
+    output: str | None = None
+    error: str | None = None
+    duration_ms: int | None = None
+    tool_call_id: str | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -73,6 +94,8 @@ Item = Annotated[
         CommandExecutionItem,
         FileChangeItem,
         ContextCompactionItem,
+        SkillActivationItem,
+        McpToolCallItem,
     ],
     Field(discriminator="type"),
 ]
@@ -108,7 +131,7 @@ class Thread(BaseModel):
         return "(no messages)"
 
 
-def parse_item(data: dict[str, Any]) -> Item:
+def parse_item(data: dict[str, Any]) -> Item | None:
     item_type = data.get("type")
     mapping = {
         "userMessage": UserMessageItem,
@@ -116,8 +139,10 @@ def parse_item(data: dict[str, Any]) -> Item:
         "commandExecution": CommandExecutionItem,
         "fileChange": FileChangeItem,
         "contextCompaction": ContextCompactionItem,
+        "skillActivation": SkillActivationItem,
+        "mcpToolCall": McpToolCallItem,
     }
     cls = mapping.get(item_type)
     if cls is None:
-        raise ValueError(f"Unknown item type: {item_type}")
+        return None
     return cls.model_validate(data)

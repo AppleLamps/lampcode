@@ -6,6 +6,8 @@ from typing import Any
 
 from rich.console import Console
 
+from agent.session import HarnessSession
+
 console = Console()
 
 READ_COMMANDS = re.compile(
@@ -46,25 +48,39 @@ def prompt_approval(
     *,
     auto_approve: bool = False,
     turn_state: TurnApprovalState | None = None,
+    session: HarnessSession | None = None,
 ) -> bool:
-    if auto_approve or (turn_state and turn_state.approve_all):
+    if auto_approve:
+        return True
+    if session and session.session_auto_approve:
+        return True
+    if turn_state and turn_state.approve_all:
         return True
 
     summary = format_tool_summary(tool_name, arguments)
     console.print(f"[yellow][approval][/yellow] {summary}")
-    console.print("[dim]Allow? [y/N/a=all for turn][/dim]", end=" ")
+    console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
 
     try:
-        response = input().strip().lower()
+        response = input().strip()
     except (EOFError, KeyboardInterrupt):
         console.print()
         return False
 
-    if response in ("a", "all"):
+    if response == "A":
+        if session:
+            session.enable_session_auto_approve()
+            if not session.session_banner_shown:
+                console.print("[dim][approval] session auto-approve enabled[/dim]")
+                session.session_banner_shown = True
+        return True
+
+    lower = response.lower()
+    if lower in ("a", "all"):
         if turn_state:
             turn_state.approve_all = True
         return True
-    return response in ("y", "yes")
+    return lower in ("y", "yes")
 
 
 def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
@@ -89,6 +105,9 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
         if files:
             return f"apply_patch: {', '.join(files)}"
         return "apply_patch: (see patch content)"
+
+    if tool_name.startswith("mcp__"):
+        return f"MCP tool {tool_name}: {arguments}"
 
     if tool_name == "read_file":
         return f"read_file: {arguments.get('path', '')}"

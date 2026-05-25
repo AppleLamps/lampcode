@@ -1,12 +1,12 @@
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.config import Config
-from agent.models import CommandExecutionItem, FileChangeItem
+from agent.mcp.manager import McpManager
+from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem
 from tools.files import read_file, write_file
 from tools.patch import apply_patch
 from tools.search import search_repo
@@ -26,17 +26,46 @@ class DispatchResult:
     text: str
     command_item: CommandExecutionItem | None = None
     file_items: list[FileChangeItem] = field(default_factory=list)
+    mcp_item: McpToolCallItem | None = None
 
 
-def get_tool_schemas() -> list[dict[str, Any]]:
-    return [spec.schema for spec in TOOL_REGISTRY.values()]
+def get_tool_schemas(mcp_manager: McpManager | None = None) -> list[dict[str, Any]]:
+    schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
+    if mcp_manager:
+        schemas.extend(mcp_manager.get_tool_schemas())
+    return schemas
+
+
+def tool_requires_approval(
+    name: str, mcp_manager: McpManager | None = None
+) -> bool:
+    if mcp_manager and mcp_manager.is_mcp_tool(name):
+        return mcp_manager.requires_approval(name)
+    spec = TOOL_REGISTRY.get(name)
+    return spec.requires_approval if spec else False
 
 
 def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
     config: Config,
+    mcp_manager: McpManager | None = None,
 ) -> DispatchResult:
+    if mcp_manager and mcp_manager.is_mcp_tool(name):
+        output, exit_code, error = mcp_manager.call_tool(
+            name, arguments, max_output=config.max_tool_output
+        )
+        ref = mcp_manager.tool_map.get(name)
+        item = McpToolCallItem(
+            server=ref.server if ref else "unknown",
+            tool=ref.tool if ref else name,
+            arguments=arguments,
+            status="completed" if exit_code == 0 else "failed",
+            output=output,
+            error=error,
+        )
+        return DispatchResult(text=output, mcp_item=item)
+
     if name not in TOOL_REGISTRY:
         return DispatchResult(text=f"Unknown tool: {name}")
 
@@ -75,7 +104,8 @@ def dispatch_tool(
         patch_text = arguments.get("patch", "")
         outcome = apply_patch(config.cwd, patch_text)
         if not outcome.ok:
-            return DispatchResult(text=f"Patch failed: {outcome.error}")
+            hint = " Use read_file to inspect the file, then retry with a corrected patch."
+            return DispatchResult(text=f"Patch failed: {outcome.error}{hint}")
         file_items: list[FileChangeItem] = []
         lines: list[str] = []
         for pr in outcome.results:
@@ -184,8 +214,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                         "patch": {
                             "type": "string",
                             "description": (
-                                "Patch text using *** Begin Patch / *** End Patch format "
-                                "with *** Update File, *** Add File, *** Delete File sections."
+                                "Patch text using *** Begin Patch / *** End Patch format."
                             ),
                         },
                     },

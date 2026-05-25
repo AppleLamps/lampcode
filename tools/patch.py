@@ -46,7 +46,7 @@ def apply_patch(cwd: Path, patch_text: str, *, max_snippet: int = 500) -> ApplyP
 @dataclass
 class _UpdateOp:
     path: str
-    hunks: list[list[tuple[str, str | None]]]  # (prefix, line) prefix is '-' '+' or ' '
+    hunks: list[list[tuple[str, str | None]]]
 
 
 @dataclass
@@ -68,7 +68,6 @@ def parse_patch(patch_text: str) -> list[_UpdateOp | _AddOp | _DeleteOp]:
         raise ValueError("Patch must end with '*** End Patch'")
 
     lines = text.splitlines()
-    # Strip begin/end markers
     start = next(i for i, ln in enumerate(lines) if ln.strip() == "*** Begin Patch")
     end = next(i for i, ln in enumerate(lines) if ln.strip() == "*** End Patch")
     body = lines[start + 1 : end]
@@ -97,7 +96,9 @@ def parse_patch(patch_text: str) -> list[_UpdateOp | _AddOp | _DeleteOp]:
                 elif hline.startswith(" "):
                     current_hunk.append((" ", hline[1:]))
                 else:
-                    raise ValueError(f"Malformed hunk line in update for {path}: {hline!r}")
+                    raise ValueError(
+                        f"Malformed hunk line in update for {path} at body line {i + 1}: {hline!r}"
+                    )
                 i += 1
             if current_hunk:
                 hunks.append(current_hunk)
@@ -113,7 +114,9 @@ def parse_patch(patch_text: str) -> list[_UpdateOp | _AddOp | _DeleteOp]:
             while i < len(body) and not body[i].strip().startswith("***"):
                 hline = body[i]
                 if not hline.startswith("+"):
-                    raise ValueError(f"Add file lines must start with '+': {hline!r}")
+                    raise ValueError(
+                        f"Add file line must start with '+' in {path}: {hline!r}"
+                    )
                 add_lines.append(hline[1:])
                 i += 1
             operations.append(_AddOp(path=path, lines=add_lines))
@@ -160,56 +163,143 @@ def _apply_operation(
             diff_snippet=f"--- {op.path} (deleted)",
         )
 
-    # Update
     resolved = resolve_path_within_cwd(cwd, op.path)
     if not resolved.is_file():
-        raise ValueError(f"Cannot update missing file: {op.path}")
+        raise ValueError(
+            f"Cannot update missing file: {op.path}. Use read_file to verify the path."
+        )
 
     file_lines = resolved.read_text(encoding="utf-8").splitlines()
     changes = 0
     diff_lines: list[str] = []
 
-    for hunk in op.hunks:
-        i = 0
-        while i < len(hunk):
-            prefix, content = hunk[i]
-            if prefix == "-":
-                old_line = content or ""
-                new_line: str | None = None
-                if i + 1 < len(hunk) and hunk[i + 1][0] == "+":
-                    new_line = hunk[i + 1][1] or ""
-                    i += 1
-                replaced = False
-                for idx, existing in enumerate(file_lines):
-                    if existing == old_line:
-                        diff_lines.append(f"-{old_line}")
-                        if new_line is not None:
-                            file_lines[idx] = new_line
-                            diff_lines.append(f"+{new_line}")
-                            changes += 1
-                        else:
-                            file_lines.pop(idx)
-                            changes += 1
-                        replaced = True
-                        break
-                if not replaced:
-                    raise ValueError(
-                        f"Could not find line to replace in {op.path}: {old_line!r}"
-                    )
-            elif prefix == "+":
-                # standalone addition at end
-                file_lines.append(content or "")
-                diff_lines.append(f"+{content}")
-                changes += 1
-            i += 1
+    for hunk_idx, hunk in enumerate(op.hunks, start=1):
+        file_lines, hunk_changes, hunk_diff = _apply_hunk(
+            file_lines, op.path, hunk_idx, hunk
+        )
+        changes += hunk_changes
+        diff_lines.extend(hunk_diff)
 
-    resolved.write_text("\n".join(file_lines) + ("\n" if file_lines else ""), encoding="utf-8")
+    resolved.write_text(
+        "\n".join(file_lines) + ("\n" if file_lines else ""), encoding="utf-8"
+    )
     return PatchResult(
         path=op.path,
         change_type="update",
         summary=f"updated {changes} line(s) in {op.path}",
         diff_snippet=_truncate("\n".join(diff_lines), max_snippet),
     )
+
+
+def _apply_hunk(
+    file_lines: list[str],
+    path: str,
+    hunk_idx: int,
+    hunk: list[tuple[str, str | None]],
+) -> tuple[list[str], int, list[str]]:
+    """Apply a single hunk using context lines; returns updated lines."""
+    pos = _find_hunk_position(file_lines, path, hunk_idx, hunk)
+    changes = 0
+    diff_lines: list[str] = []
+    i = 0
+    while i < len(hunk):
+        prefix, content = hunk[i]
+        line_no = pos + 1
+
+        if prefix == " ":
+            if pos >= len(file_lines) or file_lines[pos] != (content or ""):
+                raise ValueError(
+                    f"Context mismatch in {path} hunk {hunk_idx} at line {line_no}: "
+                    f"expected {content!r}, got {file_lines[pos] if pos < len(file_lines) else '<eof>'!r}"
+                )
+            pos += 1
+            i += 1
+            continue
+
+        if prefix == "-":
+            old_line = content or ""
+            new_line: str | None = None
+            if i + 1 < len(hunk) and hunk[i + 1][0] == "+":
+                new_line = hunk[i + 1][1] or ""
+                i += 1
+            if pos >= len(file_lines) or file_lines[pos] != old_line:
+                raise ValueError(
+                    f"Could not apply hunk {hunk_idx} in {path} at line {line_no}: "
+                    f"expected to remove {old_line!r}, found {file_lines[pos] if pos < len(file_lines) else '<eof>'!r}. "
+                    f"Use read_file then retry."
+                )
+            diff_lines.append(f"-{old_line}")
+            if new_line is not None:
+                file_lines[pos] = new_line
+                diff_lines.append(f"+{new_line}")
+            else:
+                file_lines.pop(pos)
+                pos -= 1
+            changes += 1
+            pos += 1
+            i += 1
+            continue
+
+        if prefix == "+":
+            new_line = content or ""
+            file_lines.insert(pos, new_line)
+            diff_lines.append(f"+{new_line}")
+            changes += 1
+            pos += 1
+            i += 1
+            continue
+
+        i += 1
+
+    return file_lines, changes, diff_lines
+
+
+def _find_hunk_position(
+    file_lines: list[str],
+    path: str,
+    hunk_idx: int,
+    hunk: list[tuple[str, str | None]],
+) -> int:
+    """Find starting line index for hunk using first removable/context line."""
+    anchors: list[str] = []
+    for prefix, content in hunk:
+        if prefix in ("-", " "):
+            anchors.append(content or "")
+
+    if not anchors:
+        return len(file_lines)
+
+    first = anchors[0]
+    candidates = [i for i, ln in enumerate(file_lines) if ln == first]
+    if not candidates:
+        raise ValueError(
+            f"Could not locate hunk {hunk_idx} in {path}: anchor line {first!r} not found. "
+            f"Use read_file then retry."
+        )
+
+    for start in candidates:
+        if _hunk_matches_at(file_lines, start, hunk):
+            return start
+
+    raise ValueError(
+        f"Could not match hunk {hunk_idx} context in {path} near line {candidates[0] + 1}. "
+        f"Use read_file then retry."
+    )
+
+
+def _hunk_matches_at(
+    file_lines: list[str], start: int, hunk: list[tuple[str, str | None]]
+) -> bool:
+    pos = start
+    for prefix, content in hunk:
+        if prefix == "+":
+            continue
+        if pos >= len(file_lines):
+            return False
+        if file_lines[pos] != (content or ""):
+            return False
+        pos += 1
+    return True
 
 
 def _truncate(text: str, max_len: int) -> str:
