@@ -1,0 +1,23 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-cli.local/schemas/run.bundle.v1.json",
+  "title": "agent-cli run bundle manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "agent_version",
+    "thread_id",
+    "turn_id",
+    "exported_at"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "v1" },
+    "agent_version": { "type": "string" },
+    "thread_id": { "type": "string" },
+    "turn_id": { "type": "string" },
+    "model": { "type": ["string", "null"] },
+    "cost": { "type": ["number", "null"] },
+    "exported_at": { "type": "string" }
+  },
+  "additionalProperties": false
+}

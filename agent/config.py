@@ -460,5 +460,16 @@ class Config:
             "openrouter_api_key_set": bool(self.openrouter_api_key),
         }
 
+    def to_redacted_dict(self) -> dict[str, Any]:
+        data = dict(self.to_display_dict())
+        data["web_search_provider"] = self.web_search.provider
+        data["web_search_api_key_set"] = bool(
+            self.web_search.api_key
+            or (self.web_search.api_key_env and os.environ.get(self.web_search.api_key_env))
+        )
+        data["exec_policy_allow_prefixes"] = len(self.exec_policy.allow_prefixes)
+        data["shell_backend"] = self.shell.backend
+        return data
+
     def to_json(self) -> str:
         return json.dumps(self.to_display_dict(), indent=2)
