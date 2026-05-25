@@ -269,7 +269,7 @@ Commands from `run_command` can run on the host (`local`, default) or inside Doc
 
 ```toml
 [execution]
-backend = "local"          # local | docker
+backend = "local"          # local | docker | ssh
 default_image = "python:3.12-slim"
 workspace_mount = "/workspace"
 network = "none"           # none | bridge (bridge needs approval first use)
@@ -332,16 +332,108 @@ agent serve --host 127.0.0.1 --port 8765
 
 Binding to `0.0.0.0` prints a warning — localhost only by default.
 
+## Phase 7 — SSH remote backend + multi-agent v2
+
+### SSH execution backend
+
+Run `run_command` on a remote host via OpenSSH (`ssh.exe` on Windows).
+
+```toml
+[execution]
+backend = "ssh"
+
+[execution.ssh]
+host = "devbox.local"
+user = "ubuntu"
+port = 22
+identity_file = "~/.ssh/id_ed25519"
+known_hosts = "~/.ssh/known_hosts"
+remote_workspace = "/home/ubuntu/workspace"
+connect_timeout_sec = 15
+command_timeout_sec = 120
+strict_host_key_checking = true
+
+# [execution.ssh.jump]
+# host = "bastion.example.com"
+# user = "jumpuser"
+```
+
+Env overrides: `AGENT_SSH_HOST`, `AGENT_SSH_USER`, `AGENT_SSH_IDENTITY_FILE`.
+
+**v1 limitation:** no automatic workspace sync — ensure `remote_workspace` already contains your repo (rsync planned for Phase 8).
+
+```powershell
+agent run "pytest -q" `
+  --execution-backend ssh `
+  --ssh-host devbox.local `
+  --ssh-user ubuntu `
+  --cwd e:\lampcode\agent-cli\examples\demo-project
+
+agent execution test --backend ssh --cmd "uname -a"
+agent execution test --backend local --cmd "echo ok"
+agent doctor --deep   # checks ssh binary + config completeness
+```
+
+First SSH command per thread requires approval unless `--session-auto-approve`. `commandExecution` items record `backend=ssh`, `remote_host`, `remote_user`.
+
+### Multi-agent orchestration v2
+
+Supervisor tools when `--multi-agent` or `[multi_agent] enabled = true`:
+
+| Tool | Purpose |
+|------|---------|
+| `spawn_worker` | Queue async worker (returns `worker_id`) |
+| `wait_workers` | Block until workers complete; JSON summaries |
+| `list_workers` | Pending/running/completed workers this turn |
+
+```toml
+[multi_agent]
+enabled = true
+max_workers_per_turn = 5
+max_worker_depth = 2
+max_concurrent_workers = 3
+worker_auto_approve = false
+inherit_execution_backend = true
+wait_timeout_sec = 600
+allow_worker_spawn = true
+```
+
+```powershell
+agent run "Split refactor and tests across workers, then wait" `
+  --multi-agent `
+  --cwd e:\lampcode\agent-cli\examples\demo-project
+```
+
+Workers persist as `collabWorker` items with `worker_id`, `depth`, and status (`queued|running|completed|failed|timed_out`).
+
+### Docker file tools (opt-in)
+
+When `execution.backend=docker` and file tools opt-in is enabled, `write_file` / `apply_patch` write through the mounted workspace (visible inside the container):
+
+```toml
+[execution.docker]
+file_tools_in_container = true
+```
+
+### Export & serve (HTML)
+
+```powershell
+agent threads export abc123 --format html --out thread.html
+agent serve --port 8765
+# http://127.0.0.1:8765/          HTML thread list
+# http://127.0.0.1:8765/threads/{id}.html
+```
+
 ## Tests
 
 ```powershell
-pytest   # 165+ tests
+pytest   # 190+ tests
 ```
 
 ## Phase 5 migration
 
 New optional sections: `[recording]`, `[isolation]`, `[web_search]`. Defaults preserve prior behavior (recording on, isolation auto when sandbox restricted, web search off). New item type `webSearch`, events `isolation.applied`. Install `[tui]` extra for `agent tui`.
 
-## Phase 7 (planned, not implemented)
+## Phase 8 (planned, not implemented)
 
-Kernel sandbox (AppContainer/bubblewrap/Seatbelt), SSH remote execution backend, recursive worker swarms, skill marketplace, full editable web UI.
+Automatic rsync/scp workspace sync for SSH, kernel sandbox (AppContainer/bubblewrap/Seatbelt), skill marketplace, full web UI with turn control and auth, autonomous long-running swarms.

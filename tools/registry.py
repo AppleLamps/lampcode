@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.config import Config
+from agent.execution.docker_files import docker_file_tools_enabled
 from agent.mcp.manager import McpManager
 from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem, WebSearchItem
 from tools.files import read_file, write_file
@@ -31,6 +32,7 @@ class DispatchResult:
     web_search_item: WebSearchItem | None = None
     isolation_meta: dict | None = None  # legacy alias
     execution_meta: dict | None = None
+    file_tool_meta: dict | None = None
 
 
 def get_tool_schemas(
@@ -43,9 +45,9 @@ def get_tool_schemas(
     if config and config.web_search.enabled:
         schemas.append(WEB_SEARCH_SCHEMA)
     if config and config.multi_agent.enabled and allow_spawn:
-        from agent.multi_agent.spawn import SPAWN_WORKER_SCHEMA
+        from agent.multi_agent.tools import MULTI_AGENT_TOOL_SCHEMAS
 
-        schemas.append(SPAWN_WORKER_SCHEMA)
+        schemas.extend(MULTI_AGENT_TOOL_SCHEMAS)
     if mcp_manager:
         schemas.extend(mcp_manager.get_tool_schemas())
     return schemas
@@ -56,6 +58,8 @@ def tool_requires_approval(
 ) -> bool:
     if name == "spawn_worker":
         return True
+    if name in ("wait_workers", "list_workers"):
+        return False
     if name == "web_search":
         return True
     if mcp_manager and mcp_manager.is_mcp_tool(name):
@@ -127,10 +131,12 @@ def dispatch_tool(
         item.status = "completed" if exit_code == 0 else "failed"
         if exec_meta:
             backend = exec_meta.get("backend")
-            if backend in ("local", "docker"):
+            if backend in ("local", "docker", "ssh"):
                 item.backend = backend
             item.container_id = exec_meta.get("container_id")
             item.image = exec_meta.get("image")
+            item.remote_host = exec_meta.get("remote_host")
+            item.remote_user = exec_meta.get("remote_user")
         return DispatchResult(
             text=output,
             command_item=item,
@@ -142,15 +148,31 @@ def dispatch_tool(
         path = arguments.get("path", "")
         content = arguments.get("content", "")
         item = FileChangeItem(path=path, status="pending", change_type="overwrite")
-        result = write_file(config.cwd, path, content)
+        file_tool_meta = None
+        if docker_file_tools_enabled(config):
+            from agent.execution.docker_files import docker_write_file
+
+            result, file_tool_meta = docker_write_file(config.cwd, path, content, config)
+            file_tool_meta["tool_name"] = "write_file"
+        else:
+            result = write_file(config.cwd, path, content)
         item.status = "completed" if result.startswith("Successfully") else "failed"
         item.summary = result
         item.content = content
-        return DispatchResult(text=result, file_items=[item])
+        return DispatchResult(
+            text=result, file_items=[item], file_tool_meta=file_tool_meta
+        )
 
     if name == "apply_patch":
         patch_text = arguments.get("patch", "")
-        outcome = apply_patch(config.cwd, patch_text)
+        file_tool_meta = None
+        if docker_file_tools_enabled(config):
+            from agent.execution.docker_files import docker_apply_patch
+
+            outcome, file_tool_meta = docker_apply_patch(config.cwd, patch_text, config)
+            file_tool_meta["tool_name"] = "apply_patch"
+        else:
+            outcome = apply_patch(config.cwd, patch_text)
         if not outcome.ok:
             hint = " Use read_file to inspect the file, then retry with a corrected patch."
             return DispatchResult(text=f"Patch failed: {outcome.error}{hint}")
@@ -166,7 +188,7 @@ def dispatch_tool(
             )
             file_items.append(item)
             lines.append(f"{pr.path}: {pr.summary}")
-        return DispatchResult(text="\n".join(lines), file_items=file_items)
+        return DispatchResult(text="\n".join(lines), file_items=file_items, file_tool_meta=file_tool_meta)
 
     if name == "read_file":
         result = read_file(

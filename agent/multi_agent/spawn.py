@@ -8,6 +8,8 @@ from agent.models import AgentMessageItem, CollabSpawnItem, Thread
 from agent.settings import MultiAgentSettings
 from agent.store import ThreadStore
 
+from agent.multi_agent.tools import SPAWN_WORKER_SCHEMA
+
 MAX_WORKER_SUMMARY = 4000
 
 
@@ -90,12 +92,18 @@ def _worker_config(
     *,
     model: str,
     execution_backend: str | None,
+    depth: int = 1,
 ) -> Config:
     execution = config.execution
     if execution_backend and config.multi_agent.inherit_execution_backend:
         execution = replace(execution, backend=execution_backend)
     elif not config.multi_agent.inherit_execution_backend:
         execution = replace(execution, backend="local")
+
+    worker_ma_enabled = (
+        config.multi_agent.allow_worker_spawn
+        and depth < config.multi_agent.max_worker_depth
+    )
 
     return Config(
         cwd=config.cwd,
@@ -115,7 +123,16 @@ def _worker_config(
         isolation=config.isolation,
         web_search=config.web_search,
         execution=execution,
-        multi_agent=MultiAgentSettings(enabled=False),
+        multi_agent=MultiAgentSettings(
+            enabled=worker_ma_enabled,
+            max_workers_per_turn=config.multi_agent.max_workers_per_turn,
+            max_worker_depth=config.multi_agent.max_worker_depth,
+            max_concurrent_workers=config.multi_agent.max_concurrent_workers,
+            worker_auto_approve=config.multi_agent.worker_auto_approve,
+            inherit_execution_backend=config.multi_agent.inherit_execution_backend,
+            wait_timeout_sec=config.multi_agent.wait_timeout_sec,
+            allow_worker_spawn=config.multi_agent.allow_worker_spawn,
+        ),
         openrouter_api_key=config.openrouter_api_key,
         openrouter_base_url=config.openrouter_base_url,
         config_path=config.config_path,
@@ -140,27 +157,4 @@ def _extract_worker_summary(worker_thread: Thread, turn) -> str:
     return ""
 
 
-SPAWN_WORKER_SCHEMA = {
-    "type": "function",
-    "function": {
-        "name": "spawn_worker",
-        "description": (
-            "Delegate a subtask to a worker agent (forked thread, one turn). "
-            "Returns the worker's final summary."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "task": {"type": "string", "description": "Subtask prompt for the worker."},
-                "title": {"type": "string", "description": "Optional worker thread title."},
-                "model": {"type": "string", "description": "Optional model override."},
-                "execution_backend": {
-                    "type": "string",
-                    "enum": ["local", "docker"],
-                    "description": "Optional execution backend for worker shell commands.",
-                },
-            },
-            "required": ["task"],
-        },
-    },
-}
+__all__ = ["spawn_worker", "SPAWN_WORKER_SCHEMA", "_extract_worker_summary", "_worker_config"]

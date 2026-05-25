@@ -45,9 +45,11 @@ class CommandExecutionItem(BaseModel):
     duration_ms: int | None = None
     tool_call_id: str | None = None
     tool_arguments: str | None = None
-    backend: Literal["local", "docker"] | None = None
+    backend: Literal["local", "docker", "ssh"] | None = None
     container_id: str | None = None
     image: str | None = None
+    remote_host: str | None = None
+    remote_user: str | None = None
 
 
 class FileChangeItem(BaseModel):
@@ -121,6 +123,23 @@ class CollabSpawnItem(BaseModel):
     tool_arguments: str | None = None
 
 
+class CollabWorkerItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["collabWorker"] = "collabWorker"
+    worker_id: str
+    worker_thread_id: str
+    parent_thread_id: str
+    task: str
+    depth: int = 0
+    status: Literal["queued", "running", "completed", "failed", "timed_out"] = "queued"
+    summary: str | None = None
+    title: str | None = None
+    model: str | None = None
+    execution_backend: str | None = None
+    tool_call_id: str | None = None
+    tool_arguments: str | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -132,6 +151,7 @@ Item = Annotated[
         McpToolCallItem,
         WebSearchItem,
         CollabSpawnItem,
+        CollabWorkerItem,
     ],
     Field(discriminator="type"),
 ]
@@ -187,6 +207,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
         "mcpToolCall": McpToolCallItem,
         "webSearch": WebSearchItem,
         "collabSpawn": CollabSpawnItem,
+        "collabWorker": CollabWorkerItem,
     }
     cls = mapping.get(item_type)
     if cls is None:

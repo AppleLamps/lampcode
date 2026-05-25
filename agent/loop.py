@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from typing import Callable
 
 from agent.cancel import CancelToken, CancelledError
@@ -11,6 +12,7 @@ from agent.mcp.manager import McpManager
 from agent.models import (
     AgentMessageItem,
     CollabSpawnItem,
+    CollabWorkerItem,
     CommandExecutionItem,
     FileChangeItem,
     McpToolCallItem,
@@ -20,7 +22,7 @@ from agent.models import (
     UserMessageItem,
     WebSearchItem,
 )
-from agent.multi_agent.spawn import spawn_worker
+from agent.multi_agent.registry import WorkerRegistry
 from agent.execution.factory import backend_display
 from agent.session import HarnessSession
 from agent.settings import load_mcp_config, load_skills_config
@@ -49,7 +51,14 @@ from tools.registry import (
     tool_requires_approval,
 )
 
-TrackingItem = CommandExecutionItem | FileChangeItem | McpToolCallItem | WebSearchItem | CollabSpawnItem
+TrackingItem = (
+    CommandExecutionItem
+    | FileChangeItem
+    | McpToolCallItem
+    | WebSearchItem
+    | CollabSpawnItem
+    | CollabWorkerItem
+)
 
 
 def run_turn(
@@ -64,6 +73,8 @@ def run_turn(
     quiet_tools: bool = False,
     harness_session: HarnessSession | None = None,
     session_auto_approve: bool = False,
+    worker_registry: WorkerRegistry | None = None,
+    worker_depth: int = 0,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -127,6 +138,16 @@ def run_turn(
     )
 
     try:
+        registry = worker_registry
+        if registry is None and config.multi_agent.enabled:
+            registry = WorkerRegistry(
+                config,
+                store,
+                emitter=emitter,
+                parent_thread=thread,
+                turn_id=turn.id,
+                depth=worker_depth,
+            )
         return _run_loop(
             thread=thread,
             turn=turn,
@@ -145,6 +166,8 @@ def run_turn(
             active_skills=active_skills,
             skills_max_body=skills_cfg.max_body_chars,
             project_rules=rules_text,
+            worker_registry=registry,
+            worker_depth=worker_depth,
         )
     except CancelledError:
         _finalize_cancelled(thread, turn, store, emitter)
@@ -175,9 +198,12 @@ def _run_loop(
     active_skills: list,
     skills_max_body: int,
     project_rules: str,
+    worker_registry: WorkerRegistry | None = None,
+    worker_depth: int = 0,
 ) -> Turn:
     spawn_count = 0
     backend_announced = False
+    registry = worker_registry
     for _round in range(config.max_rounds):
         cancel.check()
 
@@ -256,7 +282,7 @@ def _run_loop(
             )
 
             tracking_items = _create_tracking_items(
-                tool_name, arguments, config, tool_call_id, raw_args, mcp_manager
+                tool_name, arguments, config, tool_call_id, raw_args, mcp_manager, thread.id
             )
             for item in tracking_items:
                 turn.items.append(item)
@@ -317,6 +343,148 @@ def _run_loop(
             elif requires_approval:
                 _mark_approved(tracking_items)
 
+            if tool_name == "run_command" and config.execution.backend == "ssh":
+                session.ssh_command_approved = True
+
+            cancel.check()
+
+            if tool_name == "spawn_worker":
+                if not registry:
+                    result_text = "spawn_worker requires multi_agent.enabled or --multi-agent"
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }
+                    )
+                    continue
+                elif spawn_count >= config.multi_agent.max_workers_per_turn:
+                    result_text = (
+                        f"Worker spawn limit reached "
+                        f"({config.multi_agent.max_workers_per_turn} per turn)."
+                    )
+                    for item in tracking_items:
+                        if isinstance(item, (CollabSpawnItem, CollabWorkerItem)):
+                            item.status = "failed"
+                            if hasattr(item, "summary"):
+                                item.summary = result_text
+                        store.append_item(thread, turn.id, item)
+                        emitter.item_completed(
+                            thread.id, turn.id, item.type, item.id, "failed"
+                        )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }
+                    )
+                    continue
+                else:
+                    spawn_count += 1
+                    collab_item_in = (
+                        tracking_items[0]
+                        if tracking_items
+                        and isinstance(tracking_items[0], CollabWorkerItem)
+                        else None
+                    )
+                    result_text, collab_item = registry.enqueue(
+                        thread,
+                        arguments,
+                        depth=worker_depth,
+                        turn_id=turn.id,
+                        item=collab_item_in,
+                    )
+                    if tracking_items and isinstance(
+                        tracking_items[0], CollabWorkerItem
+                    ):
+                        item = tracking_items[0]
+                        item.worker_id = collab_item.worker_id
+                        item.worker_thread_id = collab_item.worker_thread_id
+                        item.status = collab_item.status
+                        item.summary = collab_item.summary
+                        store.append_item(thread, turn.id, item)
+                        emitter.item_completed(
+                            thread.id, turn.id, item.type, item.id, item.status
+                        )
+                    emitter.tool_completed(
+                        thread.id,
+                        turn.id,
+                        tool_name,
+                        collab_item.status,
+                        source=source,
+                    )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }
+                    )
+                    continue
+
+            if tool_name == "wait_workers":
+                if not registry:
+                    result_text = "No worker registry available."
+                else:
+                    result_text = registry.wait_workers(
+                        arguments.get("worker_ids"),
+                        timeout_sec=arguments.get("timeout_sec"),
+                    )
+                    _sync_worker_items(thread, turn, registry, store)
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "completed", source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
+                continue
+
+            if tool_name == "list_workers":
+                result_text = (
+                    registry.list_workers()
+                    if registry
+                    else json.dumps({"workers": []})
+                )
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "completed", source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
+                continue
+
+            if tool_name == "run_command" and not backend_announced:
+                backend_announced = True
+                img = (
+                    config.execution.docker_image_override
+                    or config.execution.default_image
+                )
+                emitter.execution_backend_selected(
+                    thread.id,
+                    turn.id,
+                    backend=config.execution.backend,
+                    image=img if config.execution.backend == "docker" else None,
+                )
+                if config.execution.backend == "ssh":
+                    ssh = config.execution.ssh
+                    emitter.execution_ssh_connected(
+                        thread.id,
+                        turn.id,
+                        host=ssh.host,
+                        user=ssh.user,
+                        remote_workspace=ssh.remote_workspace,
+                    )
+
             cancel.check()
 
             if tool_name == "spawn_worker":
@@ -367,21 +535,7 @@ def _run_loop(
                         "tool_call_id": tool_call_id,
                         "content": result_text,
                     }
-                )
-                continue
-
-            if tool_name == "run_command" and not backend_announced:
-                backend_announced = True
-                img = (
-                    config.execution.docker_image_override
-                    or config.execution.default_image
-                )
-                emitter.execution_backend_selected(
-                    thread.id,
-                    turn.id,
-                    backend=config.execution.backend,
-                    image=img if config.execution.backend == "docker" else None,
-                )
+                    )
 
             dispatch_result = dispatch_tool(
                 tool_name, arguments, config, mcp_manager=mcp_manager
@@ -434,6 +588,7 @@ def _create_tracking_items(
     tool_call_id: str,
     raw_args: str,
     mcp_manager: McpManager,
+    parent_thread_id: str = "",
 ) -> list[TrackingItem]:
     if mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
@@ -487,11 +642,14 @@ def _create_tracking_items(
             )
         ]
     if tool_name == "spawn_worker":
+        worker_id = arguments.get("worker_id") or ""
         return [
-            CollabSpawnItem(
+            CollabWorkerItem(
+                worker_id=worker_id or "pending",
                 worker_thread_id="",
+                parent_thread_id=parent_thread_id,
                 task=arguments.get("task", ""),
-                status="running",
+                status="queued",
                 title=arguments.get("title"),
                 model=arguments.get("model"),
                 execution_backend=arguments.get("execution_backend"),
@@ -630,6 +788,12 @@ def _precheck_tool(
     elif tool_name == "spawn_worker":
         if not config.multi_agent.enabled:
             return "spawn_worker requires multi_agent.enabled or --multi-agent"
+    elif tool_name == "wait_workers":
+        if not config.multi_agent.enabled:
+            return "wait_workers requires multi_agent.enabled or --multi-agent"
+    elif tool_name == "list_workers":
+        if not config.multi_agent.enabled:
+            return "list_workers requires multi_agent.enabled or --multi-agent"
     elif mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
         decision = check_mcp_tool(
@@ -716,6 +880,44 @@ def _emit_execution_events(
                 image=image,
                 exit_code=result.command_item.exit_code or -1,
             )
+    if meta.get("backend") == "ssh":
+        host = meta.get("remote_host") or config.execution.ssh.host
+        emitter.execution_ssh_completed(
+            thread_id,
+            turn_id,
+            host=host,
+            exit_code=result.command_item.exit_code if result.command_item else meta.get("exit_code", -1),
+            duration_ms=result.command_item.duration_ms if result.command_item else 0,
+        )
+    if result.file_tool_meta and result.file_tool_meta.get("via_mount"):
+        path = ""
+        if result.file_items:
+            path = result.file_items[0].path
+        emitter.execution_docker_file_tool_applied(
+            thread_id,
+            turn_id,
+            tool_name=result.file_tool_meta.get("tool_name", "file"),
+            path=path,
+            image=result.file_tool_meta.get("image"),
+        )
+
+
+def _sync_worker_items(
+    thread: Thread,
+    turn: Turn,
+    registry: WorkerRegistry,
+    store: ThreadStore,
+) -> None:
+    for item in turn.items:
+        if not isinstance(item, CollabWorkerItem):
+            continue
+        record = registry._workers.get(item.worker_id)
+        if not record:
+            continue
+        item.worker_thread_id = record.worker_thread_id
+        item.status = record.status  # type: ignore[assignment]
+        item.summary = record.summary
+        store.append_item(thread, turn.id, item)
 
 
 def brief_args(tool_name: str, arguments: dict) -> str:

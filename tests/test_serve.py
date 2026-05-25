@@ -9,6 +9,33 @@ from agent.serve.server import AgentHttpHandler, ThreadingHTTPServer, _thread_to
 from agent.store import ThreadStore
 
 
+def test_http_homepage_html(tmp_path) -> None:
+    store = ThreadStore(base_dir=tmp_path / "threads")
+    thread = Thread(id="thread-abc12345", cwd=str(tmp_path), model="m", title="demo")
+    store.create_thread(thread)
+
+    class Handler(AgentHttpHandler):
+        pass
+
+    Handler.store = store
+    Handler.run_store = RunStore(base_dir=tmp_path / "runs")
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    port = server.server_address[1]
+    thread_srv = threading.Thread(target=server.serve_forever, daemon=True)
+    thread_srv.start()
+    try:
+        conn = HTTPConnection("127.0.0.1", port, timeout=5)
+        conn.request("GET", "/")
+        resp = conn.getresponse()
+        assert resp.status == 200
+        body = resp.read().decode()
+        assert "<h1>Threads</h1>" in body
+        assert "demo" in body
+    finally:
+        server.shutdown()
+
+
 def test_http_threads_list(tmp_path) -> None:
     store = ThreadStore(base_dir=tmp_path / "threads")
     thread = Thread(id="thread-abc12345", cwd=str(tmp_path), model="m", title="demo")

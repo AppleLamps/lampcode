@@ -43,6 +43,16 @@ def export_thread_markdown(thread: Thread, *, sandbox: str | None = None, backen
                 )
                 if item.output:
                     lines.append(f"```\n{item.output[:2000]}\n```")
+            elif item.type == "collabWorker":
+                lines.append(
+                    f"**Worker** `{item.worker_id}` ({item.status}, depth={item.depth}): {item.task}"
+                )
+                if item.worker_thread_id:
+                    lines.append(f"- Worker thread: `{item.worker_thread_id}`")
+                if item.execution_backend:
+                    lines.append(f"- Backend: {item.execution_backend}")
+                if item.summary:
+                    lines.append(f"- Summary: {item.summary[:1000]}")
             elif item.type == "collabSpawn":
                 lines.append(
                     f"**Worker spawn** ({item.status}): {item.task}"

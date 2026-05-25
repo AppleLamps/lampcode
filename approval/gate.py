@@ -89,6 +89,10 @@ def needs_approval_prompt(
     if config.exec_policy.mode == ExecPolicyMode.NEVER:
         return False
 
+    if tool_name == "run_command" and config.execution.backend == "ssh":
+        if session and not session.ssh_command_approved:
+            return True
+
     if tool_name == "run_command" and config.exec_policy.mode == ExecPolicyMode.UNTRUSTED:
         cmd = arguments.get("cmd", "")
         result = evaluate_command(cmd, config.exec_policy)
@@ -181,6 +185,13 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
 
     if tool_name == "spawn_worker":
         return f"spawn_worker: {arguments.get('task', '')[:80]}"
+
+    if tool_name == "wait_workers":
+        ids = arguments.get("worker_ids")
+        return f"wait_workers: {ids if ids else 'all'}"
+
+    if tool_name == "list_workers":
+        return "list_workers"
 
     parts = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     return f"{tool_name}: {parts}"

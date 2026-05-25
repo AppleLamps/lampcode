@@ -129,7 +129,7 @@ class Config:
 
     @property
     def use_isolation(self) -> bool:
-        if self.execution.backend == "docker":
+        if self.execution.backend in ("docker", "ssh"):
             return False
         if self.sandbox_mode == SandboxMode.DANGER_FULL_ACCESS:
             return False
@@ -151,6 +151,9 @@ class Config:
         sandbox: str | None = None,
         execution_backend: str | None = None,
         docker_image: str | None = None,
+        ssh_host: str | None = None,
+        ssh_user: str | None = None,
+        ssh_identity_file: str | None = None,
         multi_agent: bool | None = None,
         skip_git_check: bool = False,
         config_path: Path | None = None,
@@ -173,6 +176,9 @@ class Config:
         env_compaction = os.environ.get("AGENT_COMPACTION_THRESHOLD")
         env_sandbox = os.environ.get("AGENT_SANDBOX_MODE")
         env_execution_backend = os.environ.get("AGENT_EXECUTION_BACKEND")
+        env_ssh_host = os.environ.get("AGENT_SSH_HOST")
+        env_ssh_user = os.environ.get("AGENT_SSH_USER")
+        env_ssh_identity = os.environ.get("AGENT_SSH_IDENTITY_FILE")
 
         api_key = os.environ.get("OPENROUTER_API_KEY")
         base_url = os.environ.get(
@@ -240,6 +246,14 @@ class Config:
         execution_cfg.backend = backend_value
         if docker_image:
             execution_cfg.docker_image_override = docker_image
+        if ssh_host or env_ssh_host:
+            execution_cfg.ssh.host = ssh_host or env_ssh_host or execution_cfg.ssh.host
+        if ssh_user or env_ssh_user:
+            execution_cfg.ssh.user = ssh_user or env_ssh_user or execution_cfg.ssh.user
+        if ssh_identity_file or env_ssh_identity:
+            execution_cfg.ssh.identity_file = (
+                ssh_identity_file or env_ssh_identity or execution_cfg.ssh.identity_file
+            )
         if multi_agent is not None:
             multi_agent_cfg.enabled = multi_agent
 
@@ -307,6 +321,11 @@ class Config:
             "execution_network": self.execution.network,
             "multi_agent_enabled": self.multi_agent.enabled,
             "multi_agent_max_workers": self.multi_agent.max_workers_per_turn,
+            "multi_agent_max_depth": self.multi_agent.max_worker_depth,
+            "multi_agent_max_concurrent": self.multi_agent.max_concurrent_workers,
+            "execution_ssh_host": self.execution.ssh.host or None,
+            "execution_ssh_user": self.execution.ssh.user or None,
+            "execution_docker_file_tools": self.execution.docker.file_tools_in_container,
             "openrouter_base_url": self.openrouter_base_url,
             "config_path": str(self.config_path) if self.config_path else None,
             "openrouter_api_key_set": bool(self.openrouter_api_key),

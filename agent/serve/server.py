@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import unquote, urlparse
 
+from agent.config import Config
+from agent.export.html import export_thread_html, render_index_html
 from agent.models import Thread
 from agent.recording.store import RunStore
 from agent.store import ThreadStore
@@ -22,7 +24,12 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = unquote(parsed.path.rstrip("/")) or "/"
 
-        if path == "/" or path == "/threads":
+        if path == "/":
+            threads = self.store.list_threads()
+            self._html_response(render_index_html(threads))
+            return
+
+        if path == "/threads":
             threads = self.store.list_threads()
             data = [
                 {
@@ -39,10 +46,25 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/threads/"):
             thread_id = path.split("/threads/", 1)[1]
+            suffix = ""
+            if thread_id.endswith(".html"):
+                thread_id = thread_id[: -len(".html")]
+                suffix = ".html"
             try:
                 thread = self._load_thread(thread_id)
             except FileNotFoundError:
                 self._error(404, "Thread not found")
+                return
+            wants_html = suffix == ".html" or "text/html" in self.headers.get("Accept", "")
+            if wants_html:
+                cfg = Config.resolve(cwd=Path(thread.cwd))
+                self._html_response(
+                    export_thread_html(
+                        thread,
+                        sandbox=cfg.sandbox_mode.value,
+                        backend=cfg.execution.backend,
+                    )
+                )
                 return
             self._json_response(_thread_to_dict(thread))
             return
@@ -76,6 +98,14 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         body = json.dumps(data, indent=2).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _html_response(self, html: str, status: int = 200) -> None:
+        body = html.encode("utf-8")
+        self.send_response(status)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
@@ -114,8 +144,9 @@ def serve(host: str = "127.0.0.1", port: int = 8765) -> None:
 
     server = ThreadingHTTPServer((host, port), Handler)
     print(f"agent serve listening on http://{host}:{port}")
-    print("  GET /threads")
-    print("  GET /threads/{id}")
+    print("  GET /              HTML thread list")
+    print("  GET /threads       JSON thread list")
+    print("  GET /threads/{id}  JSON transcript (append .html for HTML)")
     print("  GET /runs/{turn_id}")
     try:
         server.serve_forever()

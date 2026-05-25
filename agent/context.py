@@ -96,6 +96,12 @@ Command execution: **Docker container** (project mounted at {mount}).
 Use Linux paths inside the container (e.g. {mount}/src/file.py).
 Shell commands run via `run_command` execute inside the container, not on the host.
 """
+    elif execution_backend == "ssh":
+        prompt += """
+Command execution: **remote SSH host** (configured remote_workspace).
+Ensure the repository is already present on the remote host — there is no automatic sync in v1.
+Shell commands run via `run_command` execute on the remote machine, not locally.
+"""
     else:
         prompt += """
 Command execution: **local host** — shell commands run on your machine in the project directory.

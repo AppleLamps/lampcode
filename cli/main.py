@@ -21,7 +21,9 @@ from agent.models import Thread, new_id, utc_now_iso
 from agent.paths import default_config_path
 from agent.export.markdown import export_run_markdown, export_thread_markdown
 from agent.execution.docker import check_docker_available, check_docker_hello_world
-from agent.execution.factory import backend_display
+from agent.execution.factory import backend_display, run_execution_test
+from agent.execution.ssh import check_ssh_available, validate_ssh_config
+from agent.export.html import export_thread_html
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.settings import load_mcp_config, load_skills_config
@@ -38,12 +40,14 @@ mcp_app = typer.Typer(help="MCP server commands")
 skills_app = typer.Typer(help="Skill discovery commands")
 exec_policy_app = typer.Typer(help="Exec policy rule testing")
 runs_app = typer.Typer(help="Run recording and replay")
+execution_app = typer.Typer(help="Execution backend commands")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
 app.add_typer(skills_app, name="skills")
 app.add_typer(exec_policy_app, name="exec-policy")
 app.add_typer(runs_app, name="runs")
+app.add_typer(execution_app, name="execution")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -117,7 +121,21 @@ class OutputHandler:
         elif event.type == "collab.spawn.completed" and not self.quiet_tools:
             console.print(
                 f"[dim][worker][/dim] {event.data.get('status')}: "
-                f"{event.data.get('worker_thread_id', '')[:8]}"
+                f"{event.data.get('worker_id') or event.data.get('worker_thread_id', '')[:8]}"
+            )
+        elif event.type == "execution.ssh.connected" and not self.quiet_tools:
+            console.print(
+                f"[dim][ssh][/dim] connected {event.data.get('user')}@{event.data.get('host')}"
+            )
+        elif event.type == "execution.ssh.completed" and not self.quiet_tools:
+            console.print(
+                f"[dim][ssh][/dim] exit={event.data.get('exit_code')} "
+                f"duration={event.data.get('duration_ms')}ms"
+            )
+        elif event.type == "execution.docker.file_tool_applied" and not self.quiet_tools:
+            console.print(
+                f"[dim][docker][/dim] file tool {event.data.get('tool_name')} "
+                f"on {event.data.get('path')}"
             )
         elif event.type == "error":
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
@@ -173,10 +191,15 @@ def run(
     execution_backend: Optional[str] = typer.Option(
         None,
         "--execution-backend",
-        help="Command execution backend: local | docker",
+        help="Command execution backend: local | docker | ssh",
     ),
     docker_image: Optional[str] = typer.Option(
         None, "--docker-image", help="Docker image override for run_command"
+    ),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host", help="SSH host override"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user", help="SSH user override"),
+    ssh_identity_file: Optional[str] = typer.Option(
+        None, "--ssh-identity-file", help="SSH identity file path"
     ),
     multi_agent: bool = typer.Option(
         False, "--multi-agent", help="Enable spawn_worker supervisor tool"
@@ -198,6 +221,9 @@ def run(
             sandbox=sandbox,
             execution_backend=execution_backend,
             docker_image=docker_image,
+            ssh_host=ssh_host,
+            ssh_user=ssh_user,
+            ssh_identity_file=ssh_identity_file,
             multi_agent=multi_agent if multi_agent else None,
         )
         config.require_api_key()
@@ -435,11 +461,21 @@ def doctor(
     table.add_row("execution backend", cfg.execution.backend)
     table.add_row(
         "multi-agent",
-        f"enabled={cfg.multi_agent.enabled}, max_workers={cfg.multi_agent.max_workers_per_turn}",
+        f"enabled={cfg.multi_agent.enabled}, max_workers={cfg.multi_agent.max_workers_per_turn}, "
+        f"max_depth={cfg.multi_agent.max_worker_depth}, max_concurrent={cfg.multi_agent.max_concurrent_workers}",
+    )
+    table.add_row(
+        "docker file tools",
+        "enabled" if cfg.execution.docker.file_tools_in_container else "disabled",
     )
     docker_bin = cfg.execution.docker.binary
     docker_ok, docker_msg = check_docker_available(docker_bin)
     table.add_row(f"docker ({docker_bin})", docker_msg if docker_ok else f"unavailable: {docker_msg}")
+    ssh_ok, ssh_msg = check_ssh_available()
+    table.add_row("ssh", ssh_msg if ssh_ok else f"unavailable: {ssh_msg}")
+    if cfg.execution.backend == "ssh" or cfg.execution.ssh.host:
+        ssh_cfg_ok, ssh_cfg_msg = validate_ssh_config(cfg.execution.ssh)
+        table.add_row("ssh config", ssh_cfg_msg if ssh_cfg_ok else f"incomplete: {ssh_cfg_msg}")
     console.print(table)
 
     if deep:
@@ -646,22 +682,68 @@ def exec_policy_test(
 @threads_app.command("export")
 def threads_export(
     thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
-    out: Optional[Path] = typer.Option(None, "--out", help="Output markdown file"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output file"),
+    format: str = typer.Option("markdown", "--format", help="Export format: markdown | html"),
 ) -> None:
-    """Export thread transcript to Markdown."""
+    """Export thread transcript to Markdown or HTML."""
     store = ThreadStore()
     thread = _load_thread(store, thread_id)
     cfg = Config.resolve(cwd=Path(thread.cwd))
-    md = export_thread_markdown(
-        thread,
-        sandbox=cfg.sandbox_mode.value,
-        backend=cfg.execution.backend,
-    )
+    if format == "html":
+        content = export_thread_html(
+            thread,
+            sandbox=cfg.sandbox_mode.value,
+            backend=cfg.execution.backend,
+        )
+        default_ext = ".html"
+    else:
+        content = export_thread_markdown(
+            thread,
+            sandbox=cfg.sandbox_mode.value,
+            backend=cfg.execution.backend,
+        )
+        default_ext = ".md"
     if out:
-        out.write_text(md, encoding="utf-8")
+        out.write_text(content, encoding="utf-8")
         console.print(f"Exported to {out}")
     else:
-        stdout_console.print(md)
+        stdout_console.print(content)
+
+
+@execution_app.command("test")
+def execution_test(
+    cmd: str = typer.Option("echo ok", "--cmd", help="Command to run"),
+    backend: str = typer.Option("local", "--backend", help="local | docker | ssh"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory"),
+    docker_image: Optional[str] = typer.Option(None, "--docker-image"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+) -> None:
+    """Test an execution backend without running the full agent."""
+    try:
+        config = Config.resolve(
+            cwd=cwd,
+            execution_backend=backend,
+            docker_image=docker_image,
+            ssh_host=ssh_host,
+            ssh_user=ssh_user,
+            auto_approve=True,
+        )
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    if backend == "ssh":
+        ok, msg = validate_ssh_config(config.execution.ssh)
+        if not ok:
+            console.print(f"[red]SSH config invalid:[/red] {msg}")
+            raise typer.Exit(1)
+
+    result = run_execution_test(config, cmd)
+    console.print(f"[dim]Backend:[/dim] {result['backend']}")
+    console.print(f"[dim]Exit code:[/dim] {result['exit_code']}")
+    console.print(f"[dim]Duration:[/dim] {result['duration_ms']}ms")
+    stdout_console.print(result["output"])
 
 
 @threads_app.command("show")

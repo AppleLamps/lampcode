@@ -24,7 +24,7 @@ def _duckduckgo_html(query: str, settings: WebSearchSettings) -> tuple[list[WebS
         with httpx.Client(timeout=float(settings.timeout_sec), follow_redirects=True) as client:
             response = client.get(
                 url,
-                headers={"User-Agent": "agent-cli/0.6.0"},
+                headers={"User-Agent": "agent-cli/0.7.0"},
             )
             response.raise_for_status()
             html = response.text

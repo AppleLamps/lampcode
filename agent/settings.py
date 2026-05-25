@@ -102,6 +102,27 @@ class WebSearchSettings:
 class DockerExecutionSettings:
     binary: str = "docker"
     platform: str = ""
+    file_tools_in_container: bool = False
+
+
+@dataclass
+class SshJumpSettings:
+    host: str = ""
+    user: str = ""
+
+
+@dataclass
+class SshExecutionSettings:
+    host: str = ""
+    user: str = ""
+    port: int = 22
+    identity_file: str = ""
+    known_hosts: str = ""
+    remote_workspace: str = ""
+    connect_timeout_sec: int = 15
+    command_timeout_sec: int = 120
+    strict_host_key_checking: bool = True
+    jump: SshJumpSettings = field(default_factory=SshJumpSettings)
 
 
 @dataclass
@@ -115,15 +136,20 @@ class ExecutionSettings:
     command_timeout_sec: int = 120
     auto_pull: bool = False
     docker: DockerExecutionSettings = field(default_factory=DockerExecutionSettings)
+    ssh: SshExecutionSettings = field(default_factory=SshExecutionSettings)
     docker_image_override: str | None = None
 
 
 @dataclass
 class MultiAgentSettings:
     enabled: bool = False
-    max_workers_per_turn: int = 3
+    max_workers_per_turn: int = 5
+    max_worker_depth: int = 2
+    max_concurrent_workers: int = 3
     worker_auto_approve: bool = False
     inherit_execution_backend: bool = True
+    wait_timeout_sec: int = 600
+    allow_worker_spawn: bool = True
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -207,6 +233,12 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
     docker_raw = exe.get("docker", {})
     if not isinstance(docker_raw, dict):
         docker_raw = {}
+    ssh_raw = exe.get("ssh", {})
+    if not isinstance(ssh_raw, dict):
+        ssh_raw = {}
+    jump_raw = ssh_raw.get("jump", {})
+    if not isinstance(jump_raw, dict):
+        jump_raw = {}
     return ExecutionSettings(
         backend=str(exe.get("backend", "local")),
         default_image=str(exe.get("default_image", "python:3.12-slim")),
@@ -219,6 +251,22 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
         docker=DockerExecutionSettings(
             binary=str(docker_raw.get("binary", "docker")),
             platform=str(docker_raw.get("platform", "")),
+            file_tools_in_container=bool(docker_raw.get("file_tools_in_container", False)),
+        ),
+        ssh=SshExecutionSettings(
+            host=str(ssh_raw.get("host", "")),
+            user=str(ssh_raw.get("user", "")),
+            port=int(ssh_raw.get("port", 22)),
+            identity_file=str(ssh_raw.get("identity_file", "")),
+            known_hosts=str(ssh_raw.get("known_hosts", "")),
+            remote_workspace=str(ssh_raw.get("remote_workspace", "")),
+            connect_timeout_sec=int(ssh_raw.get("connect_timeout_sec", 15)),
+            command_timeout_sec=int(ssh_raw.get("command_timeout_sec", 120)),
+            strict_host_key_checking=bool(ssh_raw.get("strict_host_key_checking", True)),
+            jump=SshJumpSettings(
+                host=str(jump_raw.get("host", "")),
+                user=str(jump_raw.get("user", "")),
+            ),
         ),
     )
 
@@ -230,9 +278,13 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         ma = {}
     return MultiAgentSettings(
         enabled=bool(ma.get("enabled", False)),
-        max_workers_per_turn=int(ma.get("max_workers_per_turn", 3)),
+        max_workers_per_turn=int(ma.get("max_workers_per_turn", 5)),
+        max_worker_depth=int(ma.get("max_worker_depth", 2)),
+        max_concurrent_workers=int(ma.get("max_concurrent_workers", 3)),
         worker_auto_approve=bool(ma.get("worker_auto_approve", False)),
         inherit_execution_backend=bool(ma.get("inherit_execution_backend", True)),
+        wait_timeout_sec=int(ma.get("wait_timeout_sec", 600)),
+        allow_worker_spawn=bool(ma.get("allow_worker_spawn", True)),
     )
 
 

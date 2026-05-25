@@ -319,6 +319,68 @@ class EventEmitter:
             )
         )
 
+    def execution_ssh_connected(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        host: str,
+        user: str,
+        remote_workspace: str,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.ssh.connected",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "host": host,
+                    "user": user,
+                    "remote_workspace": remote_workspace,
+                },
+            )
+        )
+
+    def execution_ssh_completed(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        host: str,
+        exit_code: int,
+        duration_ms: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.ssh.completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "host": host,
+                    "exit_code": exit_code,
+                    "duration_ms": duration_ms,
+                },
+            )
+        )
+
+    def execution_docker_file_tool_applied(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        tool_name: str,
+        path: str,
+        image: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.docker.file_tool_applied",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"tool_name": tool_name, "path": path, "image": image},
+            )
+        )
+
     def collab_spawn_started(
         self,
         thread_id: str,
@@ -341,6 +403,7 @@ class EventEmitter:
         *,
         worker_thread_id: str,
         status: str,
+        worker_id: str | None = None,
     ) -> None:
         self.emit(
             AgentEvent(
@@ -350,6 +413,7 @@ class EventEmitter:
                     "item_id": item_id,
                     "worker_thread_id": worker_thread_id,
                     "status": status,
+                    "worker_id": worker_id,
                 },
             )
         )
