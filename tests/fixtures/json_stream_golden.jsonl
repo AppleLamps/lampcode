@@ -1,0 +1,4 @@
+{"type": "turn.started", "ts": "2026-01-01T00:00:00+00:00", "thread_id": "t-golden", "turn_id": "u-golden", "payload": {}}
+{"type": "tool.pending", "ts": "2026-01-01T00:00:01+00:00", "thread_id": "t-golden", "turn_id": "u-golden", "payload": {"tool_name": "read_file", "arguments": {"path": "a.py"}}}
+{"type": "tool.completed", "ts": "2026-01-01T00:00:02+00:00", "thread_id": "t-golden", "turn_id": "u-golden", "payload": {"tool_name": "read_file", "status": "completed"}}
+{"type": "run.summary", "ts": "2026-01-01T00:00:03+00:00", "thread_id": "t-golden", "turn_id": "u-golden", "payload": {"status": "completed"}}

@@ -25,6 +25,8 @@ V2_EVENT_TYPES = frozenset(
         "permission.denied",
         "hook.failed",
         "user.input",
+        "compaction.completed",
+        "compaction.warning",
     }
 )
 
@@ -40,6 +42,9 @@ _LEGACY_MAP: dict[str, str] = {
     "commandExecution": "command.execution",
     "fileChange": "file.change",
     "sandbox.blocked": "error",
+    "compaction": "compaction.completed",
+    "compaction.completed": "compaction.completed",
+    "compaction.warning": "compaction.warning",
 }
 
 
