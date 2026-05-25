@@ -200,6 +200,18 @@ def run_turn(
         emitter=emitter,
     )
     hooks_runner.thread_id = thread.id
+    hooks_runner.turn_id = turn.id
+    hooks_runner.run_event(
+        "on_session_start",
+        {
+            "thread_id": thread.id,
+            "turn_id": turn.id,
+            "cwd": str(config.cwd),
+            "model": config.model,
+        },
+        thread_id=thread.id,
+        turn_id=turn.id,
+    )
 
     effective_allowed = allowed_tools
     if plan_mode:
@@ -209,6 +221,15 @@ def run_turn(
         if config.memories.enabled
         else ""
     )
+
+    prompt_hook = hooks_runner.run_event(
+        "on_user_prompt_submit",
+        {"thread_id": thread.id, "turn_id": turn.id, "prompt": user_text},
+        thread_id=thread.id,
+        turn_id=turn.id,
+    )
+    if prompt_hook.context_append:
+        system_prompt_append = f"{system_prompt_append}\n{prompt_hook.context_append}".strip()
 
     client = OpenRouterClient(config)
     tools = get_tool_schemas(
@@ -564,7 +585,24 @@ def _run_loop(
                 )
 
         if not result.tool_calls:
-            agent_item = AgentMessageItem(text=result.content)
+            display_text = result.content
+            if plan_mode:
+                from agent.plan_mode import parse_proposed_plan, plan_summary
+
+                display_text, plan_body = parse_proposed_plan(result.content or "")
+                if plan_body:
+                    from agent.models import PlanProposalItem
+
+                    plan_item = PlanProposalItem(text=plan_body)
+                    turn.items.append(plan_item)
+                    store.append_item(thread, turn.id, plan_item)
+                    emitter.plan_proposed(
+                        thread.id,
+                        turn.id,
+                        text=plan_body,
+                        summary=plan_summary(plan_body),
+                    )
+            agent_item = AgentMessageItem(text=display_text)
             turn.items.append(agent_item)
             store.append_item(thread, turn.id, agent_item)
             turn.status = "completed"
@@ -661,6 +699,28 @@ def _run_loop(
                 store.append_item(thread, turn.id, item)
                 emitter.item_started(thread.id, turn.id, item.type, item.id)
 
+            if hooks_runner:
+                pre_hook = hooks_runner.run_event(
+                    "on_pre_tool_use",
+                    {"tool_name": tool_name, "arguments": arguments},
+                    tool_name=tool_name,
+                    thread_id=thread.id,
+                    turn_id=turn.id,
+                )
+                if pre_hook.block:
+                    _handle_blocked_tool(
+                        pre_hook.block_reason or "Blocked by on_pre_tool_use hook",
+                        tracking_items,
+                        store,
+                        thread,
+                        turn,
+                        emitter,
+                        tool_call_id,
+                        messages,
+                        config,
+                    )
+                    continue
+
             policy_block = _exec_policy_block(tool_name, arguments, config)
             if policy_block:
                 _handle_blocked_tool(
@@ -687,13 +747,16 @@ def _run_loop(
             ):
                 summary = format_tool_summary(tool_name, arguments)
                 emitter.approval_requested(thread.id, turn.id, tool_name, summary)
-                approved = prompt_approval(
+                approved = _prompt_with_hooks(
+                    hooks_runner,
+                    thread,
+                    turn,
                     tool_name,
                     arguments,
-                    auto_approve=config.auto_approve,
-                    turn_state=turn_state,
-                    session=session,
-                    config=config,
+                    summary,
+                    config,
+                    turn_state,
+                    session,
                 )
                 if not approved:
                     _mark_denied(tracking_items, store, thread, turn.id)
@@ -1310,6 +1373,28 @@ def _run_parallel_read_tool_round(
             store.append_item(thread, turn.id, item)
             emitter.item_started(thread.id, turn.id, item.type, item.id)
 
+        if hooks_runner:
+            pre_hook = hooks_runner.run_event(
+                "on_pre_tool_use",
+                {"tool_name": tool_name, "arguments": arguments},
+                tool_name=tool_name,
+                thread_id=thread.id,
+                turn_id=turn.id,
+            )
+            if pre_hook.block:
+                _handle_blocked_tool(
+                    pre_hook.block_reason or "Blocked by on_pre_tool_use hook",
+                    tracking_items,
+                    store,
+                    thread,
+                    turn,
+                    emitter,
+                    tool_call_id,
+                    messages,
+                    config,
+                )
+                continue
+
         policy_block = _exec_policy_block(tool_name, arguments, config)
         if policy_block:
             _handle_blocked_tool(
@@ -1335,13 +1420,16 @@ def _run_parallel_read_tool_round(
         ):
             summary = format_tool_summary(tool_name, arguments)
             emitter.approval_requested(thread.id, turn.id, tool_name, summary)
-            approved = prompt_approval(
+            approved = _prompt_with_hooks(
+                hooks_runner,
+                thread,
+                turn,
                 tool_name,
                 arguments,
-                auto_approve=config.auto_approve,
-                turn_state=turn_state,
-                session=session,
-                config=config,
+                summary,
+                config,
+                turn_state,
+                session,
             )
             if not approved:
                 _mark_denied(tracking_items, store, thread, turn.id)
@@ -1441,6 +1529,37 @@ def _run_parallel_read_tool_round(
                 "content": result_text,
             }
         )
+
+
+def _prompt_with_hooks(
+    hooks_runner,
+    thread: Thread,
+    turn: Turn,
+    tool_name: str,
+    arguments: dict,
+    summary: str,
+    config: Config,
+    turn_state: TurnApprovalState,
+    session: HarnessSession,
+) -> bool:
+    if hooks_runner:
+        hook = hooks_runner.run_event(
+            "on_permission_request",
+            {"tool_name": tool_name, "arguments": arguments, "summary": summary},
+            tool_name=tool_name,
+            thread_id=thread.id,
+            turn_id=turn.id,
+        )
+        if hook.context_append:
+            summary = f"{summary}\n{hook.context_append}"
+    return prompt_approval(
+        tool_name,
+        arguments,
+        auto_approve=config.auto_approve,
+        turn_state=turn_state,
+        session=session,
+        config=config,
+    )
 
 
 def _exec_policy_block(tool_name: str, arguments: dict, config: Config) -> str | None:
