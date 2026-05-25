@@ -166,6 +166,22 @@ async function loadIdeTree() {{
   }});
 }}
 
+async function loadIdeDiagnostics(path) {{
+  if (!monacoEditor || !path) return;
+  const res = await api("/ide/diagnostics?thread_id=" + encodeURIComponent(currentThread) + "&path=" + encodeURIComponent(path));
+  if (!res.ok) return;
+  const data = await res.json();
+  const markers = (data.items || []).map(d => ({{
+    severity: d.severity === "error" ? monaco.MarkerSeverity.Error : monaco.MarkerSeverity.Warning,
+    startLineNumber: d.line || 1,
+    startColumn: d.col || 1,
+    endLineNumber: d.line || 1,
+    endColumn: (d.col || 1) + 1,
+    message: d.message || "",
+  }}));
+  monaco.editor.setModelMarkers(monacoEditor.getModel(), "agent-diagnostics", markers);
+}}
+
 async function openIdeFile(path) {{
   ideCurrentPath = path;
   addIdeTab(path);
@@ -175,6 +191,7 @@ async function openIdeFile(path) {{
   if (monacoEditor) {{
     monacoEditor.setValue(data.content || "");
     loadDiffGutter(path, data.content || "");
+    loadIdeDiagnostics(path);
   }} else document.getElementById("ideEditor").textContent = data.content || "";
 }}
 

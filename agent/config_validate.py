@@ -214,4 +214,43 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
             ValidationIssue("warning", "OPENROUTER_API_KEY not set — agent run will fail until configured")
         )
 
+    if serve.policy.enabled:
+        if serve.policy.require_https and not serve.tls.enabled:
+            result.issues.append(
+                ValidationIssue(
+                    "warning",
+                    "serve.auth.policy.require_https=true but TLS disabled — policy will deny non-HTTPS requests",
+                )
+            )
+        if serve.policy.introspection_url and not serve.policy.introspection_url.startswith("https://"):
+            result.issues.append(
+                ValidationIssue(
+                    "warning",
+                    "Policy introspection_url should use HTTPS in production",
+                )
+            )
+
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings(cfg.config_path)
+    if sched.enabled and sched.require_budgets and not cfg.multi_agent.budgets.enabled:
+        result.issues.append(
+            ValidationIssue(
+                "error",
+                "schedule.enabled with require_budgets but multi_agent.budgets.enabled=false",
+            )
+        )
+
+    if serve.ide.enabled and serve.ide.diagnostics.enabled:
+        import shutil
+
+        if serve.ide.diagnostics.python_tool in ("auto", "ruff") and not shutil.which("ruff"):
+            result.issues.append(
+                ValidationIssue("warning", "IDE diagnostics: ruff not on PATH — will fall back to py_compile")
+            )
+        if serve.ide.diagnostics.js_tool == "eslint" and not shutil.which("eslint"):
+            result.issues.append(
+                ValidationIssue("warning", "IDE diagnostics: eslint not on PATH")
+            )
+
     return result

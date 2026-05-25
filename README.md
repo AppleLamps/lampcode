@@ -847,15 +847,108 @@ agent programs clear <program-id> --yes
 
 Use `spawn_worker` with `"program_scope": true` when cross-thread is enabled.
 
+## Phase 17 — OAuth policy + scheduled swarms + IDE diagnostics (v1.7.0)
+
+### OAuth policy engine (off by default)
+
+Declarative rules evaluated at OIDC/device login and on control endpoints (`thread.run`, approvals, IDE PUT).
+
+```toml
+[serve.auth.policy]
+enabled = false
+require_https = true
+introspection_url = ""             # optional RFC7662 endpoint
+introspection_client_id = ""
+introspection_client_secret = ""
+revoke_on_role_change = true
+max_session_age_sec = 28800
+idle_timeout_sec = 3600
+step_up_for_control_actions = true
+
+[[serve.auth.policy.rules]]
+name = "require-mfa-claim"
+match_roles = ["operator", "admin"]
+require_claims = { "amr" = "mfa" }
+deny_message = "MFA required for operator actions"
+```
+
+```powershell
+agent auth policy test --role operator --action thread.run
+agent auth sessions revoke-all --yes
+agent serve policy status
+```
+
+Revoked sessions (hashed in `~/.agent-cli/auth/revoked-sessions.json`) fail immediately with 401.
+
+### Scheduled swarms (budget-gated, off by default)
+
+No daemon — use Windows Task Scheduler to invoke `agent schedule tick` every minute.
+
+```toml
+[schedule]
+enabled = false
+require_budgets = true
+require_multi_agent = true
+default_approval_mode = "interactive"
+allow_unattended_auto = false
+state_file = "~/.agent-cli/schedules.json"
+```
+
+```powershell
+agent schedule add nightly-tests --cron "0 2 * * *" --cwd E:/lampcode/agent-cli/examples/demo-project --prompt "Run pytest"
+agent schedule tick
+agent schedule run nightly-tests --now
+agent schedule history --job-id nightly-tests
+```
+
+**Task Scheduler (PowerShell XML snippet):**
+
+```xml
+<?xml version="1.0" encoding="UTF-16"?>
+<Task xmlns="http://schemas.microsoft.com/windows/2004/02/mit/task">
+  <Triggers><CalendarTrigger><StartBoundary>2026-01-01T00:00:00</StartBoundary>
+    <ScheduleByDay><DaysInterval>1</DaysInterval></ScheduleByDay>
+    <Repetition><Interval>PT1M</Interval></Repetition></CalendarTrigger></Triggers>
+  <Actions><Exec>
+    <Command>agent</Command>
+    <Arguments>schedule tick</Arguments>
+    <WorkingDirectory>E:\lampcode\agent-cli</WorkingDirectory>
+  </Exec></Actions>
+</Task>
+```
+
+**Unattended risk:** `default_approval_mode=auto` is blocked unless `allow_unattended_auto=true` **and** `~/.agent-cli/schedule-unattended-acknowledged` exists.
+
+### IDE v3 — LSP-style diagnostics (lightweight)
+
+Subprocess analyzers (py_compile / ruff / eslint) — no full language server.
+
+```toml
+[serve.ide.diagnostics]
+enabled = true
+timeout_sec = 10
+python_tool = "auto"    # auto | py_compile | ruff | none
+js_tool = "none"        # none | eslint
+max_diagnostics = 200
+run_on_open = true
+```
+
+```powershell
+# With serve running and IDE enabled:
+curl -H "Authorization: Bearer $TOKEN" "http://127.0.0.1:8765/ide/diagnostics?thread_id=THREAD&path=src/foo.py"
+```
+
+Monaco squiggles load automatically when opening files in the dashboard.
+
 ## Tests
 
 ```powershell
-pytest   # 630+ tests
+pytest   # 690+ tests
 ```
 
-## Phase 17 (planned, not implemented)
+## Phase 18 (planned, not implemented)
 
-OAuth policy engine / token introspection, scheduled autonomous swarms, full LSP, cross-machine program DAG sync.
+Cross-machine program DAG sync, Linux bubblewrap advanced policies, full LSP server, OAuth CAE webhooks, email/Slack schedule notifications.
 
 ## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
 
