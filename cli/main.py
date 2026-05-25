@@ -19,6 +19,9 @@ from agent.loop import brief_args, run_turn
 from agent.mcp.manager import McpManager
 from agent.models import Thread, new_id, utc_now_iso
 from agent.paths import default_config_path
+from agent.export.markdown import export_run_markdown, export_thread_markdown
+from agent.execution.docker import check_docker_available, check_docker_hello_world
+from agent.execution.factory import backend_display
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.settings import load_mcp_config, load_skills_config
@@ -92,6 +95,30 @@ class OutputHandler:
                 f"cwd={event.data.get('cwd')} "
                 f"stripped_env={event.data.get('stripped_env_count')}"
             )
+        elif event.type == "execution.backend.selected" and not self.quiet_tools:
+            backend = event.data.get("backend", "")
+            image = event.data.get("image")
+            extra = f" ({image})" if image else ""
+            console.print(f"[dim][execution][/dim] backend={backend}{extra}")
+        elif event.type == "execution.docker.started" and not self.quiet_tools:
+            console.print(
+                f"[dim][docker][/dim] started image={event.data.get('image')} "
+                f"container={event.data.get('container_id', '')[:12]}"
+            )
+        elif event.type == "execution.docker.completed" and not self.quiet_tools:
+            console.print(
+                f"[dim][docker][/dim] exit={event.data.get('exit_code')} "
+                f"duration={event.data.get('duration_ms')}ms"
+            )
+        elif event.type == "collab.spawn.started" and not self.quiet_tools:
+            console.print(
+                f"[dim][worker][/dim] spawning: {event.data.get('task', '')[:80]}"
+            )
+        elif event.type == "collab.spawn.completed" and not self.quiet_tools:
+            console.print(
+                f"[dim][worker][/dim] {event.data.get('status')}: "
+                f"{event.data.get('worker_thread_id', '')[:8]}"
+            )
         elif event.type == "error":
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
         elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
@@ -143,6 +170,17 @@ def run(
     title: Optional[str] = typer.Option(
         None, "--title", help="Thread title (new threads only)"
     ),
+    execution_backend: Optional[str] = typer.Option(
+        None,
+        "--execution-backend",
+        help="Command execution backend: local | docker",
+    ),
+    docker_image: Optional[str] = typer.Option(
+        None, "--docker-image", help="Docker image override for run_command"
+    ),
+    multi_agent: bool = typer.Option(
+        False, "--multi-agent", help="Enable spawn_worker supervisor tool"
+    ),
     show_system_prompt: bool = typer.Option(
         False,
         "--show-system-prompt",
@@ -158,6 +196,9 @@ def run(
             max_rounds=max_rounds,
             skip_git_check=skip_git_check,
             sandbox=sandbox,
+            execution_backend=execution_backend,
+            docker_image=docker_image,
+            multi_agent=multi_agent if multi_agent else None,
         )
         config.require_api_key()
     except ValueError as exc:
@@ -237,6 +278,9 @@ def run(
         console.print(f"[dim]Model:[/dim] {config.model}")
         console.print(f"[dim]CWD:[/dim] {thread.cwd}")
         console.print(f"[dim]Sandbox:[/dim] {config.sandbox_mode.value}")
+        console.print(f"[dim]Execution:[/dim] {backend_display(config)}")
+        if config.multi_agent.enabled:
+            console.print("[dim]Multi-agent:[/dim] enabled (spawn_worker)")
         if thread.repo_root:
             console.print(f"[dim]Repo:[/dim] {thread.repo_root}")
         console.print()
@@ -388,7 +432,29 @@ def doctor(
     )
     tui_ok, tui_msg = check_tui_available()
     table.add_row("TUI (textual)", "installed" if tui_ok else tui_msg)
+    table.add_row("execution backend", cfg.execution.backend)
+    table.add_row(
+        "multi-agent",
+        f"enabled={cfg.multi_agent.enabled}, max_workers={cfg.multi_agent.max_workers_per_turn}",
+    )
+    docker_bin = cfg.execution.docker.binary
+    docker_ok, docker_msg = check_docker_available(docker_bin)
+    table.add_row(f"docker ({docker_bin})", docker_msg if docker_ok else f"unavailable: {docker_msg}")
     console.print(table)
+
+    if deep:
+        import os
+
+        skip_docker = os.environ.get("AGENT_SKIP_DOCKER_INTEGRATION") == "1"
+        if docker_ok and not skip_docker:
+            hw_ok, hw_msg = check_docker_hello_world(docker_bin, skip=skip_docker)
+            console.print(
+                f"[green]Docker hello-world:[/green] {hw_msg}"
+                if hw_ok
+                else f"[yellow]Docker hello-world failed:[/yellow] {hw_msg}"
+            )
+        elif skip_docker:
+            console.print("[dim]Docker integration check skipped (AGENT_SKIP_DOCKER_INTEGRATION=1)[/dim]")
 
     if deep and enabled_mcp:
         console.print("[dim]Deep check: connecting MCP servers...[/dim]")
@@ -577,6 +643,27 @@ def exec_policy_test(
     )
 
 
+@threads_app.command("export")
+def threads_export(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output markdown file"),
+) -> None:
+    """Export thread transcript to Markdown."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    cfg = Config.resolve(cwd=Path(thread.cwd))
+    md = export_thread_markdown(
+        thread,
+        sandbox=cfg.sandbox_mode.value,
+        backend=cfg.execution.backend,
+    )
+    if out:
+        out.write_text(md, encoding="utf-8")
+        console.print(f"Exported to {out}")
+    else:
+        stdout_console.print(md)
+
+
 @threads_app.command("show")
 def threads_show(
     thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
@@ -675,6 +762,43 @@ def _load_thread(store: ThreadStore, thread_id: str) -> Thread:
 
     console.print(f"[red]Error:[/red] Thread not found: {thread_id}")
     raise typer.Exit(1)
+
+
+@runs_app.command("export")
+def runs_export(
+    turn_id: str = typer.Argument(..., help="Turn ID (full or prefix)"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Output markdown file"),
+) -> None:
+    """Export run log to Markdown."""
+    store = RunStore()
+    try:
+        events = store.load_events(turn_id, thread_id=thread_id)
+    except FileNotFoundError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    md = export_run_markdown(events)
+    if out:
+        out.write_text(md, encoding="utf-8")
+        console.print(f"Exported to {out}")
+    else:
+        stdout_console.print(md)
+
+
+@app.command()
+def serve(
+    host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
+    port: int = typer.Option(8765, "--port", help="Bind port"),
+) -> None:
+    """Read-only HTTP viewer for threads and run logs."""
+    if host == "0.0.0.0":
+        console.print(
+            "[yellow]Warning:[/yellow] Binding to 0.0.0.0 exposes read-only data on all interfaces."
+        )
+    try:
+        serve(host=host, port=port)
+    except KeyboardInterrupt:
+        raise typer.Exit(0) from None
 
 
 def _runs_dir_writable() -> str:

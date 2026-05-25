@@ -45,6 +45,9 @@ class CommandExecutionItem(BaseModel):
     duration_ms: int | None = None
     tool_call_id: str | None = None
     tool_arguments: str | None = None
+    backend: Literal["local", "docker"] | None = None
+    container_id: str | None = None
+    image: str | None = None
 
 
 class FileChangeItem(BaseModel):
@@ -104,6 +107,20 @@ class WebSearchItem(BaseModel):
     error: str | None = None
 
 
+class CollabSpawnItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["collabSpawn"] = "collabSpawn"
+    worker_thread_id: str
+    task: str
+    status: Literal["running", "completed", "failed"] = "running"
+    summary: str | None = None
+    title: str | None = None
+    model: str | None = None
+    execution_backend: str | None = None
+    tool_call_id: str | None = None
+    tool_arguments: str | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -114,6 +131,7 @@ Item = Annotated[
         SkillActivationItem,
         McpToolCallItem,
         WebSearchItem,
+        CollabSpawnItem,
     ],
     Field(discriminator="type"),
 ]
@@ -168,6 +186,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
         "skillActivation": SkillActivationItem,
         "mcpToolCall": McpToolCallItem,
         "webSearch": WebSearchItem,
+        "collabSpawn": CollabSpawnItem,
     }
     cls = mapping.get(item_type)
     if cls is None:

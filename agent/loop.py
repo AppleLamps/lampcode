@@ -10,6 +10,7 @@ from agent.events import EventEmitter
 from agent.mcp.manager import McpManager
 from agent.models import (
     AgentMessageItem,
+    CollabSpawnItem,
     CommandExecutionItem,
     FileChangeItem,
     McpToolCallItem,
@@ -19,6 +20,8 @@ from agent.models import (
     UserMessageItem,
     WebSearchItem,
 )
+from agent.multi_agent.spawn import spawn_worker
+from agent.execution.factory import backend_display
 from agent.session import HarnessSession
 from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
@@ -46,7 +49,7 @@ from tools.registry import (
     tool_requires_approval,
 )
 
-TrackingItem = CommandExecutionItem | FileChangeItem | McpToolCallItem | WebSearchItem
+TrackingItem = CommandExecutionItem | FileChangeItem | McpToolCallItem | WebSearchItem | CollabSpawnItem
 
 
 def run_turn(
@@ -112,12 +115,15 @@ def run_turn(
         pass
 
     client = OpenRouterClient(config)
-    tools = get_tool_schemas(mcp_manager, config)
+    tools = get_tool_schemas(
+        mcp_manager, config, allow_spawn=config.multi_agent.enabled
+    )
     messages = build_thread_messages(
         thread,
         active_skills=active_skills,
         skills_max_body=skills_cfg.max_body_chars,
         project_rules=rules_text,
+        execution_backend=config.execution.backend,
     )
 
     try:
@@ -170,6 +176,8 @@ def _run_loop(
     skills_max_body: int,
     project_rules: str,
 ) -> Turn:
+    spawn_count = 0
+    backend_announced = False
     for _round in range(config.max_rounds):
         cancel.check()
 
@@ -188,6 +196,7 @@ def _run_loop(
                 active_skills=active_skills,
                 skills_max_body=skills_max_body,
                 project_rules=project_rules,
+                execution_backend=config.execution.backend,
             )
 
         def delta_handler(text: str) -> None:
@@ -309,18 +318,77 @@ def _run_loop(
                 _mark_approved(tracking_items)
 
             cancel.check()
+
+            if tool_name == "spawn_worker":
+                if spawn_count >= config.multi_agent.max_workers_per_turn:
+                    result_text = (
+                        f"Worker spawn limit reached "
+                        f"({config.multi_agent.max_workers_per_turn} per turn)."
+                    )
+                    for item in tracking_items:
+                        if isinstance(item, CollabSpawnItem):
+                            item.status = "failed"
+                            item.summary = result_text
+                        store.append_item(thread, turn.id, item)
+                        emitter.item_completed(
+                            thread.id, turn.id, item.type, item.id, "failed"
+                        )
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tool_call_id,
+                            "content": result_text,
+                        }
+                    )
+                    continue
+                spawn_count += 1
+                result_text, collab_item = spawn_worker(
+                    thread,
+                    arguments,
+                    config,
+                    store,
+                    emitter=emitter,
+                )
+                if tracking_items and isinstance(tracking_items[0], CollabSpawnItem):
+                    item = tracking_items[0]
+                    item.worker_thread_id = collab_item.worker_thread_id
+                    item.status = collab_item.status
+                    item.summary = collab_item.summary
+                    store.append_item(thread, turn.id, item)
+                    emitter.item_completed(
+                        thread.id, turn.id, item.type, item.id, item.status
+                    )
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, collab_item.status, source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
+                continue
+
+            if tool_name == "run_command" and not backend_announced:
+                backend_announced = True
+                img = (
+                    config.execution.docker_image_override
+                    or config.execution.default_image
+                )
+                emitter.execution_backend_selected(
+                    thread.id,
+                    turn.id,
+                    backend=config.execution.backend,
+                    image=img if config.execution.backend == "docker" else None,
+                )
+
             dispatch_result = dispatch_tool(
                 tool_name, arguments, config, mcp_manager=mcp_manager
             )
-            if dispatch_result.isolation_meta:
-                meta = dispatch_result.isolation_meta
-                emitter.isolation_applied(
-                    thread.id,
-                    turn.id,
-                    pid=meta.get("pid"),
-                    cwd=meta.get("cwd", str(config.cwd)),
-                    stripped_env_count=meta.get("stripped_env_count", 0),
-                )
+            _emit_execution_events(
+                dispatch_result, thread.id, turn.id, config, emitter
+            )
             result_text = _apply_dispatch_results(
                 dispatch_result,
                 tracking_items,
@@ -414,6 +482,19 @@ def _create_tracking_items(
             WebSearchItem(
                 query=arguments.get("query", ""),
                 status="pending",
+                tool_call_id=tool_call_id,
+                tool_arguments=raw_args,
+            )
+        ]
+    if tool_name == "spawn_worker":
+        return [
+            CollabSpawnItem(
+                worker_thread_id="",
+                task=arguments.get("task", ""),
+                status="running",
+                title=arguments.get("title"),
+                model=arguments.get("model"),
+                execution_backend=arguments.get("execution_backend"),
                 tool_call_id=tool_call_id,
                 tool_arguments=raw_args,
             )
@@ -546,6 +627,9 @@ def _precheck_tool(
     elif tool_name == "web_search":
         if config.sandbox_mode.value == "read-only":
             return "web search denied in read-only sandbox"
+    elif tool_name == "spawn_worker":
+        if not config.multi_agent.enabled:
+            return "spawn_worker requires multi_agent.enabled or --multi-agent"
     elif mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
         decision = check_mcp_tool(
@@ -599,6 +683,41 @@ def _handle_blocked_tool(
     )
 
 
+def _emit_execution_events(
+    result: DispatchResult,
+    thread_id: str,
+    turn_id: str,
+    config: Config,
+    emitter: EventEmitter,
+) -> None:
+    meta = result.execution_meta or result.isolation_meta
+    if not meta:
+        return
+    if meta.get("isolated"):
+        emitter.isolation_applied(
+            thread_id,
+            turn_id,
+            pid=meta.get("pid"),
+            cwd=meta.get("cwd", str(config.cwd)),
+            stripped_env_count=meta.get("stripped_env_count", 0),
+        )
+    if meta.get("backend") == "docker":
+        image = meta.get("image") or config.execution.default_image
+        emitter.execution_docker_started(
+            thread_id,
+            turn_id,
+            image=image,
+            container_id=meta.get("container_id"),
+        )
+        if result.command_item:
+            emitter.execution_docker_completed(
+                thread_id,
+                turn_id,
+                image=image,
+                exit_code=result.command_item.exit_code or -1,
+            )
+
+
 def brief_args(tool_name: str, arguments: dict) -> str:
     if tool_name == "run_command":
         return arguments.get("cmd", "")
@@ -613,6 +732,8 @@ def brief_args(tool_name: str, arguments: dict) -> str:
         return arguments.get("pattern", "")
     if tool_name == "web_search":
         return arguments.get("query", "")
+    if tool_name == "spawn_worker":
+        return arguments.get("task", "")[:80]
     if tool_name.startswith("mcp__"):
         return str(arguments)[:80]
     return str(arguments)

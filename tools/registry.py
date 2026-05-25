@@ -29,16 +29,23 @@ class DispatchResult:
     file_items: list[FileChangeItem] = field(default_factory=list)
     mcp_item: McpToolCallItem | None = None
     web_search_item: WebSearchItem | None = None
-    isolation_meta: dict | None = None
+    isolation_meta: dict | None = None  # legacy alias
+    execution_meta: dict | None = None
 
 
 def get_tool_schemas(
     mcp_manager: McpManager | None = None,
     config: Config | None = None,
+    *,
+    allow_spawn: bool = False,
 ) -> list[dict[str, Any]]:
     schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
     if config and config.web_search.enabled:
         schemas.append(WEB_SEARCH_SCHEMA)
+    if config and config.multi_agent.enabled and allow_spawn:
+        from agent.multi_agent.spawn import SPAWN_WORKER_SCHEMA
+
+        schemas.append(SPAWN_WORKER_SCHEMA)
     if mcp_manager:
         schemas.extend(mcp_manager.get_tool_schemas())
     return schemas
@@ -47,6 +54,8 @@ def get_tool_schemas(
 def tool_requires_approval(
     name: str, mcp_manager: McpManager | None = None, config: Config | None = None
 ) -> bool:
+    if name == "spawn_worker":
+        return True
     if name == "web_search":
         return True
     if mcp_manager and mcp_manager.is_mcp_tool(name):
@@ -104,7 +113,7 @@ def dispatch_tool(
             cwd=str(config.cwd if not workdir else config.cwd / workdir),
             status="running",
         )
-        output, exit_code, duration_ms, isolation_meta = run_command(
+        output, exit_code, duration_ms, exec_meta = run_command(
             config.cwd,
             cmd,
             workdir=workdir,
@@ -116,8 +125,17 @@ def dispatch_tool(
         item.exit_code = exit_code
         item.duration_ms = duration_ms
         item.status = "completed" if exit_code == 0 else "failed"
+        if exec_meta:
+            backend = exec_meta.get("backend")
+            if backend in ("local", "docker"):
+                item.backend = backend
+            item.container_id = exec_meta.get("container_id")
+            item.image = exec_meta.get("image")
         return DispatchResult(
-            text=output, command_item=item, isolation_meta=isolation_meta
+            text=output,
+            command_item=item,
+            execution_meta=exec_meta,
+            isolation_meta=exec_meta,
         )
 
     if name == "write_file":

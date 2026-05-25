@@ -80,6 +80,7 @@ def build_system_prompt(
     active_skills: list[Skill] | None = None,
     skills_max_body: int = 4000,
     project_rules: str = "",
+    execution_backend: str | None = None,
 ) -> str:
     project_context = load_project_context(cwd)
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
@@ -87,6 +88,17 @@ def build_system_prompt(
     prompt = f"""You are a local coding agent working in the user's project directory.
 
 Current working directory: {cwd}
+"""
+    if execution_backend == "docker":
+        mount = "/workspace"
+        prompt += f"""
+Command execution: **Docker container** (project mounted at {mount}).
+Use Linux paths inside the container (e.g. {mount}/src/file.py).
+Shell commands run via `run_command` execute inside the container, not on the host.
+"""
+    else:
+        prompt += """
+Command execution: **local host** — shell commands run on your machine in the project directory.
 """
     if repo_root:
         prompt += f"Git repository root: {repo_root}\n"
@@ -329,6 +341,7 @@ def build_thread_messages(
     active_skills: list[Skill] | None = None,
     skills_max_body: int = 4000,
     project_rules: str = "",
+    execution_backend: str | None = None,
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {
@@ -339,6 +352,7 @@ def build_thread_messages(
                 active_skills=active_skills,
                 skills_max_body=skills_max_body,
                 project_rules=project_rules,
+                execution_backend=execution_backend,
             ),
         }
     ]

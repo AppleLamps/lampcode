@@ -98,6 +98,34 @@ class WebSearchSettings:
     timeout_sec: int = 15
 
 
+@dataclass
+class DockerExecutionSettings:
+    binary: str = "docker"
+    platform: str = ""
+
+
+@dataclass
+class ExecutionSettings:
+    backend: str = "local"
+    default_image: str = "python:3.12-slim"
+    workspace_mount: str = "/workspace"
+    network: str = "none"
+    memory_limit: str = "1g"
+    cpu_limit: str = "1.0"
+    command_timeout_sec: int = 120
+    auto_pull: bool = False
+    docker: DockerExecutionSettings = field(default_factory=DockerExecutionSettings)
+    docker_image_override: str | None = None
+
+
+@dataclass
+class MultiAgentSettings:
+    enabled: bool = False
+    max_workers_per_turn: int = 3
+    worker_auto_approve: bool = False
+    inherit_execution_backend: bool = True
+
+
 def _load_toml(path: Path) -> dict[str, Any]:
     if tomllib is None or not path.is_file():
         return {}
@@ -168,6 +196,43 @@ def load_web_search_settings(path: Path | None = None) -> WebSearchSettings:
         provider=str(ws.get("provider", "duckduckgo")),
         max_results=int(ws.get("max_results", 5)),
         timeout_sec=int(ws.get("timeout_sec", 15)),
+    )
+
+
+def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
+    data = _load_toml(path or default_config_path())
+    exe = data.get("execution", {})
+    if not isinstance(exe, dict):
+        exe = {}
+    docker_raw = exe.get("docker", {})
+    if not isinstance(docker_raw, dict):
+        docker_raw = {}
+    return ExecutionSettings(
+        backend=str(exe.get("backend", "local")),
+        default_image=str(exe.get("default_image", "python:3.12-slim")),
+        workspace_mount=str(exe.get("workspace_mount", "/workspace")),
+        network=str(exe.get("network", "none")),
+        memory_limit=str(exe.get("memory_limit", "1g")),
+        cpu_limit=str(exe.get("cpu_limit", "1.0")),
+        command_timeout_sec=int(exe.get("command_timeout_sec", 120)),
+        auto_pull=bool(exe.get("auto_pull", False)),
+        docker=DockerExecutionSettings(
+            binary=str(docker_raw.get("binary", "docker")),
+            platform=str(docker_raw.get("platform", "")),
+        ),
+    )
+
+
+def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
+    data = _load_toml(path or default_config_path())
+    ma = data.get("multi_agent", {})
+    if not isinstance(ma, dict):
+        ma = {}
+    return MultiAgentSettings(
+        enabled=bool(ma.get("enabled", False)),
+        max_workers_per_turn=int(ma.get("max_workers_per_turn", 3)),
+        worker_auto_approve=bool(ma.get("worker_auto_approve", False)),
+        inherit_execution_backend=bool(ma.get("inherit_execution_backend", True)),
     )
 
 

@@ -268,6 +268,92 @@ class EventEmitter:
             )
         )
 
+    def execution_backend_selected(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        backend: str,
+        image: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.backend.selected",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"backend": backend, "image": image},
+            )
+        )
+
+    def execution_docker_started(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        image: str,
+        container_id: str | None = None,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.docker.started",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"image": image, "container_id": container_id},
+            )
+        )
+
+    def execution_docker_completed(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        image: str,
+        exit_code: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.docker.completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"image": image, "exit_code": exit_code},
+            )
+        )
+
+    def collab_spawn_started(
+        self,
+        thread_id: str,
+        item_id: str,
+        *,
+        task: str,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "collab.spawn.started",
+                thread_id=thread_id,
+                data={"item_id": item_id, "task": task},
+            )
+        )
+
+    def collab_spawn_completed(
+        self,
+        thread_id: str,
+        item_id: str,
+        *,
+        worker_thread_id: str,
+        status: str,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "collab.spawn.completed",
+                thread_id=thread_id,
+                data={
+                    "item_id": item_id,
+                    "worker_thread_id": worker_thread_id,
+                    "status": status,
+                },
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

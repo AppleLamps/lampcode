@@ -112,6 +112,9 @@ agent run "Find why tests fail and fix them" --cwd e:\lampcode\agent-cli\example
 | `--jsonl-events` | Machine-readable event stream |
 | `--show-system-prompt` | Debug: print system prompt |
 | `--quiet-tools` | Hide tool lines |
+| `--execution-backend` | `local` (default) or `docker` for `run_command` |
+| `--docker-image` | Override Docker image when using docker backend |
+| `--multi-agent` | Enable `spawn_worker` supervisor tool |
 
 ### Approval keys
 
@@ -258,16 +261,87 @@ MCP tools are exposed as `mcp__{server}__{tool}` and persisted as `mcpToolCall` 
 
 Loads `AGENTS.md`, `agents.md`, or `.agents/AGENTS.md` into `# Project Rules` in the system prompt.
 
+## Phase 6 — Docker execution + multi-agent supervisor
+
+### Execution backends
+
+Commands from `run_command` can run on the host (`local`, default) or inside Docker (`docker`).
+
+```toml
+[execution]
+backend = "local"          # local | docker
+default_image = "python:3.12-slim"
+workspace_mount = "/workspace"
+network = "none"           # none | bridge (bridge needs approval first use)
+memory_limit = "1g"
+cpu_limit = "1.0"
+command_timeout_sec = 120
+auto_pull = false
+
+[execution.docker]
+binary = "docker"
+platform = ""
+```
+
+Precedence: `--execution-backend` → `AGENT_EXECUTION_BACKEND` → config → `local`.
+
+```powershell
+# Host (default)
+agent run "pytest -q" --cwd e:\lampcode\agent-cli\examples\demo-project
+
+# Docker (requires Docker Desktop on Windows)
+agent run "python -c `"print(1+1)`"" `
+  --execution-backend docker `
+  --docker-image python:3.12-slim `
+  --cwd e:\lampcode\agent-cli\examples\demo-project
+
+agent doctor --deep   # checks docker binary + hello-world (skip in CI via AGENT_SKIP_DOCKER_INTEGRATION=1)
+```
+
+Docker mounts thread `cwd` at `/workspace` (read-only when sandbox is `read-only` and command is read-like). Default network is **none** for safety. `commandExecution` items record `backend`, `container_id`, and `image` when applicable.
+
+### Multi-agent supervisor (v1)
+
+When enabled, the main agent gets a `spawn_worker` tool — fork a worker thread, run **one** headless turn, return the summary (max **3** spawns per supervisor turn; workers cannot spawn).
+
+```toml
+[multi_agent]
+enabled = true
+max_workers_per_turn = 3
+worker_auto_approve = false
+inherit_execution_backend = true
+```
+
+```powershell
+agent run "Refactor tests and docs in parallel" `
+  --multi-agent `
+  --cwd e:\lampcode\agent-cli\examples\demo-project
+```
+
+### Export & read-only viewer
+
+```powershell
+agent threads export abc123 --out thread.md
+agent runs export turn-id-prefix --out run.md
+
+agent serve --host 127.0.0.1 --port 8765
+# GET http://127.0.0.1:8765/threads
+# GET http://127.0.0.1:8765/threads/{id}
+# GET http://127.0.0.1:8765/runs/{turn_id}
+```
+
+Binding to `0.0.0.0` prints a warning — localhost only by default.
+
 ## Tests
 
 ```powershell
-pytest   # 140+ tests
+pytest   # 165+ tests
 ```
 
 ## Phase 5 migration
 
 New optional sections: `[recording]`, `[isolation]`, `[web_search]`. Defaults preserve prior behavior (recording on, isolation auto when sandbox restricted, web search off). New item type `webSearch`, events `isolation.applied`. Install `[tui]` extra for `agent tui`.
 
-## Phase 6 (not yet)
+## Phase 7 (planned, not implemented)
 
-Kernel sandbox (AppContainer/bubblewrap/Seatbelt), multi-agent supervisor/worker, remote SSH/container backend, skill marketplace, full web UI.
+Kernel sandbox (AppContainer/bubblewrap/Seatbelt), SSH remote execution backend, recursive worker swarms, skill marketplace, full editable web UI.

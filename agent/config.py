@@ -16,12 +16,16 @@ from agent.paths import default_config_path
 from agent.sandbox.policy import SandboxMode
 from agent.settings import (
     CompactionSettings,
+    ExecutionSettings,
     IsolationSettings,
+    MultiAgentSettings,
     OpenRouterSettings,
     RecordingSettings,
     WebSearchSettings,
     load_compaction_settings,
+    load_execution_settings,
     load_isolation_settings,
+    load_multi_agent_settings,
     load_openrouter_settings,
     load_recording_settings,
     load_web_search_settings,
@@ -112,6 +116,8 @@ class Config:
     recording: RecordingSettings = field(default_factory=RecordingSettings)
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
     web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
+    execution: ExecutionSettings = field(default_factory=ExecutionSettings)
+    multi_agent: MultiAgentSettings = field(default_factory=MultiAgentSettings)
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
@@ -123,6 +129,8 @@ class Config:
 
     @property
     def use_isolation(self) -> bool:
+        if self.execution.backend == "docker":
+            return False
         if self.sandbox_mode == SandboxMode.DANGER_FULL_ACCESS:
             return False
         return self.isolation.enabled
@@ -141,6 +149,9 @@ class Config:
         context_window_tokens: int | None = None,
         compaction_threshold: float | None = None,
         sandbox: str | None = None,
+        execution_backend: str | None = None,
+        docker_image: str | None = None,
+        multi_agent: bool | None = None,
         skip_git_check: bool = False,
         config_path: Path | None = None,
     ) -> Config:
@@ -161,6 +172,7 @@ class Config:
         env_context_window = os.environ.get("AGENT_CONTEXT_WINDOW_TOKENS")
         env_compaction = os.environ.get("AGENT_COMPACTION_THRESHOLD")
         env_sandbox = os.environ.get("AGENT_SANDBOX_MODE")
+        env_execution_backend = os.environ.get("AGENT_EXECUTION_BACKEND")
 
         api_key = os.environ.get("OPENROUTER_API_KEY")
         base_url = os.environ.get(
@@ -221,6 +233,15 @@ class Config:
         recording = load_recording_settings(resolved_config_path)
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
+        execution_cfg = load_execution_settings(resolved_config_path)
+        multi_agent_cfg = load_multi_agent_settings(resolved_config_path)
+
+        backend_value = execution_backend or env_execution_backend or execution_cfg.backend
+        execution_cfg.backend = backend_value
+        if docker_image:
+            execution_cfg.docker_image_override = docker_image
+        if multi_agent is not None:
+            multi_agent_cfg.enabled = multi_agent
 
         return cls(
             cwd=resolved_cwd,
@@ -239,6 +260,8 @@ class Config:
             recording=recording,
             isolation=isolation,
             web_search=web_search,
+            execution=execution_cfg,
+            multi_agent=multi_agent_cfg,
             openrouter_api_key=api_key,
             openrouter_base_url=base_url,
             config_path=resolved_config_path,
@@ -278,6 +301,12 @@ class Config:
             "isolation_enabled": self.isolation.enabled,
             "isolation_effective": self.use_isolation,
             "web_search_enabled": self.web_search.enabled,
+            "execution_backend": self.execution.backend,
+            "execution_docker_image": self.execution.docker_image_override
+            or self.execution.default_image,
+            "execution_network": self.execution.network,
+            "multi_agent_enabled": self.multi_agent.enabled,
+            "multi_agent_max_workers": self.multi_agent.max_workers_per_turn,
             "openrouter_base_url": self.openrouter_base_url,
             "config_path": str(self.config_path) if self.config_path else None,
             "openrouter_api_key_set": bool(self.openrouter_api_key),

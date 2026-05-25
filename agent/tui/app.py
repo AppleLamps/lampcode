@@ -12,6 +12,7 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, S
 from agent.cancel import CancelToken, CancelledError
 from agent.config import Config
 from agent.events import AgentEvent
+from agent.execution.factory import backend_display
 from agent.git import detect_repo_root
 from agent.models import Thread, new_id, utc_now_iso
 from agent.recording.store import RunStore
@@ -127,10 +128,11 @@ class AgentTuiApp(App):
         meta = self.query_one("#meta", Static)
         sandbox = self._config.sandbox_mode.value
         isolation = "on" if self._config.use_isolation else "off"
+        backend = backend_display(self._config)
         thread_label = self._thread.display_label() if self._thread else "(new thread)"
         meta.update(
             f"cwd: {self._config.cwd.name} | model: {self._config.model} | "
-            f"sandbox: {sandbox} | isolation: {isolation} | thread: {thread_label}"
+            f"sandbox: {sandbox} | exec: {backend} | isolation: {isolation} | thread: {thread_label}"
         )
 
     def _render_transcript(self) -> None:
