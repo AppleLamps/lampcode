@@ -71,6 +71,7 @@ def test_classify_http_status() -> None:
     assert classify_http_status(429) == "rate_limit"
     assert classify_http_status(503) == "provider_error"
     assert classify_http_status(404) == "model_not_found"
+    assert classify_http_status(400, "maximum context length exceeded") == "context_length"
 
 
 def test_should_fallback_respects_chain_end() -> None:
@@ -139,6 +140,7 @@ def test_fallback_primary_503_uses_secondary() -> None:
             fallback_models=["fallback/model"],
             fallback_on=["provider_error"],
             max_retries=0,
+            native_fallback=False,
         ),
     )
     client = OpenRouterClient(cfg)

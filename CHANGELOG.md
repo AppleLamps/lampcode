@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.9.1] — 2026-05-25
+
+OpenRouter API parity improvements (solo harness).
+
+### Added
+
+- **Native model routing:** OpenRouter `models` + `route: "fallback"` in a single request when `native_fallback = true` (default).
+- **Reasoning preservation:** Capture `reasoning` / `reasoning_details` from stream deltas; attach to assistant messages across tool rounds.
+- **Structured output wiring:** `--output-schema` sends OpenRouter `response_format` when the model cache reports `structured_outputs` support.
+- **API cost preference:** `enrich_usage()` prefers `usage.cost` from OpenRouter (`cost_source = "api"`), falls back to pricing seed.
+- **Context-length fallback:** `context_length` in default `fallback_on`; classified from 400 response bodies.
+- **Optional payload fields:** `[openrouter] max_tokens`, `user_id`, `require_parameters`, `reasoning_exclude`.
+- **Stream robustness:** Track `response.model` from chunks; surface `choices[0].error` and top-level chunk errors.
+- **Docs:** [docs/openrouter.md](docs/openrouter.md) — full `[openrouter]` reference.
+
+### Changed
+
+- **Client-side fallback:** Sequential model retries when `native_fallback = false` (tests and legacy proxies).
+
+### Tests
+
+- `tests/test_openrouter_v2.py` — **999** pytest cases (990 baseline + 9 new).
+
 ## [2.9.0] — 2026-05-25
 
 Phase 28 observability and trust (solo only).

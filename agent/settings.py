@@ -126,7 +126,14 @@ class OpenRouterSettings:
     request_timeout_sec: int = 120
     primary_model: str = ""
     fallback_models: list[str] = field(default_factory=list)
-    fallback_on: list[str] = field(default_factory=lambda: ["rate_limit", "provider_error", "timeout"])
+    fallback_on: list[str] = field(
+        default_factory=lambda: ["rate_limit", "provider_error", "timeout", "context_length"]
+    )
+    native_fallback: bool = True
+    max_tokens: int | None = None
+    reasoning_exclude: bool = True
+    user_id: str = ""
+    require_parameters: bool = False
     app_name: str = "agent-cli"
     app_url: str = "https://github.com/agent-cli"
     pricing: dict[str, SwarmBudgetPricing] = field(default_factory=dict)
@@ -531,14 +538,21 @@ def _parse_openrouter_pricing(raw: Any) -> dict[str, SwarmBudgetPricing]:
 
 def _parse_openrouter_section(or_cfg: dict[str, Any]) -> OpenRouterSettings:
     fb = or_cfg.get("fallback_models", [])
-    fo = or_cfg.get("fallback_on", ["rate_limit", "provider_error", "timeout"])
+    fo = or_cfg.get("fallback_on", ["rate_limit", "provider_error", "timeout", "context_length"])
+    max_tokens_raw = or_cfg.get("max_tokens")
+    max_tokens = int(max_tokens_raw) if max_tokens_raw is not None else None
     return OpenRouterSettings(
         max_retries=int(or_cfg.get("max_retries", 3)),
         retry_base_delay_sec=float(or_cfg.get("retry_base_delay_sec", 1.0)),
         request_timeout_sec=int(or_cfg.get("request_timeout_sec", 120)),
         primary_model=str(or_cfg.get("primary_model", "")),
         fallback_models=[str(x) for x in fb] if isinstance(fb, list) else [],
-        fallback_on=[str(x) for x in fo] if isinstance(fo, list) else ["rate_limit", "provider_error", "timeout"],
+        fallback_on=[str(x) for x in fo] if isinstance(fo, list) else ["rate_limit", "provider_error", "timeout", "context_length"],
+        native_fallback=bool(or_cfg.get("native_fallback", True)),
+        max_tokens=max_tokens,
+        reasoning_exclude=bool(or_cfg.get("reasoning_exclude", True)),
+        user_id=str(or_cfg.get("user_id", "")),
+        require_parameters=bool(or_cfg.get("require_parameters", False)),
         app_name=str(or_cfg.get("app_name", "agent-cli")),
         app_url=str(or_cfg.get("app_url", "https://github.com/agent-cli")),
         pricing=_parse_openrouter_pricing(or_cfg.get("pricing", {})),

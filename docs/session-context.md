@@ -15,19 +15,42 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.7.0 — Phase 26 complete)
+## Current state (v2.9.1 — OpenRouter API parity)
 
-Phase 26 shipped as **v2.7.0**. Before doing new work, verify:
+Phase 28 shipped as **v2.9.0**; OpenRouter improvements shipped as **v2.9.1**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~953 passed, 1 skipped, 0 failed
-git log --oneline -15   # expect Phase 26 commits after Phase 25
+pytest -q               # expect ~999 passed, 2 skipped, 0 failed
+git log --oneline -15   # expect v2.9.1 OpenRouter commit after Phase 28
 ```
 
-**Bottom line:** You're on **v2.7.0 / Phase 26 complete**. Next work is **Phase 27** unless you explicitly pivot to enterprise features.
+**Bottom line:** You're on **v2.9.1**. Next work is **Phase 29+** or enterprise features unless you explicitly pivot.
 
-### Phase 26 (v2.7.0) — just shipped
+### v2.9.1 — OpenRouter API parity
+
+- **Native fallback:** `models` + `route: "fallback"` (default); `native_fallback = false` for client-side chain
+- **Reasoning:** `reasoning` / `reasoning_details` captured and preserved across tool rounds
+- **Structured output:** `--output-schema` → OpenRouter `response_format` when model supports it
+- **Cost:** Prefer `usage.cost` from API; `cost_source` in enrich path
+- **Context length:** `context_length` in default `fallback_on`
+- **Docs:** `docs/openrouter.md`
+
+### Phase 28 (v2.9.0) — observability and trust
+
+- **Debug replay bundles:** `agent runs export --format bundle`
+- **Hooks lifecycle v2:** 8 events, stdout JSON, pre-tool block
+- **Memories v3:** suggest queue, accept/reject, inject dry-run
+- **Plan mode v2:** `<proposed_plan>`, `plan.proposed` event, REPL `/plan`
+- **Doctor JSON:** `agent doctor --json`
+- **Compaction tuning:** `auto_mid_turn`, REPL `/compact`
+
+### Phase 27 (v2.8.0)
+
+- **Windows ConPTY shell**, **`agent mcp-server`**, Exa/Tavily web search
+- **Exec-policy prefix amendments**, review merge-base diff polish
+
+### Phase 26 (v2.7.0) — just shipped (reference)
 
 - **Model preflight:** `agent doctor --models`; once-per-session non-tool model warning
 - **Budget caps:** `--max-cost`, `[budget] max_cost_usd_per_turn`; graceful stop + `budget_exceeded` in summary
@@ -73,12 +96,14 @@ git log --oneline -15   # expect Phase 26 commits after Phase 25
 - Sandbox modes, exec policy, thread fork/resume
 - Shared `agent/output_handler.py` for run + REPL streaming
 
-**OpenRouter UX (Phase 20)**
+**OpenRouter UX (Phase 20 + v2.9.1)**
 - Model profiles (`--profile`, `--model-profile`)
-- `agent/model_routing.py`, default pricing seed, cost tracking
+- `agent/model_routing.py`, default pricing seed, cost tracking (API cost preferred)
+- Native OpenRouter fallback routing; reasoning preservation; structured `response_format`
 - Tool-support warnings, doctor OpenRouter probe
 - Run ends with: `[done] model=… fallback=… cost≈$… tokens in=… out=…`
 - `.env` auto-load for `OPENROUTER_API_KEY`
+- Full reference: `docs/openrouter.md`
 
 **Phase 21 (v2.2.0)**
 - `agent threads pr-description` — bullet summary, `--summary-only`
@@ -101,11 +126,12 @@ git log --oneline -15   # expect Phase 26 commits after Phase 25
 
 **Docs**
 - `README.md` — solo-first quickstart
+- `docs/openrouter.md` — OpenRouter config, fallbacks, reasoning, structured output
 - `docs/enterprise.md` — Phases 6–18 (serve/OIDC/RBAC/DAG/scheduler)
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
-- `CHANGELOG.md` — v2.1.0 / v2.2.0 / v2.3.0 notes
+- `CHANGELOG.md` — v2.9.1 / v2.9.0 / … release notes
 
-**Tests:** 953 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 999 passed, 2 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)

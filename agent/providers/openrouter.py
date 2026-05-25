@@ -33,7 +33,7 @@ def model_chain(config: Config) -> ModelChainResult:
     return ModelChainResult(models=ordered or [config.model], primary=ordered[0] if ordered else config.model)
 
 
-def classify_http_status(status: int) -> str:
+def classify_http_status(status: int, body: str = "") -> str:
     if status == 429:
         return "rate_limit"
     if status in (502, 503, 504):
@@ -42,7 +42,51 @@ def classify_http_status(status: int) -> str:
         return "model_not_found"
     if status >= 500:
         return "provider_error"
+    if status == 400:
+        lower = body.lower()
+        if any(
+            token in lower
+            for token in ("context length", "context_length", "maximum context", "too many tokens")
+        ):
+            return "context_length"
     return "client_error"
+
+
+def is_openrouter_api(base_url: str) -> bool:
+    return "openrouter.ai" in base_url.rstrip("/").lower()
+
+
+def use_native_model_routing(config: Config, chain: ModelChainResult) -> bool:
+    settings = config.openrouter
+    return (
+        settings.native_fallback
+        and is_openrouter_api(config.openrouter_base_url)
+        and len(chain.models) > 1
+    )
+
+
+def build_response_format(schema: dict[str, Any], *, name: str = "agent_output") -> dict[str, Any]:
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": name,
+            "strict": True,
+            "schema": schema,
+        },
+    }
+
+
+def model_supports_structured_outputs(
+    model_id: str, models: list[dict[str, Any]] | None = None
+) -> bool:
+    record = _model_record(model_id, models)
+    if not record:
+        return False
+    supported = record.get("supported_parameters") or record.get("supportedParameters") or []
+    if isinstance(supported, list):
+        params = {str(p).lower() for p in supported}
+        return "structured_outputs" in params or "response_format" in params
+    return False
 
 
 def should_fallback(
@@ -90,15 +134,22 @@ def enrich_usage(
     *,
     model_used: str,
     fallback_used: bool,
-    usage: dict[str, int] | None,
+    usage: dict[str, Any] | None,
 ) -> dict[str, Any]:
     inp = (usage or {}).get("prompt_tokens")
     out = (usage or {}).get("completion_tokens")
-    cost = estimate_cost_usd(model_used, inp, out, config.openrouter.pricing)
+    api_cost = (usage or {}).get("cost")
+    if api_cost is not None:
+        cost = float(api_cost)
+        cost_source = "api"
+    else:
+        cost = estimate_cost_usd(model_used, inp, out, config.openrouter.pricing)
+        cost_source = "pricing_seed"
     return {
         "input_tokens": inp,
         "output_tokens": out,
         "estimated_cost_usd": round(cost, 6),
+        "cost_source": cost_source,
         "model_used": model_used,
         "fallback_used": fallback_used,
     }

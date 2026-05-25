@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from typing import Callable
+from typing import Any, Callable
 
 from agent.cancel import CancelToken, CancelledError
 from agent.compaction import compact_thread_if_needed
@@ -535,12 +535,25 @@ def _run_loop(
             if on_text_delta:
                 on_text_delta(text)
 
+        response_format = None
+        if output_schema:
+            from agent.providers.openrouter import (
+                ModelsCache,
+                build_response_format,
+                model_supports_structured_outputs,
+            )
+
+            cached = ModelsCache().load()
+            if model_supports_structured_outputs(config.model, cached or None):
+                response_format = build_response_format(output_schema)
+
         try:
             result = client.stream_completion(
                 messages,
                 tools=tools,
                 on_delta=delta_handler,
                 cancel_token=cancel,
+                response_format=response_format,
             )
         except CancelledError:
             raise
@@ -617,11 +630,17 @@ def _run_loop(
             )
             return turn
 
-        assistant_msg = {
+        assistant_msg: dict[str, Any] = {
             "role": "assistant",
             "content": result.content or None,
             "tool_calls": result.tool_calls,
         }
+        reasoning = getattr(result, "reasoning", "") or ""
+        reasoning_details = getattr(result, "reasoning_details", None) or []
+        if reasoning:
+            assistant_msg["reasoning"] = reasoning
+        if reasoning_details:
+            assistant_msg["reasoning_details"] = reasoning_details
         messages.append(assistant_msg)
 
         tool_calls_list = list(result.tool_calls)

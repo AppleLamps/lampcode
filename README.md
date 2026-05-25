@@ -59,7 +59,11 @@ exec_policy = "untrusted"
 [openrouter]
 primary_model = "anthropic/claude-sonnet-4"
 fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
-fallback_on = ["rate_limit", "provider_error", "timeout"]
+fallback_on = ["rate_limit", "provider_error", "timeout", "context_length"]
+native_fallback = true
+# max_tokens = 8192
+# user_id = "my-user-id"
+# reasoning_exclude = true
 
 [openrouter.pricing."anthropic/claude-sonnet-4"]
 input_per_million = 3.0
@@ -233,7 +237,9 @@ agent profile list
 agent profile show interactive
 ```
 
-OpenRouter fallbacks, retries, and per-turn cost estimates are on by default. `agent doctor` includes a solo-dev readiness table, OpenRouter reachability when a key is set, and **`agent doctor --models`** for per-profile preflight (tools, context, pricing).
+OpenRouter fallbacks, retries, and per-turn cost estimates are on by default. Native OpenRouter routing (`models` + `route: "fallback"`) is enabled when multiple models are configured; set `native_fallback = false` for client-side sequential fallback. Cost prefers `usage.cost` from the API when available. See [docs/openrouter.md](docs/openrouter.md) for reasoning preservation, structured output, and all `[openrouter]` keys.
+
+`agent doctor` includes a solo-dev readiness table, OpenRouter reachability when a key is set, and **`agent doctor --models`** for per-profile preflight (tools, context, pricing).
 
 ```powershell
 agent run "fix tests" --max-cost 0.50          # stop turn when estimated cost exceeds cap
@@ -259,16 +265,17 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 953+ tests
+pytest   # 999+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.7.0 (Phase 26).
+See [CHANGELOG.md](CHANGELOG.md) for v2.9.1 (OpenRouter API parity) and v2.9.0 (Phase 28).
 
 ## Further reading
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
+- [OpenRouter integration](docs/openrouter.md) — fallbacks, reasoning, structured output, cost
 - [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)
 - [Roadmap (Phases 24–28)](docs/roadmap/README.md) — step-by-step harness plans
 - [Enterprise features](docs/enterprise.md) — serve, OIDC, RBAC, DAG, scheduler (Phases 6–18)

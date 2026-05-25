@@ -3,6 +3,11 @@ model_profile = "deep"
 sandbox_mode = "workspace-write"
 approval_mode = "interactive"
 
+[openrouter]
+fallback_models = ["openai/gpt-4.1"]
+fallback_on = ["rate_limit", "provider_error", "timeout", "context_length"]
+native_fallback = true
+
 [project]
 name = "demo-project"
 trust_git_root = true

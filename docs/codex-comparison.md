@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.9.0 (Phase 28 observability).  
+**Current release:** v2.9.1 (OpenRouter API parity).  
 **Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
 
 ---
@@ -113,8 +113,8 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 
 | Need | Status | agent-cli |
 |------|--------|-----------|
-| Model routing / fallbacks | ✅ | `[model_routing]`, `fallback_models`, retries |
-| Cost visibility | ✅ | Pricing seed, `[done]` line, `agent threads cost` |
+| Model routing / fallbacks | ✅ | Native `route: "fallback"` or client-side chain; `[model_routing]`, `fallback_models` |
+| Cost visibility | ✅ | API `usage.cost` when present; pricing seed fallback; `[done]` + `agent threads cost` |
 | Tool-capable models | ✅ | Warnings for denylist / cache heuristics |
 | Web search | ✅ | DuckDuckGo + Exa/Tavily providers (Phase 27) |
 | MCP server (embed) | ✅ | `agent mcp-server` + `agent_run` tool (Phase 27) |
@@ -126,8 +126,9 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Post-patch test hook | ✅ | `[harness] post_patch_test` (Phase 26) |
 | Turn / thread stats | ✅ | `threads show --stats`, extended `[done]` line (Phase 26) |
 | JSON event catalog | ✅ | `docs/json-events.md` + golden fixture (Phase 26) |
-| Reasoning effort | ✅ | `reasoning_effort` in profiles → OpenRouter `reasoning.effort` |
-| Structured output schema | ✅ | `--output-schema` on `agent run` (Phase 22) |
+| Reasoning effort | ✅ | `reasoning_effort` in profiles → `reasoning.effort`; `reasoning_details` preserved in tool loop (v2.9.1) |
+| Structured output schema | ✅ | `--output-schema` → OpenRouter `response_format` when model supports it (v2.9.1) |
+| Context-length fallback | ✅ | `context_length` in `fallback_on`; 400 body classification (v2.9.1) |
 
 ---
 
