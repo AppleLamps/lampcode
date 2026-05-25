@@ -24,6 +24,11 @@ from agent.execution.sync.manifest import (
 from agent.execution.sync.planner import estimate_sync_size, plan_sync
 from agent.execution.sync.rsync import RsyncTransport
 from agent.execution.sync.scp import ScpTransport
+from agent.execution.sync.remote import (
+    fetch_remote_manifest,
+    replicate_remote_state_if_enabled,
+    resolve_remote_manifest,
+)
 from agent.execution.sync.state import SyncStateStore
 from agent.metrics import MetricsCollector
 from agent.models import WorkspaceSyncItem
@@ -34,6 +39,65 @@ def _get_transport(config: Config, name: str, runner=None):
     if name == "rsync":
         return RsyncTransport(config, runner=runner)
     return ScpTransport(config, runner=runner)
+
+
+def _prepare_remote_manifest(
+    config: Config,
+    remote_manifest,
+    *,
+    thread_id: str | None,
+    turn_id: str | None,
+    runner=None,
+    emitter=None,
+):
+    if remote_manifest is not None:
+        return remote_manifest, None
+    return resolve_remote_manifest(
+        config,
+        thread_id=thread_id,
+        turn_id=turn_id,
+        runner=runner,
+        emitter=emitter,
+    )
+
+
+def run_sync_fetch_remote(
+    config: Config,
+    *,
+    thread_id: str | None = None,
+    runner=None,
+    emitter=None,
+) -> dict:
+    result = fetch_remote_manifest(
+        config,
+        runner=runner,
+        emitter=emitter,
+        thread_id=thread_id,
+    )
+    if result.ok and thread_id and config.execution.ssh.sync.replicate_remote_state:
+        replicate_remote_state_if_enabled(config, thread_id, result.manifest)
+    return {
+        "ok": result.ok,
+        "missing": result.missing,
+        "files": len(result.manifest.files),
+        "error": result.error,
+    }
+
+
+def format_plan_verbose(plan: dict) -> str:
+    lines = [
+        f"mode={plan.get('mode')} transport={plan.get('transport')} summary={plan.get('summary')}",
+        f"counts={plan.get('counts')}",
+    ]
+    for label in ("push", "pull", "conflict", "conflicts"):
+        items = plan.get(label) or []
+        if items:
+            lines.append(f"{label}:")
+            for p in items[:50]:
+                lines.append(f"  {p}")
+            if len(items) > 50:
+                lines.append(f"  ... +{len(items) - 50} more")
+    return "\n".join(lines)
 
 
 def sync_status(config: Config) -> dict:
@@ -68,8 +132,20 @@ def run_sync_plan(
     *,
     thread_id: str | None = None,
     remote_manifest=None,
+    runner=None,
+    emitter=None,
 ) -> dict:
-    return plan_dry_run(config, thread_id=thread_id, remote_manifest=remote_manifest)
+    remote, err = _prepare_remote_manifest(
+        config,
+        remote_manifest,
+        thread_id=thread_id,
+        turn_id=None,
+        runner=runner,
+        emitter=emitter,
+    )
+    if err:
+        return {"error": err}
+    return plan_dry_run(config, thread_id=thread_id, remote_manifest=remote)
 
 
 def resolve_sync_path(
@@ -171,6 +247,8 @@ def _finalize_incremental(
         direction=direction,
     )
     store.save(state)
+    if thread_id:
+        replicate_remote_state_if_enabled(config, thread_id, plan.remote_manifest)
 
 
 def run_sync_push(
@@ -187,11 +265,35 @@ def run_sync_push(
 ) -> tuple[SyncResult, WorkspaceSyncItem]:
     inc_plan, inc_err = (None, None)
     if incremental:
+        remote, rerr = _prepare_remote_manifest(
+            config,
+            remote_manifest,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            runner=runner,
+            emitter=emitter,
+        )
+        if rerr:
+            item = WorkspaceSyncItem(
+                direction="push",
+                transport="scp",
+                status="failed",
+                summary=rerr,
+            )
+            if emitter and thread_id:
+                emitter.execution_sync_failed(thread_id, turn_id, reason=rerr)
+            return SyncResult(
+                ok=False,
+                direction="push",
+                transport="scp",
+                summary=rerr,
+                error=rerr,
+            ), item
         inc_plan, inc_err = build_incremental_plan(
             config,
             "push",
             thread_id=thread_id,
-            remote_manifest=remote_manifest,
+            remote_manifest=remote,
             force=force,
         )
         if inc_err and inc_plan is None:
@@ -284,6 +386,9 @@ def run_sync_push(
         emitter.execution_sync_failed(thread_id, turn_id, reason=result.error or result.summary)
     if result.ok:
         MetricsCollector.global_collector().inc("sync_bytes_up", result.bytes_transferred)
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_sync_bytes_total", "up", result.bytes_transferred
+        )
     return result, item
 
 
@@ -303,6 +408,9 @@ def _run_incremental_push(
     if classification.conflict:
         MetricsCollector.global_collector().inc(
             "sync_conflicts", len(classification.conflict)
+        )
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_sync_conflicts_total", "conflict", len(classification.conflict)
         )
         if sync.conflict_strategy == "prompt":
             if conflict_fn:
@@ -433,6 +541,9 @@ def _run_incremental_push(
                 duration_ms=result.duration_ms,
             )
         MetricsCollector.global_collector().inc("sync_bytes_up", result.bytes_transferred)
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_sync_bytes_total", "up", result.bytes_transferred
+        )
     elif emitter and thread_id:
         emitter.execution_sync_failed(thread_id, turn_id, reason=result.error or result.summary)
     return result, item
@@ -451,13 +562,53 @@ def run_sync_pull(
 ) -> tuple[SyncResult, WorkspaceSyncItem]:
     inc_plan, inc_err = (None, None)
     if incremental:
+        remote, rerr = _prepare_remote_manifest(
+            config,
+            remote_manifest,
+            thread_id=thread_id,
+            turn_id=turn_id,
+            runner=runner,
+            emitter=emitter,
+        )
+        if rerr:
+            item = WorkspaceSyncItem(
+                direction="pull",
+                transport="scp",
+                status="failed",
+                summary=rerr,
+            )
+            if emitter and thread_id:
+                emitter.execution_sync_failed(thread_id, turn_id, reason=rerr)
+            return SyncResult(
+                ok=False,
+                direction="pull",
+                transport="scp",
+                summary=rerr,
+                error=rerr,
+            ), item
         inc_plan, inc_err = build_incremental_plan(
             config,
             "pull",
             thread_id=thread_id,
-            remote_manifest=remote_manifest,
+            remote_manifest=remote,
             force=True,
         )
+        if inc_err and inc_plan is None:
+            item = WorkspaceSyncItem(
+                direction="pull",
+                transport="scp",
+                status="failed",
+                summary=inc_err,
+            )
+            if emitter and thread_id:
+                emitter.execution_sync_failed(thread_id, turn_id, reason=inc_err)
+            return SyncResult(
+                ok=False,
+                direction="pull",
+                transport="scp",
+                summary=inc_err,
+                error=inc_err,
+            ), item
 
     if inc_plan is not None:
         sync = config.execution.ssh.sync
@@ -539,6 +690,9 @@ def run_sync_pull(
                     duration_ms=result.duration_ms,
                 )
             MetricsCollector.global_collector().inc("sync_bytes_down", result.bytes_transferred)
+            MetricsCollector.global_collector().inc_labeled(
+                "agent_sync_bytes_total", "down", result.bytes_transferred
+            )
         elif emitter and thread_id:
             emitter.execution_sync_failed(thread_id, turn_id, reason=result.error or result.summary)
         return result, item
@@ -599,6 +753,9 @@ def run_sync_pull(
         emitter.execution_sync_failed(thread_id, turn_id, reason=result.error or result.summary)
     if result.ok:
         MetricsCollector.global_collector().inc("sync_bytes_down", result.bytes_transferred)
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_sync_bytes_total", "down", result.bytes_transferred
+        )
     return result, item
 
 

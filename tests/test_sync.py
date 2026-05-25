@@ -25,7 +25,7 @@ def _cfg(tmp_path: Path) -> Config:
         user="ubuntu",
         remote_workspace="/home/ubuntu/workspace",
         sync_enabled=True,
-        sync=SshSyncSettings(max_upload_mb=200),
+        sync=SshSyncSettings(max_upload_mb=200, fetch_remote_manifest=False),
     )
     return c
 

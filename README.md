@@ -579,12 +579,93 @@ metrics_enabled = true
 - Checkpoint compaction archives older snapshots under `{turn}.archive/`
 - `agent metrics show` prints JSON runtime counters
 
+## Phase 10 — Remote manifest sync, HTTP turn control, production ops (v1.0.0)
+
+### Live remote manifest + sync-state v3
+
+Before incremental push/pull when `backend=ssh`, the agent fetches the remote manifest over SSH and merges it with local manifest + per-thread sync-state.
+
+```toml
+[execution.ssh.sync]
+fetch_remote_manifest = true
+remote_scan_max_files = 5000
+replicate_remote_state = true
+remote_shell = "bash -lc"
+on_remote_manifest_missing = "create"   # create | empty | abort
+```
+
+```powershell
+agent sync fetch-remote --ssh-host devbox.local --ssh-user ubuntu
+agent sync plan --verbose --ssh-host devbox.local
+agent sync push --incremental
+agent sync pull --incremental
+```
+
+Events: `execution.sync.remote_manifest_fetched`, `execution.sync.remote_scan_completed`. Replicated snapshot: `~/.agent-cli/sync-state/{thread_id}.remote.json`.
+
+### Serve v3 — HTTP turn start + approvals
+
+```toml
+[serve]
+enable_control = true
+enable_turn_start = true
+max_concurrent_turns = 2
+approval_timeout_sec = 300
+stream_buffer_size = 256
+auth_token = "your-secret-token"
+```
+
+```powershell
+# Terminal 1 — dashboard with turn control
+agent serve --enable-turn-start --token my-secret --max-concurrent-turns 2
+
+# Terminal 2 — start a turn
+$headers = @{ Authorization = "Bearer my-secret"; "Content-Type" = "application/json" }
+Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:8765/threads/{thread_id}/run" `
+  -Headers $headers -Body '{"prompt":"Fix failing tests","auto_approve":false}'
+
+# Approve a pending tool
+Invoke-RestMethod -Method POST -Uri "http://127.0.0.1:8765/approvals/{approval_id}" `
+  -Headers $headers -Body '{"decision":"accept"}'
+```
+
+API (Bearer required):
+- `POST /threads/{id}/run` — start harness turn (background thread)
+- `GET /threads/{id}/events?turn_id=...` — SSE including `approval.requested` with `approval_id`
+- `POST /approvals/{approval_id}` — `accept` | `deny` | `accept_turn` | `accept_session`
+- `POST /threads/{id}/cancel` — cancel active turn
+- `GET /metrics/prometheus` — Prometheus text exposition
+
+When `enable_turn_start=true`, `/` serves an interactive dashboard (Run + Approve/Deny + SSE transcript).
+
+### Production ops
+
+```powershell
+$env:AGENT_LOG_FORMAT = "json"    # structured JSON logs to stderr
+agent config validate --strict
+agent version
+agent metrics show --format prometheus
+```
+
+Prometheus metrics include `agent_turns_total`, `agent_tool_calls_total`, `agent_sync_bytes_total`, `agent_sync_conflicts_total`, `agent_workers_total`, `agent_http_turns_active`.
+
+Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for Phase 11); `agent multi-agent status --verbose` shows attempts, backoff, last error.
+
+## Production checklist
+
+1. Set `OPENROUTER_API_KEY` and a fixed `serve.auth_token` (never bind remotely without one).
+2. Keep `serve.host = "127.0.0.1"` unless you explicitly need remote access; use `--allow-remote-bind` only with firewall + token.
+3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
+4. Run `agent config validate --strict` in CI/deploy scripts.
+5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
+6. Run `pytest` (327+ tests) before release; check `agent doctor` for SSH/sync/tooling.
+
 ## Tests
 
 ```powershell
-pytest   # 270+ tests
+pytest   # 327+ tests
 ```
 
-## Phase 10 (planned, not implemented)
+## Phase 11 (planned, not implemented)
 
-Kernel sandbox backends (AppContainer, bubblewrap, Seatbelt), skill marketplace, HTTP turn start / full web IDE, worker DAG orchestration, OpenTelemetry metrics exporter.
+Kernel sandbox backends (AppContainer, bubblewrap, Seatbelt), signed skill marketplace, full web IDE (Monaco/file tree), worker DAG fan-in/fan-out using `worker_dependencies`, OpenTelemetry OTLP exporter, HTTPS/TLS for serve.

@@ -15,6 +15,22 @@ console = Console()
 _approval_input: Callable[[str], str] | None = None
 
 
+@dataclass
+class HttpApprovalBridge:
+    thread_id: str
+    turn_id: str
+    timeout_sec: int = 300
+    emit: Callable[[str, str, str], None] | None = None
+
+
+_http_bridge: HttpApprovalBridge | None = None
+
+
+def set_http_approval_bridge(bridge: HttpApprovalBridge | None) -> None:
+    global _http_bridge
+    _http_bridge = bridge
+
+
 def set_approval_input(fn: Callable[[str], str] | None) -> None:
     global _approval_input
     _approval_input = fn
@@ -127,6 +143,33 @@ def prompt_approval(
         return True
 
     summary = format_tool_summary(tool_name, arguments)
+    if _http_bridge and _http_bridge.emit:
+        from agent.serve.approvals import ApprovalRegistry, map_api_decision
+
+        pending = ApprovalRegistry.global_registry().create(
+            thread_id=_http_bridge.thread_id,
+            turn_id=_http_bridge.turn_id,
+            summary=summary,
+            tool_name=tool_name,
+        )
+        _http_bridge.emit(pending.approval_id, tool_name, summary)
+        decision = ApprovalRegistry.global_registry().wait(
+            pending.approval_id, timeout=_http_bridge.timeout_sec
+        )
+        ApprovalRegistry.global_registry().pop(pending.approval_id)
+        if decision is None:
+            return False
+        mapped = map_api_decision(decision)
+        if mapped == "A":
+            if session:
+                session.enable_session_auto_approve()
+            return True
+        if mapped == "a":
+            if turn_state:
+                turn_state.approve_all = True
+            return True
+        return mapped == "y"
+
     if _approval_input:
         response = _approval_input(summary)
     else:

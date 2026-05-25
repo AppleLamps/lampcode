@@ -1,0 +1,97 @@
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from pathlib import Path
+
+from agent.config import Config
+from agent.settings import load_serve_settings
+
+
+@dataclass
+class ValidationIssue:
+    level: str  # error | warning
+    message: str
+
+
+@dataclass
+class ValidationResult:
+    issues: list[ValidationIssue] = field(default_factory=list)
+
+    @property
+    def errors(self) -> list[ValidationIssue]:
+        return [i for i in self.issues if i.level == "error"]
+
+    @property
+    def warnings(self) -> list[ValidationIssue]:
+        return [i for i in self.issues if i.level == "warning"]
+
+    def exit_code(self, *, strict: bool = False) -> int:
+        if self.errors:
+            return 1
+        if strict and self.warnings:
+            return 1
+        if self.warnings:
+            return 2
+        return 0
+
+
+def validate_config(config: Config | None = None, *, config_path: Path | None = None) -> ValidationResult:
+    result = ValidationResult()
+    cfg = config or Config.resolve(config_path=config_path)
+    serve = load_serve_settings(cfg.config_path)
+
+    if cfg.execution.backend == "ssh":
+        ssh = cfg.execution.ssh
+        if not ssh.host:
+            result.issues.append(ValidationIssue("error", "execution.ssh.host required when backend=ssh"))
+        if not ssh.user:
+            result.issues.append(ValidationIssue("error", "execution.ssh.user required when backend=ssh"))
+        if not ssh.remote_workspace:
+            result.issues.append(
+                ValidationIssue("error", "execution.ssh.remote_workspace required when backend=ssh")
+            )
+
+    if cfg.exec_policy.mode.value == "never" and cfg.approval_mode == "interactive":
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "exec_policy=never with approval_mode=interactive — approvals will never prompt",
+            )
+        )
+
+    if serve.allow_remote_bind and not serve.auth_token:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "serve.allow_remote_bind=true without auth_token — bind only with a token set",
+            )
+        )
+
+    if (
+        cfg.execution.ssh.sync_enabled
+        and cfg.execution.ssh.sync_mode == "push-pull"
+        and cfg.execution.ssh.sync.conflict_strategy == "remote-wins"
+    ):
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "sync_mode=push-pull with conflict_strategy=remote-wins may overwrite local work on pull",
+            )
+        )
+
+    if serve.enable_turn_start and not serve.auth_token:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "serve.enable_turn_start=true without auth_token — token will be auto-generated at startup",
+            )
+        )
+
+    import os
+
+    if not os.environ.get("OPENROUTER_API_KEY") and not getattr(cfg, "openrouter_api_key", None):
+        result.issues.append(
+            ValidationIssue("warning", "OPENROUTER_API_KEY not set — agent run will fail until configured")
+        )
+
+    return result

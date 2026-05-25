@@ -188,3 +188,80 @@ def test_multi_agent_settings_retry_defaults() -> None:
     assert ma.retry_failed_workers is True
     assert ma.retry_max_attempts == 2
     assert ma.checkpoint_compact_after_workers == 10
+
+
+def test_worker_dependencies_in_snapshot() -> None:
+    wc = WorkerCheckpoint(
+        worker_id="w-1",
+        parent_thread_id="t1",
+        task="lint",
+        depth=0,
+        worker_dependencies=["w-0"],
+    )
+    cp = SupervisorCheckpoint(thread_id="t1", turn_id="turn1", workers=[wc])
+    data = cp.to_dict()
+    assert data["workers"][0]["worker_dependencies"] == ["w-0"]
+
+
+def test_verbose_checkpoint_status() -> None:
+    from agent.multi_agent.resume import list_checkpoint_status
+
+    base = Path(__file__).parent / "_cp_verbose"
+    base.mkdir(exist_ok=True)
+    store = CheckpointStore(base)
+    cp = SupervisorCheckpoint(
+        thread_id="t-verbose",
+        turn_id="turn1",
+        workers=[
+            WorkerCheckpoint(
+                worker_id="w-1",
+                parent_thread_id="t-verbose",
+                task="fix",
+                depth=0,
+                status="failed",
+                attempts=2,
+                error="timeout",
+            )
+        ],
+    )
+    store.save(cp)
+    rows = list_checkpoint_status("t-verbose", base, verbose=True)
+    assert rows[0]["workers_detail"][0]["attempts"] == 2
+    assert rows[0]["workers_detail"][0]["last_error"] == "timeout"
+
+
+def test_restore_registry_retry_metrics() -> None:
+    MetricsCollector.reset_for_tests()
+    cfg = Config(cwd=Path("."), model="m", openrouter_api_key="x")
+    cfg.multi_agent = MultiAgentSettings(retry_max_attempts=3)
+    store = ThreadStore()
+    cp = SupervisorCheckpoint(
+        thread_id="t1",
+        turn_id="turn1",
+        workers=[
+            WorkerCheckpoint(
+                worker_id="w-1",
+                parent_thread_id="t1",
+                task="fix",
+                depth=0,
+                status="failed",
+                attempts=1,
+            )
+        ],
+    )
+    restore_registry(cfg, store, cp, retry_failed=True)
+    snap = MetricsCollector.global_collector().snapshot()
+    assert snap.labeled_counters["agent_workers_total"].get("retry", 0) >= 1
+
+
+def test_registry_workers_spawned_metric() -> None:
+    MetricsCollector.reset_for_tests()
+    from agent.models import Thread
+
+    cfg = Config(cwd=Path("."), model="m", openrouter_api_key="x")
+    cfg.multi_agent = MultiAgentSettings(max_concurrent_workers=1)
+    store = ThreadStore()
+    parent = Thread(id="t1", cwd=".", model="m")
+    reg = WorkerRegistry(cfg, store, parent_thread=parent, turn_id="turn1")
+    reg.enqueue(parent, {"task": "lint"}, depth=0, turn_id="turn1")
+    assert MetricsCollector.global_collector().snapshot().counters["workers_spawned"] >= 1

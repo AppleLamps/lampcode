@@ -103,11 +103,21 @@ def resume_supervisor_turn(
     )
 
 
-def list_checkpoint_status(thread_id: str, base_dir=None) -> list[dict]:
+def list_checkpoint_status(
+    thread_id: str,
+    base_dir=None,
+    *,
+    verbose: bool = False,
+) -> list[dict]:
+    from agent.config import Config
+    from agent.multi_agent.checkpoint import compute_retry_backoff
+
     store = CheckpointStore(base_dir)
+    cfg = Config.resolve()
     cps = store.list_for_thread(thread_id)
-    return [
-        {
+    rows: list[dict] = []
+    for cp in cps:
+        row = {
             "turn_id": cp.turn_id,
             "status": cp.status,
             "spawn_count": cp.spawn_count,
@@ -115,5 +125,23 @@ def list_checkpoint_status(thread_id: str, base_dir=None) -> list[dict]:
             "completed": sum(1 for w in cp.workers if w.status == "completed"),
             "failed": sum(1 for w in cp.workers if w.status == "failed"),
         }
-        for cp in cps
-    ]
+        if verbose:
+            details = []
+            for w in cp.workers:
+                backoff = compute_retry_backoff(
+                    cfg.multi_agent.retry_backoff_sec,
+                    max(w.attempts, 1),
+                )
+                details.append(
+                    {
+                        "worker_id": w.worker_id,
+                        "status": w.status,
+                        "attempts": w.attempts,
+                        "backoff_sec": backoff,
+                        "last_error": w.error,
+                        "worker_dependencies": w.worker_dependencies,
+                    }
+                )
+            row["workers_detail"] = details
+        rows.append(row)
+    return rows

@@ -6,7 +6,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
-from urllib.parse import unquote, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from agent.config import Config
 from agent.export.html import export_thread_html, render_index_html
@@ -15,7 +15,11 @@ from agent.metrics import MetricsCollector
 from agent.models import Thread
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
+from agent.serve.approvals import ApprovalRegistry, map_api_decision
 from agent.serve.auth import authorize_request
+from agent.serve.dashboard import render_dashboard_html
+from agent.serve.turn_runner import TurnRunner
+from agent.execution.sync.service import resolve_sync_path
 from agent.settings import ServeSettings
 from agent.store import ThreadStore
 
@@ -63,8 +67,18 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             self._metrics_response()
             return
 
+        if path == "/metrics/prometheus":
+            self._prometheus_metrics_response()
+            return
+
         if path == "/":
-            threads = self._get_ctx().store.list_threads()
+            ctx = self._get_ctx()
+            if ctx.settings.enable_turn_start:
+                self._html_response(
+                    render_dashboard_html(token=ctx.auth_token if ctx.auth_token else "")
+                )
+                return
+            threads = ctx.store.list_threads()
             active = sum(
                 1 for t in threads if ActiveTurnRegistry.global_registry().is_active(t.id)
             )
@@ -90,7 +104,9 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         if path.startswith("/threads/") and path.endswith("/events"):
             thread_id = path[len("/threads/") : -len("/events")]
-            self._sse_thread_events(thread_id)
+            qs = parse_qs(parsed.query)
+            turn_qs = qs.get("turn_id", [None])[0]
+            self._sse_thread_events(thread_id, turn_id=turn_qs)
             return
 
         if path.startswith("/threads/"):
@@ -145,6 +161,16 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             self._cancel_thread(thread_id)
             return
 
+        if path.startswith("/threads/") and path.endswith("/run"):
+            thread_id = path[len("/threads/") : -len("/run")]
+            self._start_turn(thread_id)
+            return
+
+        if path.startswith("/approvals/"):
+            approval_id = path.split("/approvals/", 1)[1]
+            self._resolve_approval(approval_id)
+            return
+
         if path == "/sync/resolve":
             self._sync_resolve()
             return
@@ -189,9 +215,78 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         if not rel_path:
             self._error(400, "path required")
             return
-        self._json_response({"ok": True, "path": rel_path, "strategy": strategy})
+        cwd = data.get("cwd")
+        thread_id = data.get("thread_id")
+        config = Config.resolve(cwd=Path(cwd) if cwd else None)
+        config.execution.backend = "ssh"
+        config.execution.ssh.sync_enabled = True
+        result = resolve_sync_path(config, rel_path, strategy, thread_id=thread_id)
+        status = 200 if result.get("ok") else 400
+        self._json_response(result, status=status)
 
-    def _sse_thread_events(self, thread_id: str) -> None:
+    def _start_turn(self, thread_id: str) -> None:
+        ctx = self._get_ctx()
+        if not ctx.settings.enable_control:
+            self._error(403, "Control disabled")
+            return
+        if not ctx.settings.enable_turn_start:
+            self._error(403, "Turn start disabled (enable_turn_start=false)")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length else "{}"
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+        prompt = (data.get("prompt") or "").strip()
+        if not prompt:
+            self._error(400, "prompt required")
+            return
+        try:
+            thread = self._load_thread(thread_id)
+        except FileNotFoundError:
+            self._error(404, "Thread not found")
+            return
+        config = Config.resolve(cwd=Path(thread.cwd))
+        handle, err = TurnRunner.global_runner().start_turn(
+            thread,
+            prompt=prompt,
+            config=config,
+            store=ctx.store,
+            settings=ctx.settings,
+            run_store=ctx.run_store,
+            extra=data,
+        )
+        if handle is None:
+            self._error(429, err or "Unable to start turn")
+            return
+        self._json_response(
+            {"turn_id": handle.turn_id or "pending", "status": handle.status, "thread_id": thread.id}
+        )
+
+    def _resolve_approval(self, approval_id: str) -> None:
+        ctx = self._get_ctx()
+        if not ctx.settings.enable_control:
+            self._error(403, "Control disabled")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length else "{}"
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+        decision = data.get("decision", "")
+        if map_api_decision(decision) is None:
+            self._error(400, "decision must be accept, deny, accept_turn, or accept_session")
+            return
+        if not ApprovalRegistry.global_registry().resolve(approval_id, decision):
+            self._error(404, "Approval not found or already resolved")
+            return
+        self._json_response({"ok": True, "approval_id": approval_id, "decision": decision})
+
+    def _sse_thread_events(self, thread_id: str, *, turn_id: str | None = None) -> None:
         try:
             thread = self._load_thread(thread_id)
         except FileNotFoundError:
@@ -200,11 +295,13 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         if not thread.turns:
             self._error(404, "No turns")
             return
-        turn_id = thread.turns[-1].id
+        stream_turn_id = turn_id
+        if not stream_turn_id:
+            stream_turn_id = thread.turns[-1].id if thread.turns else ""
         registry = ActiveTurnRegistry.global_registry()
         active_turn = registry.active_turn_id(thread.id)
         if active_turn:
-            turn_id = active_turn
+            stream_turn_id = active_turn
 
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")
@@ -213,9 +310,18 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         self.end_headers()
 
         seen = 0
-        for _ in range(30):
+        buf = self._get_ctx().settings.stream_buffer_size or 256
+        for _ in range(buf):
+            if not stream_turn_id:
+                if active_turn := registry.active_turn_id(thread.id):
+                    stream_turn_id = active_turn
+                else:
+                    time.sleep(0.2)
+                    continue
             try:
-                events = self._get_ctx().run_store.load_events(turn_id, thread_id=thread.id)
+                events = self._get_ctx().run_store.load_events(
+                    stream_turn_id, thread_id=thread.id
+                )
             except FileNotFoundError:
                 events = []
             for event in events[seen:]:
@@ -223,13 +329,27 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 self.wfile.write(f"data: {payload}\n\n".encode("utf-8"))
                 self.wfile.flush()
             seen = len(events)
-            if not registry.is_active(thread.id):
+            if stream_turn_id and not registry.is_active(thread.id):
                 break
             time.sleep(0.2)
 
     def _metrics_response(self) -> None:
         snap = MetricsCollector.global_collector().snapshot()
-        self._json_response({"counters": snap.counters, "gauges": snap.gauges})
+        self._json_response(
+            {
+                "counters": snap.counters,
+                "labeled_counters": snap.labeled_counters,
+                "gauges": snap.gauges,
+            }
+        )
+
+    def _prometheus_metrics_response(self) -> None:
+        body = MetricsCollector.global_collector().to_prometheus().encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
 
     def _load_thread(self, thread_id: str) -> Thread:
         ctx = self._get_ctx()
@@ -319,6 +439,10 @@ def serve(
     print("  GET /threads       JSON thread list")
     print("  GET /threads/{id}/events  SSE event stream")
     print("  GET /metrics       JSON metrics")
+    print("  GET /metrics/prometheus  Prometheus text metrics")
+    if cfg.enable_turn_start:
+        print("  POST /threads/{id}/run     Start turn (requires enable_turn_start)")
+        print("  POST /approvals/{id}       Approve/deny pending tool")
     print("  POST /threads/{id}/cancel  Cancel active turn")
     try:
         server.serve_forever()

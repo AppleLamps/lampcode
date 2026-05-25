@@ -33,6 +33,7 @@ class WorkerCheckpoint:
     item_id: str = ""
     error: str | None = None
     attempts: int = 0
+    worker_dependencies: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -143,6 +144,7 @@ def snapshot_registry(
                     item_id=rec.item_id,
                     error=rec.error,
                     attempts=getattr(rec, "attempts", 0),
+                    worker_dependencies=list(getattr(rec, "worker_dependencies", []) or []),
                 )
             )
     return SupervisorCheckpoint(
@@ -229,6 +231,9 @@ def restore_registry(
             record.attempts = attempts
             registry._workers[wc.worker_id] = record
             registry._pending_queue.append(wc.worker_id)
+            from agent.metrics import MetricsCollector
+
+            MetricsCollector.global_collector().inc_labeled("agent_workers_total", "retry", 1)
         elif wc.status in ("queued", "running", "timed_out"):
             record = WorkerRecord(
                 worker_id=wc.worker_id,

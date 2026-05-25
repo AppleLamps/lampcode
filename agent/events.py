@@ -122,6 +122,9 @@ class EventEmitter:
 
         if status == "completed":
             MetricsCollector.global_collector().inc("turns_completed")
+            MetricsCollector.global_collector().inc_labeled("agent_turns_total", status)
+        else:
+            MetricsCollector.global_collector().inc_labeled("agent_turns_total", status)
         data: dict[str, Any] = {"status": status}
         if estimated_tokens is not None:
             data["estimated_tokens"] = estimated_tokens
@@ -157,14 +160,23 @@ class EventEmitter:
         )
 
     def approval_requested(
-        self, thread_id: str, turn_id: str, tool_name: str, summary: str
+        self,
+        thread_id: str,
+        turn_id: str,
+        tool_name: str,
+        summary: str,
+        *,
+        approval_id: str | None = None,
     ) -> None:
+        data: dict[str, Any] = {"tool_name": tool_name, "summary": summary}
+        if approval_id:
+            data["approval_id"] = approval_id
         self.emit(
             AgentEvent(
                 "approval.requested",
                 thread_id=thread_id,
                 turn_id=turn_id,
-                data={"tool_name": tool_name, "summary": summary},
+                data=data,
             )
         )
 
@@ -445,6 +457,39 @@ class EventEmitter:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 data={"counts": counts, "conflicts": conflicts or []},
+            )
+        )
+
+    def execution_sync_remote_manifest_fetched(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        missing: bool,
+        files: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.remote_manifest_fetched",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"missing": missing, "files": files},
+            )
+        )
+
+    def execution_sync_remote_scan_completed(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        files: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.remote_scan_completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"files": files},
             )
         )
 

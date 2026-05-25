@@ -24,8 +24,11 @@ from agent.export.markdown import export_run_markdown, export_thread_markdown
 from agent.execution.docker import check_docker_available, check_docker_hello_world
 from agent.execution.factory import backend_display, run_execution_test
 from agent.execution.ssh import check_ssh_available, validate_ssh_config
+from agent.config_validate import validate_config
 from agent.execution.sync.service import (
+    format_plan_verbose,
     resolve_sync_path,
+    run_sync_fetch_remote,
     run_sync_plan,
     run_sync_pull,
     run_sync_push,
@@ -431,6 +434,22 @@ def run(
         raise typer.Exit(130)
 
 
+@config_app.command("validate")
+def config_validate_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    strict: bool = typer.Option(False, "--strict", help="Treat warnings as errors"),
+) -> None:
+    """Validate configuration for known issues and dangerous combinations."""
+    result = validate_config(Config.resolve(cwd=cwd))
+    for issue in result.issues:
+        color = "red" if issue.level == "error" else "yellow"
+        console.print(f"[{color}]{issue.level}:[/{color}] {issue.message}")
+    code = result.exit_code(strict=strict)
+    if code == 0:
+        console.print("[green]Configuration OK[/green]")
+    raise typer.Exit(code)
+
+
 @config_app.command("show")
 def config_show(
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory"),
@@ -565,8 +584,23 @@ def doctor(
         serve_cfg = load_serve_settings(cfg.config_path)
         table.add_row(
             "serve",
-            f"control={serve_cfg.enable_control}, token={'set' if serve_cfg.auth_token else 'auto'}",
+            f"control={serve_cfg.enable_control}, turn_start={serve_cfg.enable_turn_start}, "
+            f"token={'set' if serve_cfg.auth_token else 'auto'}",
         )
+        if serve_cfg.allow_remote_bind and not serve_cfg.auth_token:
+            checks.append(
+                (
+                    "serve warning",
+                    "allow_remote_bind without auth_token — set serve.auth_token in config",
+                )
+            )
+        if serve_cfg.enable_turn_start and serve_cfg.host not in ("127.0.0.1", "localhost"):
+            checks.append(
+                (
+                    "serve warning",
+                    "enable_turn_start with non-localhost bind — use token and firewall",
+                )
+            )
         table.add_row(
             "metrics",
             f"enabled={cfg.multi_agent.metrics_enabled}",
@@ -870,12 +904,31 @@ def _resolve_ssh_config(
     return Config.resolve(cwd=cwd, ssh_host=ssh_host, ssh_user=ssh_user, auto_approve=True)
 
 
+@sync_app.command("fetch-remote")
+def sync_fetch_remote_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+) -> None:
+    """Fetch remote sync manifest over SSH and optionally replicate sync-state."""
+    import json
+
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.backend = "ssh"
+    config.execution.ssh.sync_enabled = True
+    stdout_console.print(
+        json.dumps(run_sync_fetch_remote(config, thread_id=thread_id), indent=2)
+    )
+
+
 @sync_app.command("plan")
 def sync_plan_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
     ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
     ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
     thread_id: Optional[str] = typer.Option(None, "--thread-id"),
+    verbose: bool = typer.Option(False, "--verbose", help="Print push/pull/conflict table"),
 ) -> None:
     """Dry-run sync plan: push/pull/conflict classification."""
     import json
@@ -883,7 +936,11 @@ def sync_plan_cmd(
     config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
     config.execution.backend = "ssh"
     config.execution.ssh.sync_enabled = True
-    stdout_console.print(json.dumps(run_sync_plan(config, thread_id=thread_id), indent=2))
+    plan = run_sync_plan(config, thread_id=thread_id)
+    if verbose:
+        stdout_console.print(format_plan_verbose(plan))
+    else:
+        stdout_console.print(json.dumps(plan, indent=2))
 
 
 @sync_app.command("resolve")
@@ -958,11 +1015,12 @@ def sync_status_cmd(
 @multi_agent_app.command("status")
 def multi_agent_status(
     thread_id: str = typer.Option(..., "--thread-id"),
+    verbose: bool = typer.Option(False, "--verbose", help="Show attempts, backoff, errors"),
 ) -> None:
     """Show multi-agent checkpoint status for a thread."""
     import json
 
-    rows = list_checkpoint_status(thread_id)
+    rows = list_checkpoint_status(thread_id, verbose=verbose)
     stdout_console.print(json.dumps(rows, indent=2))
 
 
@@ -1117,17 +1175,23 @@ def serve(
     port: int = typer.Option(8765, "--port", help="Bind port"),
     token: Optional[str] = typer.Option(None, "--token", help="Auth bearer token"),
     no_control: bool = typer.Option(False, "--no-control", help="Disable cancel API"),
+    enable_turn_start: bool = typer.Option(
+        False, "--enable-turn-start", help="Allow HTTP POST /threads/{id}/run"
+    ),
+    max_concurrent_turns: int = typer.Option(2, "--max-concurrent-turns"),
     allow_remote_bind: bool = typer.Option(
         False, "--allow-remote-bind", help="Allow binding to 0.0.0.0"
     ),
 ) -> None:
-    """HTTP dashboard for threads, runs, SSE events, and turn cancel."""
+    """HTTP dashboard for threads, runs, SSE events, turn cancel, and optional turn start."""
     from agent.serve.server import serve as run_serve
 
     cfg = load_serve_settings()
     cfg.host = host
     cfg.port = port
     cfg.enable_control = not no_control
+    cfg.enable_turn_start = enable_turn_start
+    cfg.max_concurrent_turns = max_concurrent_turns
     cfg.allow_remote_bind = allow_remote_bind
     if token:
         cfg.auth_token = token
@@ -1147,9 +1211,15 @@ def serve(
 
 
 @metrics_app.command("show")
-def metrics_show() -> None:
-    """Print JSON runtime metrics counters."""
-    stdout_console.print(MetricsCollector.global_collector().to_json())
+def metrics_show(
+    format: str = typer.Option("json", "--format", help="json or prometheus"),
+) -> None:
+    """Print runtime metrics (JSON or Prometheus text)."""
+    collector = MetricsCollector.global_collector()
+    if format.lower() == "prometheus":
+        stdout_console.print(collector.to_prometheus(), end="")
+    else:
+        stdout_console.print(collector.to_json())
 
 
 def _runs_dir_writable() -> str:
@@ -1239,6 +1309,41 @@ def runs_replay(
     else:
         for event in events:
             stdout_console.print(event.to_json())
+
+
+def _git_commit_short() -> str | None:
+    import subprocess
+
+    try:
+        root = Path(__file__).resolve().parent.parent
+        proc = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            capture_output=True,
+            text=True,
+            cwd=root,
+            timeout=5,
+        )
+        if proc.returncode == 0:
+            return proc.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
+        pass
+    return None
+
+
+@app.command("version")
+def version_cmd() -> None:
+    """Print semver and git commit (if available)."""
+    from importlib.metadata import version as pkg_version
+
+    try:
+        ver = pkg_version("agent-cli")
+    except Exception:
+        ver = "unknown"
+    commit = _git_commit_short()
+    if commit:
+        stdout_console.print(f"agent-cli {ver} (commit {commit})")
+    else:
+        stdout_console.print(f"agent-cli {ver}")
 
 
 def main() -> None:

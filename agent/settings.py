@@ -131,6 +131,11 @@ class SshSyncSettings:
     include_dotfiles: bool = False
     max_upload_mb: int = 200
     checksum: str = "mtime"
+    fetch_remote_manifest: bool = True
+    remote_scan_max_files: int = 5000
+    replicate_remote_state: bool = True
+    remote_shell: str = "bash -lc"
+    on_remote_manifest_missing: str = "create"
 
 
 @dataclass
@@ -203,6 +208,10 @@ class ServeSettings:
     auth_token: str = ""
     allow_remote_bind: bool = False
     enable_control: bool = True
+    enable_turn_start: bool = False
+    max_concurrent_turns: int = 2
+    approval_timeout_sec: int = 300
+    stream_buffer_size: int = 256
     cors: bool = False
 
 
@@ -348,6 +357,11 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
                 include_dotfiles=bool(sync_raw.get("include_dotfiles", False)),
                 max_upload_mb=int(sync_raw.get("max_upload_mb", 200)),
                 checksum=str(sync_raw.get("checksum", "mtime")),
+                fetch_remote_manifest=bool(sync_raw.get("fetch_remote_manifest", True)),
+                remote_scan_max_files=int(sync_raw.get("remote_scan_max_files", 5000)),
+                replicate_remote_state=bool(sync_raw.get("replicate_remote_state", True)),
+                remote_shell=str(sync_raw.get("remote_shell", "bash -lc")),
+                on_remote_manifest_missing=str(sync_raw.get("on_remote_manifest_missing", "create")),
             ),
             pool=SshPoolSettings(
                 enabled=bool(pool_raw.get("enabled", True)),
@@ -394,6 +408,10 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
         auth_token=str(serve.get("auth_token", "")),
         allow_remote_bind=bool(serve.get("allow_remote_bind", False)),
         enable_control=bool(serve.get("enable_control", True)),
+        enable_turn_start=bool(serve.get("enable_turn_start", False)),
+        max_concurrent_turns=int(serve.get("max_concurrent_turns", 2)),
+        approval_timeout_sec=int(serve.get("approval_timeout_sec", 300)),
+        stream_buffer_size=int(serve.get("stream_buffer_size", 256)),
         cors=bool(serve.get("cors", False)),
     )
 

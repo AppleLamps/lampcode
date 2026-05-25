@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Callable
 
 from agent.config import Config
+from agent.metrics import MetricsCollector
 from agent.events import EventEmitter
 from agent.models import AgentMessageItem, CollabWorkerItem, Thread
 from agent.multi_agent.spawn import _extract_worker_summary, _worker_config
@@ -184,6 +185,9 @@ class WorkerRegistry:
             self._workers[worker_id] = record
             self._pending_queue.append(worker_id)
 
+        MetricsCollector.global_collector().inc("workers_spawned")
+        MetricsCollector.global_collector().inc_labeled("agent_workers_total", "queued", 1)
+
         self._pump_queue(parent_thread, turn_id or self._turn_id)
 
         msg = (
@@ -265,6 +269,14 @@ class WorkerRegistry:
             )
             record.summary = _extract_worker_summary(worker_thread, turn)
             record.status = "completed" if turn.status == "completed" else "failed"
+            if record.attempts > 0:
+                if record.status == "completed":
+                    MetricsCollector.global_collector().inc("workers_retry_success")
+                else:
+                    MetricsCollector.global_collector().inc("workers_retry_failed")
+            MetricsCollector.global_collector().inc_labeled(
+                "agent_workers_total", record.status, 1
+            )
             if self._emitter:
                 self._emitter.collab_spawn_completed(
                     parent_thread.id,
@@ -277,6 +289,9 @@ class WorkerRegistry:
             record.status = "failed"
             record.error = str(exc)
             record.summary = str(exc)
+            if record.attempts > 0:
+                MetricsCollector.global_collector().inc("workers_retry_failed")
+            MetricsCollector.global_collector().inc_labeled("agent_workers_total", "failed", 1)
             if self._emitter:
                 self._emitter.collab_spawn_completed(
                     parent_thread.id,
