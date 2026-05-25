@@ -15,12 +15,13 @@ from agent.config import Config
 from agent.events import AgentEvent, build_event_emitter
 from agent.git import detect_repo_root
 from agent.context import build_system_prompt, load_project_rules
-from agent.loop import brief_args, run_turn
+from agent.loop import run_turn
 from agent.mcp.manager import McpManager
 from agent.models import Thread, new_id, utc_now_iso
 from agent.paths import default_config_path
 from agent.export.html import export_thread_html
 from agent.export.markdown import export_run_markdown, export_thread_markdown
+from agent.export.pr_description import build_pr_description
 from agent.execution.docker import check_docker_available, check_docker_hello_world
 from agent.execution.factory import backend_display, run_execution_test
 from agent.execution.ssh import check_ssh_available, validate_ssh_config
@@ -55,8 +56,10 @@ from agent.profiles import (
     thread_cost_summary,
 )
 from agent.init_scaffold import init_project
+from agent.model_routing import resolve_model_profile_from_task
+from agent.output_handler import OutputHandler, format_run_summary, stderr_console, stdout_console
 from agent.repl import run_repl
-from agent.providers.openrouter import ModelsCache, recommend_model
+from agent.providers.openrouter import ModelsCache, recommend_model, tool_support_warning
 from agent.skills.doctor import skills_doctor_report
 from tools.registry import TOOL_REGISTRY, get_tool_schemas
 from agent.skills.discovery import discover_skills
@@ -129,124 +132,7 @@ app.add_typer(profile_app, name="profile")
 app.add_typer(models_app, name="models")
 app.add_typer(tools_app, name="tools")
 
-console = Console(stderr=True)
-stdout_console = Console()
-
-
-class OutputHandler:
-    def __init__(
-        self,
-        *,
-        jsonl_events: bool = False,
-        quiet_tools: bool = False,
-    ) -> None:
-        self.jsonl_events = jsonl_events
-        self.quiet_tools = quiet_tools
-
-    def handle(self, event: AgentEvent) -> None:
-        if self.jsonl_events:
-            stdout_console.print(event.to_json())
-            return
-
-        if event.type == "agent.delta":
-            stdout_console.print(event.data.get("text", ""), end="")
-        elif event.type == "tool.pending" and not self.quiet_tools:
-            name = event.data.get("tool_name", "")
-            args = event.data.get("arguments", {})
-            console.print(f"[cyan][tool][/cyan] {name}: {brief_args(name, args)}")
-        elif event.type == "approval.requested":
-            pass  # interactive prompt handled in approval.gate
-        elif event.type == "compaction":
-            console.print(
-                f"[dim][compaction] summarized {event.data.get('summarized_items', 0)} items[/dim]"
-            )
-        elif event.type == "compaction.completed" and not self.quiet_tools:
-            console.print(
-                f"[dim][compaction] removed {event.data.get('removed_items', 0)} items "
-                f"({event.data.get('estimated_tokens_before', '?')} → "
-                f"{event.data.get('estimated_tokens_after', '?')} tokens est.)[/dim]"
-            )
-        elif event.type == "sandbox.blocked":
-            mode = event.data.get("mode", "")
-            reason = event.data.get("reason", "")
-            cmd = event.data.get("command")
-            console.print(f"[yellow][sandbox][/yellow] blocked ({mode}): {reason}")
-            if cmd:
-                console.print(f"  command: {cmd}")
-        elif event.type == "isolation.applied" and not self.quiet_tools:
-            console.print(
-                f"[dim][isolation][/dim] pid={event.data.get('pid')} "
-                f"cwd={event.data.get('cwd')} "
-                f"stripped_env={event.data.get('stripped_env_count')}"
-            )
-        elif event.type == "execution.backend.selected" and not self.quiet_tools:
-            backend = event.data.get("backend", "")
-            image = event.data.get("image")
-            extra = f" ({image})" if image else ""
-            console.print(f"[dim][execution][/dim] backend={backend}{extra}")
-        elif event.type == "execution.docker.started" and not self.quiet_tools:
-            console.print(
-                f"[dim][docker][/dim] started image={event.data.get('image')} "
-                f"container={event.data.get('container_id', '')[:12]}"
-            )
-        elif event.type == "execution.docker.completed" and not self.quiet_tools:
-            console.print(
-                f"[dim][docker][/dim] exit={event.data.get('exit_code')} "
-                f"duration={event.data.get('duration_ms')}ms"
-            )
-        elif event.type == "collab.spawn.started" and not self.quiet_tools:
-            console.print(
-                f"[dim][worker][/dim] spawning: {event.data.get('task', '')[:80]}"
-            )
-        elif event.type == "collab.spawn.completed" and not self.quiet_tools:
-            console.print(
-                f"[dim][worker][/dim] {event.data.get('status')}: "
-                f"{event.data.get('worker_id') or event.data.get('worker_thread_id', '')[:8]}"
-            )
-        elif event.type == "execution.ssh.connected" and not self.quiet_tools:
-            console.print(
-                f"[dim][ssh][/dim] connected {event.data.get('user')}@{event.data.get('host')}"
-            )
-        elif event.type == "execution.ssh.completed" and not self.quiet_tools:
-            console.print(
-                f"[dim][ssh][/dim] exit={event.data.get('exit_code')} "
-                f"duration={event.data.get('duration_ms')}ms"
-            )
-        elif event.type == "execution.docker.file_tool_applied" and not self.quiet_tools:
-            console.print(
-                f"[dim][docker][/dim] file tool {event.data.get('tool_name')} "
-                f"on {event.data.get('path')}"
-            )
-        elif event.type == "execution.sync.started" and not self.quiet_tools:
-            console.print(
-                f"[dim][sync][/dim] {event.data.get('direction')} via "
-                f"{event.data.get('transport')} (~{event.data.get('bytes_estimated')} bytes)"
-            )
-        elif event.type == "execution.sync.completed" and not self.quiet_tools:
-            console.print(
-                f"[dim][sync][/dim] {event.data.get('direction')} done "
-                f"{event.data.get('files')} files in {event.data.get('duration_ms')}ms"
-            )
-        elif event.type == "execution.sync.failed" and not self.quiet_tools:
-            console.print(f"[yellow][sync failed][/yellow] {event.data.get('reason')}")
-        elif event.type == "execution.sync.plan" and not self.quiet_tools:
-            counts = event.data.get("counts", {})
-            console.print(
-                f"[dim][sync plan][/dim] push={counts.get('push', 0)} "
-                f"pull={counts.get('pull', 0)} conflicts={counts.get('conflict', 0)}"
-            )
-        elif event.type == "execution.ssh.pool.acquire" and not self.quiet_tools:
-            console.print(f"[dim][ssh pool][/dim] acquire {event.data.get('host')}")
-        elif event.type == "collab.checkpoint.saved" and not self.quiet_tools:
-            console.print(f"[dim][checkpoint][/dim] saved {event.data.get('path')}")
-        elif event.type == "error":
-            console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
-        elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
-            console.print("[yellow]Turn cancelled.[/yellow]")
-        elif event.type == "mcp.server.failed" and not self.quiet_tools:
-            console.print(
-                f"[yellow]MCP server failed:[/yellow] {event.data.get('server')} — {event.data.get('error')}"
-            )
+console = stderr_console
 
 
 @app.command()
@@ -336,6 +222,12 @@ def run(
     ),
 ) -> None:
     """Run the agent on a task."""
+    routed_profile = resolve_model_profile_from_task(
+        prompt,
+        cli_model_profile=model_profile,
+        cwd=cwd or Path.cwd(),
+    )
+    effective_model_profile = model_profile or routed_profile
     try:
         config = Config.resolve(
             cwd=cwd,
@@ -353,12 +245,20 @@ def run(
             sync_mode=sync_mode,
             force_sync=force_sync,
             profile=profile,
-            model_profile=model_profile,
+            model_profile=effective_model_profile,
         )
         config.require_api_key()
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+
+    if routed_profile and not model_profile and not jsonl_events:
+        console.print(f"[dim]Auto-routed model profile:[/dim] {routed_profile}")
+
+    models_cache = ModelsCache().load()
+    warn = tool_support_warning(config.model, models_cache or None)
+    if warn and not jsonl_events:
+        console.print(f"[yellow]Warning:[/yellow] {warn}")
 
     repo_root = detect_repo_root(config.cwd)
     if not skip_git_check and repo_root is None:
@@ -501,10 +401,12 @@ def run(
         console.print()
         if turn.status == "completed":
             console.print(f"[green]Done.[/green] Thread: {thread.id}")
+            console.print(format_run_summary(turn), markup=False)
         elif turn.status == "cancelled":
             console.print(f"[yellow]Cancelled.[/yellow] Thread: {thread.id}")
         else:
             console.print(f"[yellow]Turn {turn.status}.[/yellow] Thread: {thread.id}")
+            console.print(format_run_summary(turn), markup=False)
 
     if turn.status == "cancelled":
         raise typer.Exit(130)
@@ -848,20 +750,42 @@ def doctor(
     solo.add_column("Check")
     solo.add_column("Status")
     project_cfg = project_config_path(cfg.cwd)
+    project_cfg_ok = "valid" if project_cfg.is_file() else "run `agent init`"
+    if project_cfg.is_file():
+        try:
+            validate_config(Config.resolve(cwd=cfg.cwd))
+            project_cfg_ok = "valid"
+        except Exception:
+            project_cfg_ok = "invalid TOML or resolve error"
     solo_checks = [
         ("OPENROUTER_API_KEY", "ok" if api_key else "MISSING"),
         ("git repository", "ok" if detect_repo_root(cfg.cwd) else "not in git repo"),
         ("ripgrep", "ok" if rg_ok else "fallback search"),
-        ("project config", str(project_cfg) if project_cfg.is_file() else "run `agent init`"),
+        ("project config", project_cfg_ok),
         ("model fallbacks", str(len(cfg.openrouter.fallback_models))),
+        ("default pricing", "seeded" if cfg.openrouter.pricing else "empty"),
     ]
     try:
         from agent.providers.openrouter import ModelsCache as MC
 
-        cached = MC().load()
-        solo_checks.append(("models cache", f"{len(cached)} models" if cached else "empty (run agent models list)"))
+        cache = MC()
+        cached_models = cache.load()
+        if cached_models:
+            solo_checks.append(("models cache", f"{len(cached_models)} models"))
+        else:
+            solo_checks.append(("models cache", "empty (run agent models list)"))
     except Exception:
+        cached_models = []
         solo_checks.append(("models cache", "unavailable"))
+    tool_warn = tool_support_warning(cfg.model, cached_models or None)
+    if tool_warn:
+        solo_checks.append(("model tool support", "check model"))
+    else:
+        solo_checks.append(("model tool support", "ok"))
+    from agent.providers.openrouter import probe_openrouter_reachability
+
+    or_status, or_detail = probe_openrouter_reachability(api_key)
+    solo_checks.append(("OpenRouter API", f"{or_status}: {or_detail}"))
     for name, status in solo_checks:
         style = "green" if status in ("ok",) or status.endswith("models") else "yellow"
         if status == "MISSING":
@@ -2425,6 +2349,24 @@ def threads_cost(
     stdout_console.print(json.dumps(thread_cost_summary(thread), indent=2))
 
 
+@threads_app.command("pr-description")
+def threads_pr_description(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+    title: Optional[str] = typer.Option(None, "--title", help="PR title override"),
+    out: Optional[Path] = typer.Option(None, "--out", help="Write markdown to file"),
+    no_diff: bool = typer.Option(False, "--no-diff", help="Omit git diff stat section"),
+) -> None:
+    """Generate a PR description from thread transcript and git diff stat."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    md = build_pr_description(thread, title=title, include_diff=not no_diff)
+    if out:
+        out.write_text(md, encoding="utf-8")
+        console.print(f"Wrote PR description to {out}")
+    else:
+        stdout_console.print(md, markup=False, highlight=False)
+
+
 @threads_app.command("delete")
 def threads_delete(
     thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
@@ -2619,10 +2561,18 @@ def tui_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
     thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Resume thread"),
     resume_last: bool = typer.Option(False, "--resume-last", help="Resume latest thread"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Named run profile"),
+    model_profile: Optional[str] = typer.Option(None, "--model-profile", help="Model profile"),
 ) -> None:
     """Interactive terminal UI for agent sessions."""
     try:
-        launch_tui(cwd=cwd, thread_id=thread_id, resume_last=resume_last)
+        launch_tui(
+            cwd=cwd,
+            thread_id=thread_id,
+            resume_last=resume_last,
+            profile=profile,
+            model_profile=model_profile,
+        )
     except SystemExit as exc:
         raise typer.Exit(exc.code) from exc
 
@@ -2713,18 +2663,35 @@ def init_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Git repo root (default: cwd)"),
     yes: bool = typer.Option(False, "--yes", help="Overwrite existing scaffold files"),
     name: Optional[str] = typer.Option(None, "--name", help="Project name in config"),
+    skip_git_check: bool = typer.Option(
+        False,
+        "--skip-git-check",
+        help="Allow init outside a git repository",
+    ),
 ) -> None:
     """Scaffold .agent-cli/ config, AGENTS.md, and seed skill in the current git repo."""
     root = (cwd or Path.cwd()).resolve()
     if detect_repo_root(root) is None:
-        console.print("[red]Error:[/red] Not inside a git repository.")
-        raise typer.Exit(1)
+        if skip_git_check:
+            console.print(
+                "[yellow]Warning:[/yellow] Not inside a git repository. "
+                "Run `git init` when ready."
+            )
+        else:
+            console.print(
+                "[yellow]Warning:[/yellow] Not inside a git repository. "
+                "Run `git init` or pass --skip-git-check."
+            )
+            raise typer.Exit(1)
     created = init_project(root, name=name, yes=yes)
-    if created.get("skipped"):
-        console.print(f"[yellow]{created['skipped']}[/yellow]")
-        raise typer.Exit(0)
-    for kind, path in created.items():
+    created_files = {k: v for k, v in created.items() if not k.startswith("skipped") and k != "message"}
+    skipped = {k: v for k, v in created.items() if k.startswith("skipped") or k == "message"}
+    for kind, path in created_files.items():
         console.print(f"[green]Created[/green] {kind}: {path}")
+    for kind, msg in skipped.items():
+        console.print(f"[dim]{msg}[/dim]")
+    if not created_files and not skipped:
+        console.print("[yellow]Nothing to create[/yellow]")
     console.print("Next: set OPENROUTER_API_KEY and run `agent run \"your task\"`")
 
 
@@ -2845,17 +2812,19 @@ def models_list(
 @models_app.command("recommend")
 def models_recommend(
     task: str = typer.Option(..., "--task", help="Task description for model pick"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
 ) -> None:
     """Recommend a model for a task from cached listing."""
+    root = (cwd or Path.cwd()).resolve()
     cache = ModelsCache()
     models = cache.load()
     if not models:
         try:
-            cfg = Config.resolve()
+            cfg = Config.resolve(cwd=root)
             models = cache.fetch(cfg.require_api_key())
         except ValueError:
             models = []
-    pick = recommend_model(task, models)
+    pick = recommend_model(task, models, cwd=root)
     console.print(f"Recommended: [green]{pick}[/green]")
 
 
@@ -2929,6 +2898,9 @@ def version_cmd() -> None:
 
 
 def main() -> None:
+    from agent.env_loader import load_dotenv_files
+
+    load_dotenv_files()
     app()
 
 

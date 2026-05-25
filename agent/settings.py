@@ -108,6 +108,16 @@ class CompactionSettings:
     summary_max_chars: int = 8000
 
 
+DEFAULT_OPENROUTER_PRICING: dict[str, SwarmBudgetPricing] = {
+    "anthropic/claude-sonnet-4": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
+    "anthropic/claude-3.5-sonnet": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
+    "openai/gpt-4.1": SwarmBudgetPricing(input_per_million=2.0, output_per_million=8.0),
+    "openai/gpt-4.1-mini": SwarmBudgetPricing(input_per_million=0.4, output_per_million=1.6),
+    "google/gemini-2.5-flash-preview": SwarmBudgetPricing(input_per_million=0.15, output_per_million=0.6),
+    "google/gemini-2.5-pro-preview": SwarmBudgetPricing(input_per_million=1.25, output_per_million=10.0),
+}
+
+
 @dataclass
 class OpenRouterSettings:
     max_retries: int = 3
@@ -490,9 +500,13 @@ def load_openrouter_settings(path: Path | None = None, *, project_path: Path | N
                     seen.add(s)
                     combined.append(s)
         merged["fallback_models"] = combined
-    pricing = {**_parse_openrouter_pricing(user_or.get("pricing", {})), **_parse_openrouter_pricing(project_or.get("pricing", {}))}
-    if pricing:
-        merged["pricing"] = {k: {"input_per_million": v.input_per_million, "output_per_million": v.output_per_million} for k, v in pricing.items()}
+    user_pricing = _parse_openrouter_pricing(user_or.get("pricing", {}))
+    project_pricing = _parse_openrouter_pricing(project_or.get("pricing", {}))
+    pricing = {**DEFAULT_OPENROUTER_PRICING, **user_pricing, **project_pricing}
+    merged["pricing"] = {
+        k: {"input_per_million": v.input_per_million, "output_per_million": v.output_per_million}
+        for k, v in pricing.items()
+    }
     return _parse_openrouter_section(merged)
 
 
