@@ -849,12 +849,12 @@ agent auth hash-token "break-glass-secret"
 ## Tests
 
 ```powershell
-pytest   # 470+ tests
+pytest   # 530+ tests
 ```
 
-## Phase 14 (planned, not implemented)
+## Phase 15 (planned, not implemented)
 
-Full Windows AppContainer, web IDE lite (Monaco), remote marketplace CDN, cross-turn DAG v5, budgeted autonomous swarms, mTLS / OAuth device code flow.
+Windows AppContainer, remote marketplace CDN + revocation, budgeted autonomous swarms, multi-file IDE tabs/LSP/debugger, OAuth refresh rotation.
 
 ## Phase 12 — Serve TLS/RBAC, OTEL v2, signed skill marketplace (v1.2.0)
 
