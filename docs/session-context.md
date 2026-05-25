@@ -154,7 +154,7 @@ Candidates from Phase 26 exit notes (not fully specified):
 - **Exec policy amendments** — session-scoped allow rules without Starlark
 - **JSON replay bundle export** — debug-compatible run export
 
-Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** when Phase 27 doc lands.
+Full step-by-step plans: **[docs/roadmap/phase-27.md](roadmap/phase-27.md)** (v2.8.0) and **[phase-28.md](roadmap/phase-28.md)** (v2.9.0).
 
 ---
 

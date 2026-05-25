@@ -243,10 +243,6 @@ chore(release): v2.7.0 Phase 26 OpenRouter differentiation
 
 ---
 
-## Phase 27 candidates (not specified here)
+## Phase 27+ 
 
-- ConPTY / interactive PTY on Windows
-- `agent mcp-server` (expose harness as MCP tool)
-- Web search provider upgrade (Exa/Tavily config slot)
-- Exec policy amendments (session-scoped allow rules without Starlark)
-- JSON replay bundle export compatible with internal debug workflows
+See [phase-27.md](phase-27.md) (terminal & embed) and [phase-28.md](phase-28.md) (observability & trust).

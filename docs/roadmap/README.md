@@ -1,6 +1,6 @@
-# Harness roadmap (Phases 24–26)
+# Harness roadmap (Phases 24–28)
 
-Step-by-step implementation plans for solo harness work after **v2.6.0 / Phase 25**.
+Step-by-step implementation plans for solo harness work after **v2.7.0 / Phase 26**.
 
 **North star:** Match Codex reliability mechanics (exec, sandbox, compaction, orchestration), then beat it on OpenRouter model choice, cost control, and CI/review scriptability.
 
@@ -9,13 +9,15 @@ Step-by-step implementation plans for solo harness work after **v2.6.0 / Phase 2
 | 24 | v2.5.0 | Reliability core | [phase-24.md](phase-24.md) |
 | 25 | v2.6.0 | Daily UX | [phase-25.md](phase-25.md) |
 | 26 | v2.7.0 | OpenRouter differentiation | [phase-26.md](phase-26.md) |
+| 27 | v2.8.0 | Terminal & embed | [phase-27.md](phase-27.md) |
+| 28 | v2.9.0 | Observability & trust | [phase-28.md](phase-28.md) |
 
 ## Before starting any phase
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q                    # must be green (924+ passed, 1 skipped)
-git log --oneline -5         # confirm Phase 23 commits on master
+pytest -q                    # must be green (953+ passed, 1 skipped)
+git log --oneline -5         # confirm prior phase release commit on master
 ```
 
 ## Working rules (same as session context)
@@ -37,6 +39,11 @@ git log --oneline -5         # confirm Phase 23 commits on master
 | Parallel tools | `codex-rs/core/src/tools/parallel.rs` |
 | Exec CLI / JSONL | `codex-rs/exec/src/lib.rs` |
 | Review | `codex-rs/exec` + `ReviewArgs` |
+| ConPTY / unified exec | `codex-rs/core/src/unified_exec/`, `codex-rs/utils/pty/` |
+| MCP server | `codex-rs/mcp-server/src/codex_tool_config.rs` |
+| Exec policy amend | `codex-rs/execpolicy/src/amend.rs` |
+| Rollout trace / debug | `codex-rs/rollout-trace/` |
+| Hooks | `codex-rs/hooks/src/events/` |
 
 ## Explicitly out of scope (all phases)
 
