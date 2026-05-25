@@ -102,6 +102,11 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             self._json_response(data)
             return
 
+        if path.startswith("/threads/") and path.endswith("/workers/graph"):
+            thread_id = path[len("/threads/") : -len("/workers/graph")]
+            self._worker_graph(thread_id)
+            return
+
         if path.startswith("/threads/") and path.endswith("/events"):
             thread_id = path[len("/threads/") : -len("/events")]
             qs = parse_qs(parsed.query)
@@ -285,6 +290,40 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             self._error(404, "Approval not found or already resolved")
             return
         self._json_response({"ok": True, "approval_id": approval_id, "decision": decision})
+
+    def _worker_graph(self, thread_id: str) -> None:
+        try:
+            thread = self._load_thread(thread_id)
+        except FileNotFoundError:
+            self._error(404, "Thread not found")
+            return
+        cfg = Config.resolve(cwd=Path(thread.cwd))
+        cp = CheckpointStore(
+            Path(cfg.multi_agent.checkpoint_dir).expanduser()
+        ).find_latest(thread.id)
+        if cp is None:
+            self._json_response({"nodes": [], "edges": [], "status": "idle"})
+            return
+        nodes = [
+            {
+                "worker_id": w.worker_id,
+                "status": w.status,
+                "task": w.task,
+                "attempts": w.attempts,
+                "worker_dependencies": w.worker_dependencies,
+                "error": w.error,
+            }
+            for w in cp.workers
+        ]
+        self._json_response(
+            {
+                "nodes": nodes,
+                "edges": cp.edges,
+                "status": cp.dag_status,
+                "thread_id": thread.id,
+                "turn_id": cp.turn_id,
+            }
+        )
 
     def _sse_thread_events(self, thread_id: str, *, turn_id: str | None = None) -> None:
         try:

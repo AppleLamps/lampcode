@@ -233,7 +233,16 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
         return arguments.get("summary", f"sync conflict: {arguments.get('path', '')}")
 
     if tool_name == "spawn_worker":
-        return f"spawn_worker: {arguments.get('task', '')[:80]}"
+        deps = arguments.get("depends_on") or []
+        dep_note = f" deps={deps}" if deps else ""
+        return f"spawn_worker: {arguments.get('task', '')[:80]}{dep_note}"
+
+    if tool_name == "spawn_worker_batch":
+        tasks = arguments.get("tasks") or []
+        return f"spawn_worker_batch: {len(tasks)} tasks"
+
+    if tool_name == "get_worker_graph":
+        return "get_worker_graph"
 
     if tool_name == "wait_workers":
         ids = arguments.get("worker_ids")

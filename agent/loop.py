@@ -24,6 +24,7 @@ from agent.models import (
     WorkspaceSyncItem,
 )
 from agent.harness.active_turns import ActiveTurnRegistry
+from agent.telemetry import init_telemetry, trace_span
 from agent.metrics import MetricsCollector
 from agent.multi_agent.checkpoint import save_checkpoint_from_registry
 from agent.multi_agent.registry import WorkerRegistry
@@ -87,6 +88,7 @@ def run_turn(
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
+    init_telemetry(config)
     turn_state = TurnApprovalState()
     session = harness_session or HarnessSession()
     if session_auto_approve:
@@ -205,31 +207,37 @@ def run_turn(
                 turn_id=turn.id,
                 depth=worker_depth,
             )
-        completed_turn = _run_loop(
-            thread=thread,
-            turn=turn,
-            config=config,
-            store=store,
-            client=client,
-            tools=tools,
-            messages=messages,
-            emitter=emitter,
-            cancel=cancel,
-            turn_state=turn_state,
-            session=session,
-            on_text_delta=on_text_delta,
-            quiet_tools=quiet_tools,
-            mcp_manager=mcp_manager,
-            active_skills=active_skills,
-            skills_max_body=skills_cfg.max_body_chars,
-            project_rules=rules_text,
-            worker_registry=registry,
-            worker_depth=worker_depth,
-            force_sync=force_sync,
-            resume_messages=resume_messages,
-            resume_spawn_count=resume_spawn_count,
-            user_text=user_text,
-        )
+        with trace_span(
+            "turn.run",
+            thread_id=thread.id,
+            turn_id=turn.id,
+            backend=config.execution.backend,
+        ):
+            completed_turn = _run_loop(
+                thread=thread,
+                turn=turn,
+                config=config,
+                store=store,
+                client=client,
+                tools=tools,
+                messages=messages,
+                emitter=emitter,
+                cancel=cancel,
+                turn_state=turn_state,
+                session=session,
+                on_text_delta=on_text_delta,
+                quiet_tools=quiet_tools,
+                mcp_manager=mcp_manager,
+                active_skills=active_skills,
+                skills_max_body=skills_cfg.max_body_chars,
+                project_rules=rules_text,
+                worker_registry=registry,
+                worker_depth=worker_depth,
+                force_sync=force_sync,
+                resume_messages=resume_messages,
+                resume_spawn_count=resume_spawn_count,
+                user_text=user_text,
+            )
         pull_result, pull_item = maybe_sync_turn_end(
             config,
             completed_turn.status,
@@ -528,8 +536,59 @@ def _run_loop(
                     result_text = registry.wait_workers(
                         arguments.get("worker_ids"),
                         timeout_sec=arguments.get("timeout_sec"),
+                        mode=arguments.get("mode", "all"),
                     )
                     _sync_worker_items(thread, turn, registry, store)
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "completed", source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
+                continue
+
+            if tool_name == "spawn_worker_batch":
+                if not registry:
+                    result_text = "spawn_worker_batch requires multi_agent.enabled"
+                else:
+                    tasks = arguments.get("tasks") or []
+                    if spawn_count + len(tasks) > config.multi_agent.max_workers_per_turn:
+                        result_text = (
+                            f"Worker spawn limit reached "
+                            f"({config.multi_agent.max_workers_per_turn} per turn)."
+                        )
+                    else:
+                        spawn_count += len(tasks)
+                        registry.spawn_count = spawn_count
+                        with trace_span("worker.spawn_batch", count=len(tasks)):
+                            result_text, _collabs = registry.enqueue_batch(
+                                thread,
+                                tasks,
+                                depth=worker_depth,
+                                turn_id=turn.id,
+                            )
+                emitter.tool_completed(
+                    thread.id, turn.id, tool_name, "completed", source=source
+                )
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": result_text,
+                    }
+                )
+                continue
+
+            if tool_name == "get_worker_graph":
+                result_text = (
+                    registry.get_worker_graph()
+                    if registry
+                    else json.dumps({"nodes": [], "edges": [], "status": "idle"})
+                )
                 emitter.tool_completed(
                     thread.id, turn.id, tool_name, "completed", source=source
                 )
@@ -584,59 +643,10 @@ def _run_loop(
 
             cancel.check()
 
-            if tool_name == "spawn_worker":
-                if spawn_count >= config.multi_agent.max_workers_per_turn:
-                    result_text = (
-                        f"Worker spawn limit reached "
-                        f"({config.multi_agent.max_workers_per_turn} per turn)."
-                    )
-                    for item in tracking_items:
-                        if isinstance(item, CollabSpawnItem):
-                            item.status = "failed"
-                            item.summary = result_text
-                        store.append_item(thread, turn.id, item)
-                        emitter.item_completed(
-                            thread.id, turn.id, item.type, item.id, "failed"
-                        )
-                    messages.append(
-                        {
-                            "role": "tool",
-                            "tool_call_id": tool_call_id,
-                            "content": result_text,
-                        }
-                    )
-                    continue
-                spawn_count += 1
-                result_text, collab_item = spawn_worker(
-                    thread,
-                    arguments,
-                    config,
-                    store,
-                    emitter=emitter,
+            with trace_span("tool.execute", tool=tool_name, backend=config.execution.backend):
+                dispatch_result = dispatch_tool(
+                    tool_name, arguments, config, mcp_manager=mcp_manager
                 )
-                if tracking_items and isinstance(tracking_items[0], CollabSpawnItem):
-                    item = tracking_items[0]
-                    item.worker_thread_id = collab_item.worker_thread_id
-                    item.status = collab_item.status
-                    item.summary = collab_item.summary
-                    store.append_item(thread, turn.id, item)
-                    emitter.item_completed(
-                        thread.id, turn.id, item.type, item.id, item.status
-                    )
-                emitter.tool_completed(
-                    thread.id, turn.id, tool_name, collab_item.status, source=source
-                )
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tool_call_id,
-                        "content": result_text,
-                    }
-                    )
-
-            dispatch_result = dispatch_tool(
-                tool_name, arguments, config, mcp_manager=mcp_manager
-            )
             _emit_execution_events(
                 dispatch_result, thread.id, turn.id, config, emitter
             )
@@ -882,15 +892,12 @@ def _precheck_tool(
     elif tool_name == "web_search":
         if config.sandbox_mode.value == "read-only":
             return "web search denied in read-only sandbox"
-    elif tool_name == "spawn_worker":
+    elif tool_name in ("spawn_worker", "spawn_worker_batch"):
         if not config.multi_agent.enabled:
-            return "spawn_worker requires multi_agent.enabled or --multi-agent"
-    elif tool_name == "wait_workers":
+            return f"{tool_name} requires multi_agent.enabled or --multi-agent"
+    elif tool_name in ("wait_workers", "list_workers", "get_worker_graph"):
         if not config.multi_agent.enabled:
-            return "wait_workers requires multi_agent.enabled or --multi-agent"
-    elif tool_name == "list_workers":
-        if not config.multi_agent.enabled:
-            return "list_workers requires multi_agent.enabled or --multi-agent"
+            return f"{tool_name} requires multi_agent.enabled or --multi-agent"
     elif mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
         decision = check_mcp_tool(

@@ -39,6 +39,14 @@ def log_event(
         if message:
             payload["message"] = message
         payload.update(extra)
+        try:
+            from agent.telemetry import get_trace_context
+
+            ctx = get_trace_context()
+            if ctx:
+                payload.update(ctx)
+        except Exception:
+            pass
         print(json.dumps(payload, ensure_ascii=False), file=sys.stderr)
     elif message:
         print(f"[{level}] {event}: {message}", file=sys.stderr)

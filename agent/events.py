@@ -582,6 +582,90 @@ class EventEmitter:
             )
         )
 
+    def multi_agent_dag_node_ready(
+        self, thread_id: str, turn_id: str, worker_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.node_ready",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"worker_id": worker_id, **extra},
+            )
+        )
+
+    def multi_agent_dag_node_started(
+        self, thread_id: str, turn_id: str, worker_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.node_started",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"worker_id": worker_id, **extra},
+            )
+        )
+
+    def multi_agent_dag_node_completed(
+        self, thread_id: str, turn_id: str, worker_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.node_completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"worker_id": worker_id, **extra},
+            )
+        )
+
+    def multi_agent_dag_blocked(
+        self, thread_id: str, turn_id: str, worker_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.blocked",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"worker_id": worker_id, **extra},
+            )
+        )
+
+    def multi_agent_dag_cycle_rejected(
+        self, thread_id: str, turn_id: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.dag.cycle_rejected",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data=extra,
+            )
+        )
+
+    def sandbox_profile_applied(
+        self, thread_id: str | None, turn_id: str | None, *, profile: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.profile.applied",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"profile": profile, **extra},
+            )
+        )
+
+    def sandbox_profile_skipped(
+        self, thread_id: str | None, turn_id: str | None, *, reason: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.profile.skipped",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"reason": reason, **extra},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

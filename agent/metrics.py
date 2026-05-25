@@ -38,6 +38,7 @@ class MetricsCollector:
             "agent_sync_bytes_total": {},
             "agent_sync_conflicts_total": {},
             "agent_workers_total": {},
+            "agent_workers_dag_nodes_total": {},
         }
         self._gauges: dict[str, int] = {
             "active_turns": 0,
@@ -113,6 +114,8 @@ class MetricsCollector:
                     lines.append(f'{metric}{{tool="{label}"}} {value}')
                 elif metric == "agent_sync_conflicts_total":
                     lines.append(f'{metric}{{reason="{label}"}} {value}')
+                elif metric == "agent_workers_dag_nodes_total":
+                    lines.append(f'{metric}{{status="{label}"}} {value}')
                 elif metric == "agent_workers_total":
                     lines.append(f'{metric}{{status="{label}"}} {value}')
                 else:

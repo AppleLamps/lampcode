@@ -199,6 +199,28 @@ class MultiAgentSettings:
     retry_max_attempts: int = 2
     checkpoint_compact_after_workers: int = 10
     metrics_enabled: bool = True
+    dag_enabled: bool = False
+    dag_wall_clock_budget_sec: int = 3600
+    dag_fail_fast: bool = False
+
+
+@dataclass
+class TelemetrySettings:
+    enabled: bool = False
+    service_name: str = "agent-cli"
+    otlp_endpoint: str = "http://127.0.0.1:4318/v1/traces"
+    sample_rate: float = 1.0
+    export_console: bool = False
+
+
+@dataclass
+class SandboxProfileSettings:
+    enabled: bool = False
+    profile: str = "auto"
+    windows_job_memory_limit_mb: int = 1024
+    windows_job_cpu_rate: int = 50
+    linux_unshare_user: bool = False
+    fail_open: bool = True
 
 
 @dataclass
@@ -394,6 +416,38 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         retry_max_attempts=int(ma.get("retry_max_attempts", 2)),
         checkpoint_compact_after_workers=int(ma.get("checkpoint_compact_after_workers", 10)),
         metrics_enabled=bool(ma.get("metrics_enabled", True)),
+        dag_enabled=bool(ma.get("dag_enabled", False)),
+        dag_wall_clock_budget_sec=int(ma.get("dag_wall_clock_budget_sec", 3600)),
+        dag_fail_fast=bool(ma.get("dag_fail_fast", False)),
+    )
+
+
+def load_telemetry_settings(path: Path | None = None) -> TelemetrySettings:
+    data = _load_toml(path or default_config_path())
+    tel = data.get("telemetry", {})
+    if not isinstance(tel, dict):
+        tel = {}
+    return TelemetrySettings(
+        enabled=bool(tel.get("enabled", False)),
+        service_name=str(tel.get("service_name", "agent-cli")),
+        otlp_endpoint=str(tel.get("otlp_endpoint", "http://127.0.0.1:4318/v1/traces")),
+        sample_rate=float(tel.get("sample_rate", 1.0)),
+        export_console=bool(tel.get("export_console", False)),
+    )
+
+
+def load_sandbox_profile_settings(path: Path | None = None) -> SandboxProfileSettings:
+    data = _load_toml(path or default_config_path())
+    sp = data.get("sandbox_profiles", {})
+    if not isinstance(sp, dict):
+        sp = {}
+    return SandboxProfileSettings(
+        enabled=bool(sp.get("enabled", False)),
+        profile=str(sp.get("profile", "auto")),
+        windows_job_memory_limit_mb=int(sp.get("windows_job_memory_limit_mb", 1024)),
+        windows_job_cpu_rate=int(sp.get("windows_job_cpu_rate", 50)),
+        linux_unshare_user=bool(sp.get("linux_unshare_user", False)),
+        fail_open=bool(sp.get("fail_open", True)),
     )
 
 

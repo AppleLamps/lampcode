@@ -56,9 +56,9 @@ def get_tool_schemas(
 def tool_requires_approval(
     name: str, mcp_manager: McpManager | None = None, config: Config | None = None
 ) -> bool:
-    if name == "spawn_worker":
+    if name == "spawn_worker" or name == "spawn_worker_batch":
         return True
-    if name in ("wait_workers", "list_workers"):
+    if name in ("wait_workers", "list_workers", "get_worker_graph"):
         return False
     if name == "web_search":
         return True

@@ -23,19 +23,32 @@ def _render_checkpoint_panel(checkpoint: SupervisorCheckpoint | None) -> str:
         return ""
     rows = []
     for w in checkpoint.workers:
+        deps = ", ".join(w.worker_dependencies) if w.worker_dependencies else "—"
         rows.append(
             f"<tr><td><code>{html.escape(w.worker_id)}</code></td>"
             f"<td>{html.escape(w.status)}</td>"
+            f"<td>{html.escape(deps)}</td>"
             f"<td>{html.escape(w.task[:120])}</td></tr>"
+        )
+    edge_rows = "".join(
+        f"<tr><td><code>{html.escape(e.get('from', ''))}</code></td>"
+        f"<td><code>{html.escape(e.get('to', ''))}</code></td></tr>"
+        for e in (checkpoint.edges or [])
+    )
+    edge_section = ""
+    if edge_rows:
+        edge_section = (
+            f"<h3>DAG edges</h3><table><thead><tr><th>From</th><th>To</th></tr></thead>"
+            f"<tbody>{edge_rows}</tbody></table>"
         )
     return (
         f'<section class="checkpoint"><h2>Latest checkpoint '
-        f'(turn {html.escape(checkpoint.turn_id[:8])}…, {html.escape(checkpoint.status)})</h2>'
+        f'(turn {html.escape(checkpoint.turn_id[:8])}…, dag={html.escape(checkpoint.dag_status)})</h2>'
         f"<p>Workers: {len(checkpoint.workers)} "
         f"(completed {sum(1 for w in checkpoint.workers if w.status == 'completed')}, "
         f"failed {sum(1 for w in checkpoint.workers if w.status == 'failed')})</p>"
-        f"<table><thead><tr><th>ID</th><th>Status</th><th>Task</th></tr></thead>"
-        f"<tbody>{''.join(rows)}</tbody></table></section>"
+        f"<table><thead><tr><th>ID</th><th>Status</th><th>Deps</th><th>Task</th></tr></thead>"
+        f"<tbody>{''.join(rows)}</tbody></table>{edge_section}</section>"
     )
 
 

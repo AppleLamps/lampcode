@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from agent.config import Config
+from agent.multi_agent.dag import DagEdge, deps_satisfied
 from agent.multi_agent.registry import WorkerRecord, WorkerRegistry
 
 
@@ -45,6 +46,8 @@ class SupervisorCheckpoint:
     messages: list[dict[str, Any]] = field(default_factory=list)
     status: str = "running"
     user_text: str = ""
+    edges: list[dict[str, str]] = field(default_factory=list)
+    dag_status: str = "running"
 
     def to_dict(self) -> dict:
         return {
@@ -55,6 +58,8 @@ class SupervisorCheckpoint:
             "messages": self.messages,
             "status": self.status,
             "user_text": self.user_text,
+            "edges": list(self.edges),
+            "dag_status": self.dag_status,
         }
 
     @classmethod
@@ -68,6 +73,8 @@ class SupervisorCheckpoint:
             messages=list(data.get("messages", [])),
             status=data.get("status", "running"),
             user_text=data.get("user_text", ""),
+            edges=list(data.get("edges", [])),
+            dag_status=data.get("dag_status", data.get("status", "running")),
         )
 
 
@@ -125,6 +132,8 @@ def snapshot_registry(
     messages: list[dict] | None = None,
     status: str = "running",
     user_text: str = "",
+    dag_status: str = "running",
+    edges: list[dict] | None = None,
 ) -> SupervisorCheckpoint:
     workers: list[WorkerCheckpoint] = []
     with registry._lock:
@@ -144,7 +153,7 @@ def snapshot_registry(
                     item_id=rec.item_id,
                     error=rec.error,
                     attempts=getattr(rec, "attempts", 0),
-                    worker_dependencies=list(getattr(rec, "worker_dependencies", []) or []),
+                    worker_dependencies=list(rec.worker_dependencies),
                 )
             )
     return SupervisorCheckpoint(
@@ -155,6 +164,8 @@ def snapshot_registry(
         messages=list(messages or []),
         status=status,
         user_text=user_text,
+        edges=list(edges or []),
+        dag_status=dag_status,
     )
 
 
@@ -174,7 +185,10 @@ def restore_registry(
         parent_thread=parent_thread,
         turn_id=checkpoint.turn_id,
     )
-    registry._spawn_count_restore = checkpoint.spawn_count
+    registry.spawn_count = checkpoint.spawn_count
+    registry._dag_status = checkpoint.dag_status
+    registry._edges = [DagEdge.from_dict(e) for e in checkpoint.edges]
+
     for wc in checkpoint.workers:
         if wc.status == "completed":
             record = WorkerRecord(
@@ -190,6 +204,7 @@ def restore_registry(
                 model=wc.model,
                 item_id=wc.item_id,
                 error=wc.error,
+                worker_dependencies=list(wc.worker_dependencies),
             )
             record.attempts = wc.attempts
             record._done.set()
@@ -210,6 +225,7 @@ def restore_registry(
                     model=wc.model,
                     item_id=wc.item_id,
                     error=wc.error,
+                    worker_dependencies=list(wc.worker_dependencies),
                 )
                 record._done.set()
                 registry._workers[wc.worker_id] = record
@@ -227,14 +243,14 @@ def restore_registry(
                 model=wc.model,
                 item_id=wc.item_id,
                 error=wc.error,
+                worker_dependencies=list(wc.worker_dependencies),
             )
             record.attempts = attempts
             registry._workers[wc.worker_id] = record
-            registry._pending_queue.append(wc.worker_id)
             from agent.metrics import MetricsCollector
 
             MetricsCollector.global_collector().inc_labeled("agent_workers_total", "retry", 1)
-        elif wc.status in ("queued", "running", "timed_out"):
+        elif wc.status in ("queued", "running", "timed_out", "blocked"):
             record = WorkerRecord(
                 worker_id=wc.worker_id,
                 parent_thread_id=wc.parent_thread_id,
@@ -248,9 +264,24 @@ def restore_registry(
                 model=wc.model,
                 item_id=wc.item_id,
                 error=wc.error,
+                worker_dependencies=list(wc.worker_dependencies),
             )
             registry._workers[wc.worker_id] = record
-            registry._pending_queue.append(wc.worker_id)
+
+    deps_map = {
+        wid: list(rec.worker_dependencies) for wid, rec in registry._workers.items()
+    }
+    statuses = {wid: rec.status for wid, rec in registry._workers.items()}
+    for wid, rec in registry._workers.items():
+        if rec.status != "queued" or rec._done.is_set():
+            continue
+        if config.multi_agent.dag_enabled and not deps_satisfied(wid, deps_map, statuses):
+            rec.status = "blocked"
+        else:
+            registry._pending_queue.append(wid)
+
+    if parent_thread:
+        registry._pump_queue(parent_thread, checkpoint.turn_id)
     return registry
 
 
@@ -264,6 +295,8 @@ def save_checkpoint_from_registry(
     messages: list | None = None,
     status: str = "running",
     user_text: str = "",
+    dag_status: str = "running",
+    edges: list[dict] | None = None,
 ) -> Path | None:
     if not config.multi_agent.checkpoint_enabled:
         return None
@@ -276,6 +309,8 @@ def save_checkpoint_from_registry(
         messages=messages,
         status=status,
         user_text=user_text,
+        dag_status=getattr(registry, "_dag_status", status),
+        edges=[e.to_dict() for e in getattr(registry, "_edges", [])],
     )
     return CheckpointStore(base).save(cp)
 

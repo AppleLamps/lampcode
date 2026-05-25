@@ -11,6 +11,7 @@ import httpx
 
 from agent.cancel import CancelToken
 from agent.config import Config
+from agent.telemetry import trace_span
 
 RETRYABLE_STATUS = {429, 502, 503, 504}
 
@@ -54,7 +55,8 @@ class OpenRouterClient:
                 json=payload,
             )
 
-        response = self._request_with_retry(do_post, cancel_token=cancel_token)
+        with trace_span("model.completion", model=self.config.model):
+            response = self._request_with_retry(do_post, cancel_token=cancel_token)
         data = response.json()
         return data["choices"][0]["message"]["content"] or ""
 
@@ -81,89 +83,90 @@ class OpenRouterClient:
         finish_reason: str | None = None
         usage: dict[str, int] | None = None
 
-        attempt = 0
-        while True:
-            cancel_token.check()
-            try:
-                timeout = httpx.Timeout(
-                    float(self._settings.request_timeout_sec), connect=30.0
-                )
-                with httpx.Client(timeout=timeout) as client:
-                    with client.stream(
-                        "POST",
-                        f"{self.base_url}/chat/completions",
-                        headers=self._headers(),
-                        json=payload,
-                    ) as response:
-                        if response.status_code != 200:
-                            body = response.read().decode("utf-8", errors="replace")
-                            if (
-                                response.status_code in RETRYABLE_STATUS
-                                and attempt < self._settings.max_retries
-                            ):
-                                self._sleep_backoff(
-                                    attempt, response.headers.get("Retry-After")
+        with trace_span("model.completion", model=self.config.model):
+            attempt = 0
+            while True:
+                cancel_token.check()
+                try:
+                    timeout = httpx.Timeout(
+                        float(self._settings.request_timeout_sec), connect=30.0
+                    )
+                    with httpx.Client(timeout=timeout) as client:
+                        with client.stream(
+                            "POST",
+                            f"{self.base_url}/chat/completions",
+                            headers=self._headers(),
+                            json=payload,
+                        ) as response:
+                            if response.status_code != 200:
+                                body = response.read().decode("utf-8", errors="replace")
+                                if (
+                                    response.status_code in RETRYABLE_STATUS
+                                    and attempt < self._settings.max_retries
+                                ):
+                                    self._sleep_backoff(
+                                        attempt, response.headers.get("Retry-After")
+                                    )
+                                    attempt += 1
+                                    continue
+                                self._raise_api_error(response.status_code, body)
+
+                            for line in response.iter_lines():
+                                cancel_token.check()
+                                if not line.startswith("data: "):
+                                    continue
+                                data_str = line[6:].strip()
+                                if data_str == "[DONE]":
+                                    break
+
+                                chunk = json.loads(data_str)
+                                if chunk.get("error"):
+                                    raise OpenRouterError(
+                                        f"OpenRouter error: {chunk['error']}"
+                                    )
+
+                                if chunk.get("usage"):
+                                    usage = chunk["usage"]
+
+                                choices = chunk.get("choices", [])
+                                if not choices:
+                                    continue
+
+                                delta = choices[0].get("delta", {})
+                                finish_reason = (
+                                    choices[0].get("finish_reason") or finish_reason
                                 )
-                                attempt += 1
-                                continue
-                            self._raise_api_error(response.status_code, body)
 
-                        for line in response.iter_lines():
-                            cancel_token.check()
-                            if not line.startswith("data: "):
-                                continue
-                            data_str = line[6:].strip()
-                            if data_str == "[DONE]":
-                                break
+                                if delta.get("content"):
+                                    content_parts.append(delta["content"])
+                                    if on_delta:
+                                        on_delta(delta["content"])
 
-                            chunk = json.loads(data_str)
-                            if chunk.get("error"):
-                                raise OpenRouterError(
-                                    f"OpenRouter error: {chunk['error']}"
-                                )
-
-                            if chunk.get("usage"):
-                                usage = chunk["usage"]
-
-                            choices = chunk.get("choices", [])
-                            if not choices:
-                                continue
-
-                            delta = choices[0].get("delta", {})
-                            finish_reason = (
-                                choices[0].get("finish_reason") or finish_reason
-                            )
-
-                            if delta.get("content"):
-                                content_parts.append(delta["content"])
-                                if on_delta:
-                                    on_delta(delta["content"])
-
-                            for tc_delta in delta.get("tool_calls") or []:
-                                idx = tc_delta.get("index", 0)
-                                if idx not in tool_calls_acc:
-                                    tool_calls_acc[idx] = {
-                                        "id": "",
-                                        "type": "function",
-                                        "function": {"name": "", "arguments": ""},
-                                    }
-                                acc = tool_calls_acc[idx]
-                                if tc_delta.get("id"):
-                                    acc["id"] = tc_delta["id"]
-                                fn = tc_delta.get("function") or {}
-                                if fn.get("name"):
-                                    acc["function"]["name"] += fn["name"]
-                                if fn.get("arguments"):
-                                    acc["function"]["arguments"] += fn["arguments"]
-                break
-            except httpx.HTTPError as exc:
-                if attempt < self._settings.max_retries:
-                    self._sleep_backoff(attempt)
-                    attempt += 1
-                    continue
-                raise OpenRouterError(
-                    f"HTTP error contacting OpenRouter after retries: {exc}"
-                ) from exc
+                                for tc_delta in delta.get("tool_calls") or []:
+                                    idx = tc_delta.get("index", 0)
+                                    if idx not in tool_calls_acc:
+                                        tool_calls_acc[idx] = {
+                                            "id": "",
+                                            "type": "function",
+                                            "function": {"name": "", "arguments": ""},
+                                        }
+                                    acc = tool_calls_acc[idx]
+                                    if tc_delta.get("id"):
+                                        acc["id"] = tc_delta["id"]
+                                    fn = tc_delta.get("function") or {}
+                                    if fn.get("name"):
+                                        acc["function"]["name"] += fn["name"]
+                                    if fn.get("arguments"):
+                                        acc["function"]["arguments"] += fn["arguments"]
+                    break
+                except httpx.HTTPError as exc:
+                    if attempt < self._settings.max_retries:
+                        self._sleep_backoff(attempt)
+                        attempt += 1
+                        continue
+                    raise OpenRouterError(
+                        f"HTTP error contacting OpenRouter after retries: {exc}"
+                    ) from exc
 
         tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
         return CompletionResult(

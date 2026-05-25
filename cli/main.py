@@ -58,6 +58,7 @@ execution_app = typer.Typer(help="Execution backend commands")
 sync_app = typer.Typer(help="SSH workspace sync commands")
 multi_agent_app = typer.Typer(help="Multi-agent supervisor commands")
 metrics_app = typer.Typer(help="Runtime metrics")
+telemetry_app = typer.Typer(help="OpenTelemetry tracing")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -68,6 +69,7 @@ app.add_typer(execution_app, name="execution")
 app.add_typer(sync_app, name="sync")
 app.add_typer(multi_agent_app, name="multi-agent")
 app.add_typer(metrics_app, name="metrics")
+app.add_typer(telemetry_app, name="telemetry")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -552,7 +554,29 @@ def doctor(
     table.add_row(
         "multi-agent",
         f"enabled={cfg.multi_agent.enabled}, max_workers={cfg.multi_agent.max_workers_per_turn}, "
-        f"max_depth={cfg.multi_agent.max_worker_depth}, max_concurrent={cfg.multi_agent.max_concurrent_workers}",
+        f"max_depth={cfg.multi_agent.max_worker_depth}, max_concurrent={cfg.multi_agent.max_concurrent_workers}, "
+        f"dag={cfg.multi_agent.dag_enabled}",
+    )
+    table.add_row(
+        "telemetry",
+        f"enabled={cfg.telemetry.enabled}, service={cfg.telemetry.service_name}, "
+        f"sample_rate={cfg.telemetry.sample_rate}",
+    )
+    try:
+        import opentelemetry  # noqa: F401
+
+        otel_pkgs = "installed"
+    except ImportError:
+        otel_pkgs = "not installed (pip install -e '.[otel]')"
+    table.add_row("OpenTelemetry packages", otel_pkgs)
+    from agent.sandbox.profiles import select_profile
+
+    sp = cfg.sandbox_profiles
+    prof = select_profile(sp)
+    prof_avail = "available" if prof.available() else "unavailable (fail_open)"
+    table.add_row(
+        "sandbox profiles",
+        f"enabled={sp.enabled}, profile={sp.profile}, selected={prof.name}, {prof_avail}",
     )
     table.add_row(
         "docker file tools",
@@ -1024,6 +1048,47 @@ def multi_agent_status(
     stdout_console.print(json.dumps(rows, indent=2))
 
 
+@multi_agent_app.command("graph")
+def multi_agent_graph(
+    thread_id: str = typer.Option(..., "--thread-id"),
+    turn_id: Optional[str] = typer.Option(None, "--turn-id"),
+) -> None:
+    """Show worker DAG nodes and edges from checkpoint."""
+    import json
+
+    from agent.multi_agent.checkpoint import CheckpointStore
+
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    config = Config.resolve(cwd=Path(thread.cwd))
+    cp_store = CheckpointStore(Path(config.multi_agent.checkpoint_dir).expanduser())
+    cp = cp_store.load(thread.id, turn_id) if turn_id else cp_store.find_latest(thread.id)
+    if not cp:
+        stdout_console.print(json.dumps({"nodes": [], "edges": [], "status": "idle"}, indent=2))
+        return
+    stdout_console.print(
+        json.dumps(
+            {
+                "nodes": [
+                    {
+                        "worker_id": w.worker_id,
+                        "status": w.status,
+                        "attempts": w.attempts,
+                        "worker_dependencies": w.worker_dependencies,
+                        "task": w.task,
+                        "error": w.error,
+                    }
+                    for w in cp.workers
+                ],
+                "edges": cp.edges,
+                "status": cp.dag_status,
+                "turn_id": cp.turn_id,
+            },
+            indent=2,
+        )
+    )
+
+
 @multi_agent_app.command("resume")
 def multi_agent_resume_cmd(
     thread_id: str = typer.Option(..., "--thread-id"),
@@ -1208,6 +1273,37 @@ def serve(
         run_serve(host=host, port=port, settings=cfg, auth_token=token or cfg.auth_token or None)
     except KeyboardInterrupt:
         raise typer.Exit(0) from None
+
+
+@telemetry_app.command("status")
+def telemetry_status_cmd() -> None:
+    """Show telemetry configuration and exporter availability."""
+    import json
+
+    cfg = Config.resolve()
+    provider = __import__("agent.telemetry", fromlist=["TracerProvider"]).TracerProvider.global_provider()
+    provider.configure(cfg.telemetry)
+    otel_installed = False
+    try:
+        import opentelemetry  # noqa: F401
+
+        otel_installed = True
+    except ImportError:
+        pass
+    stdout_console.print(
+        json.dumps(
+            {
+                "enabled": cfg.telemetry.enabled,
+                "service_name": cfg.telemetry.service_name,
+                "otlp_endpoint": cfg.telemetry.otlp_endpoint,
+                "sample_rate": cfg.telemetry.sample_rate,
+                "export_console": cfg.telemetry.export_console,
+                "otel_packages_installed": otel_installed,
+                "otel_runtime_available": provider._otel_available,
+            },
+            indent=2,
+        )
+    )
 
 
 @metrics_app.command("show")

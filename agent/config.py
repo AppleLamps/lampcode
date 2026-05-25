@@ -21,6 +21,8 @@ from agent.settings import (
     MultiAgentSettings,
     OpenRouterSettings,
     RecordingSettings,
+    SandboxProfileSettings,
+    TelemetrySettings,
     WebSearchSettings,
     load_compaction_settings,
     load_execution_settings,
@@ -28,6 +30,8 @@ from agent.settings import (
     load_multi_agent_settings,
     load_openrouter_settings,
     load_recording_settings,
+    load_sandbox_profile_settings,
+    load_telemetry_settings,
     load_web_search_settings,
 )
 
@@ -118,6 +122,8 @@ class Config:
     web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
     multi_agent: MultiAgentSettings = field(default_factory=MultiAgentSettings)
+    telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
+    sandbox_profiles: SandboxProfileSettings = field(default_factory=SandboxProfileSettings)
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
@@ -244,6 +250,13 @@ class Config:
         web_search = load_web_search_settings(resolved_config_path)
         execution_cfg = load_execution_settings(resolved_config_path)
         multi_agent_cfg = load_multi_agent_settings(resolved_config_path)
+        telemetry_cfg = load_telemetry_settings(resolved_config_path)
+        sandbox_profiles_cfg = load_sandbox_profile_settings(resolved_config_path)
+
+        if os.environ.get("AGENT_OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
+            telemetry_cfg.enabled = True
+        if os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
+            telemetry_cfg.otlp_endpoint = os.environ["OTEL_EXPORTER_OTLP_ENDPOINT"]
 
         backend_value = execution_backend or env_execution_backend or execution_cfg.backend
         execution_cfg.backend = backend_value
@@ -282,6 +295,8 @@ class Config:
             web_search=web_search,
             execution=execution_cfg,
             multi_agent=multi_agent_cfg,
+            telemetry=telemetry_cfg,
+            sandbox_profiles=sandbox_profiles_cfg,
             openrouter_api_key=api_key,
             openrouter_base_url=base_url,
             config_path=resolved_config_path,

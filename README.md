@@ -658,14 +658,71 @@ Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for
 3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
 4. Run `agent config validate --strict` in CI/deploy scripts.
 5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
-6. Run `pytest` (327+ tests) before release; check `agent doctor` for SSH/sync/tooling.
+6. Run `pytest` (378+ tests) before release; check `agent doctor` for SSH/sync/tooling.
+
+## Phase 11 — Worker DAG v4, OpenTelemetry, sandbox profiles (v1.1.0)
+
+### Worker DAG v4
+
+Dependency-aware scheduling when `dag_enabled=true`. Default off preserves Phase 10 FIFO queue behavior.
+
+```toml
+[multi_agent]
+dag_enabled = true
+max_workers_per_turn = 10
+max_concurrent_workers = 4
+dag_wall_clock_budget_sec = 3600
+dag_fail_fast = false
+```
+
+Tools: `spawn_worker` (+ `depends_on`), `spawn_worker_batch`, `get_worker_graph`, `wait_workers` (+ `mode=all|any|deps`).
+
+```powershell
+agent run "Map-reduce analysis" --multi-agent
+agent multi-agent graph --thread-id abc123
+agent multi-agent resume --thread-id abc123 --retry-failed
+```
+
+Checkpoint v2 adds `edges` + `dag_status`. Serve: `GET /threads/{id}/workers/graph`.
+
+### OpenTelemetry
+
+```toml
+[telemetry]
+enabled = false
+service_name = "agent-cli"
+otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
+sample_rate = 1.0
+export_console = false
+```
+
+```powershell
+$env:AGENT_OTEL_ENABLED = "1"
+$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318/v1/traces"
+agent telemetry status
+pip install -e ".[otel]"
+# Jaeger: docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
+```
+
+Spans: `turn.run`, `tool.execute`, `model.completion`, sync/worker lifecycle. JSON logs include trace context when enabled.
+
+### Experimental sandbox profiles
+
+```toml
+[sandbox_profiles]
+enabled = false
+profile = "auto"          # auto | windows_job | linux_unshare | noop
+fail_open = true
+```
+
+Local `run_command` only; **not a security boundary**. Doctor reports platform capability.
 
 ## Tests
 
 ```powershell
-pytest   # 327+ tests
+pytest   # 378+ tests
 ```
 
-## Phase 11 (planned, not implemented)
+## Phase 12 (planned, not implemented)
 
-Kernel sandbox backends (AppContainer, bubblewrap, Seatbelt), signed skill marketplace, full web IDE (Monaco/file tree), worker DAG fan-in/fan-out using `worker_dependencies`, OpenTelemetry OTLP exporter, HTTPS/TLS for serve.
+Signed skill marketplace, web IDE lite (Monaco), serve TLS/RBAC, kernel-grade sandbox (AppContainer/Seatbelt/bubblewrap), autonomous swarms without supervisor budgets.

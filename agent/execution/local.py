@@ -54,6 +54,17 @@ class LocalExecutionBackend:
         if workdir:
             base = resolve_path_within_cwd(cwd, workdir)
 
+        profile_meta = None
+        if self._config.sandbox_profiles.enabled:
+            from agent.sandbox.profiles import apply_sandbox_profile
+
+            profile_result = apply_sandbox_profile(
+                self._config,
+                cmd=cmd,
+                cwd=str(base),
+            )
+            profile_meta = profile_result.meta or {"profile": profile_result.profile}
+
         start = time.monotonic()
         try:
             proc = subprocess.run(
@@ -76,7 +87,7 @@ class LocalExecutionBackend:
                 exit_code=exit_code,
                 duration_ms=duration_ms,
                 backend="local",
-                meta={"cwd": str(base)},
+                meta={"cwd": str(base), **(profile_meta or {})},
             )
         except subprocess.TimeoutExpired:
             duration_ms = int((time.monotonic() - start) * 1000)
