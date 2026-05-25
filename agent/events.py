@@ -712,6 +712,43 @@ class EventEmitter:
             )
         )
 
+    def multi_agent_program_linked(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        program_id: str,
+        worker_id: str = "",
+        **extra,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.program.linked",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"program_id": program_id, "worker_id": worker_id, **extra},
+            )
+        )
+
+    def multi_agent_program_node_completed(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        program_id: str,
+        worker_id: str,
+        status: str,
+        **extra,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.program.node_completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"program_id": program_id, "worker_id": worker_id, "status": status, **extra},
+            )
+        )
+
     def ide_file_write(
         self,
         thread_id: str | None,

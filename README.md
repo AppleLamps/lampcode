@@ -787,15 +787,75 @@ agent multi-agent budgets show --thread-id <id>
 
 Metrics: `agent_auth_refresh_total`, `agent_marketplace_sync_total`, `agent_swarm_budget_exceeded_total`.
 
+## Phase 16 — AppContainer + IDE v2 + cross-thread DAG (v1.6.0)
+
+### Windows AppContainer sandbox (experimental)
+
+Real isolation path for local `run_command` on Windows 10+ with fallback to restricted token.
+
+```toml
+[sandbox.kernel]
+enabled = true
+backend = "auto"
+fail_open = true
+
+[sandbox.kernel.windows]
+backend_preference = "appcontainer_then_restricted"
+allow_network = false
+workspace_cap = true
+```
+
+```powershell
+agent doctor   # shows AppContainer: available|unavailable
+```
+
+**Not malware-grade isolation** — complement with budgets, approvals, and RBAC.
+
+### IDE v2 (multi-tab + diff gutter)
+
+```toml
+[serve.ide]
+enabled = true
+max_open_tabs = 10
+show_diff_gutter = true
+autosave = false
+```
+
+API: `GET /ide/history?path=...`, `GET /ide/tabs/state` (plus existing `/ide/tree`, `/ide/file`, `/ide/diff`).
+
+```powershell
+agent serve --enable-ide --enable-turn-start
+```
+
+### Cross-thread program DAG
+
+```toml
+[multi_agent.cross_thread]
+enabled = false
+program_id_auto = true
+state_dir = "~/.agent-cli/programs"
+max_threads_linked = 20
+```
+
+```powershell
+agent programs list
+agent programs show <program-id>
+agent programs link-thread --program-id <id> --thread-id <id>
+agent multi-agent graph --program-id <id>
+agent programs clear <program-id> --yes
+```
+
+Use `spawn_worker` with `"program_scope": true` when cross-thread is enabled.
+
 ## Tests
 
 ```powershell
-pytest   # 580+ tests
+pytest   # 630+ tests
 ```
 
-## Phase 16 (planned, not implemented)
+## Phase 17 (planned, not implemented)
 
-Windows AppContainer sandbox, multi-file IDE tabs/LSP/debugger, cross-thread DAG, unbounded autonomous swarms, online OAuth token introspection.
+OAuth policy engine / token introspection, scheduled autonomous swarms, full LSP, cross-machine program DAG sync.
 
 ## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
 

@@ -180,6 +180,7 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                         oidc_enabled=ctx.oidc_client is not None,
                         ide_enabled=ctx.settings.ide.enabled,
                         monaco_cdn=ctx.settings.ide.monaco_cdn,
+                        max_open_tabs=ctx.settings.ide.max_open_tabs,
                     )
                 )
                 return
@@ -351,6 +352,43 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 data = file_diff_from_thread(thread, rel_path)
                 self._ide_metric("diff", "ok")
                 self._json_response(data)
+            elif path == "/ide/history":
+                from agent.serve.ide import compute_diff_gutter, file_history_from_thread
+
+                history = file_history_from_thread(thread, rel_path)
+                gutter = {"enabled": False}
+                if ide.show_diff_gutter and history:
+                    try:
+                        current = read_file(cwd, rel_path, max_bytes=ide.max_file_bytes)
+                        gutter = compute_diff_gutter(current.get("content", ""), history)
+                    except IdeError:
+                        gutter = {"enabled": False}
+                self._ide_metric("history", "ok")
+                self._json_response(
+                    {
+                        "path": rel_path,
+                        "history": history,
+                        "gutter": gutter,
+                        "show_diff_gutter": ide.show_diff_gutter,
+                    }
+                )
+            elif path == "/ide/tabs/state":
+                from agent.metrics import MetricsCollector
+                from agent.serve.ide import enforce_tab_limit, tabs_state_snapshot
+
+                raw_tabs = (qs.get("tabs") or [""])[0]
+                active = (qs.get("active") or [None])[0]
+                tabs = [t for t in raw_tabs.split(",") if t] if raw_tabs else []
+                trimmed, was_trimmed = enforce_tab_limit(tabs, max_tabs=ide.max_open_tabs)
+                if trimmed:
+                    MetricsCollector.global_collector().set_gauge("agent_ide_tabs_open", len(trimmed))
+                self._json_response(
+                    {
+                        **tabs_state_snapshot(trimmed, active),
+                        "max_open_tabs": ide.max_open_tabs,
+                        "trimmed": was_trimmed,
+                    }
+                )
             else:
                 self._error(404, "Not found")
         except IdeError as exc:

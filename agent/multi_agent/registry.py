@@ -95,7 +95,112 @@ class WorkerRegistry:
         self._wait_timeout = config.multi_agent.wait_timeout_sec
         self.spawn_count = 0
         self._fail_fast_triggered = False
+        self._program_id: str | None = None
         self._load_persisted_dag()
+
+    @property
+    def program_id(self) -> str | None:
+        return self._program_id
+
+    def _program_store(self):
+        from agent.multi_agent.program_state import ProgramStore
+
+        ct = self._config.multi_agent.cross_thread
+        return ProgramStore(Path(ct.state_dir).expanduser())
+
+    def _resolve_program_id(self, parent_thread: Thread) -> str:
+        from agent.multi_agent.program_state import derive_program_id
+
+        ct = self._config.multi_agent.cross_thread
+        return derive_program_id(Path(parent_thread.cwd), auto=ct.program_id_auto)
+
+    def _sync_program_node(
+        self,
+        parent_thread: Thread,
+        record: WorkerRecord,
+        *,
+        program_scope: bool,
+        turn_id: str | None = None,
+    ) -> None:
+        ct = self._config.multi_agent.cross_thread
+        if not ct.enabled or not program_scope:
+            return
+        from agent.multi_agent.program_state import ProgramNode
+
+        program_id = self._resolve_program_id(parent_thread)
+        self._program_id = program_id
+        edges = [e.to_dict() for e in self._edges if e.to == record.worker_id]
+        node = ProgramNode(
+            worker_id=record.worker_id,
+            thread_id=parent_thread.id,
+            turn_id=turn_id or self._turn_id or "",
+            task=record.task,
+            status=record.status,
+            parent_thread_id=record.parent_thread_id,
+        )
+        store = self._program_store()
+        store.upsert_node(
+            program_id,
+            node,
+            edges=edges,
+            thread_id=parent_thread.id,
+            max_threads=ct.max_threads_linked,
+        )
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_program_dag_nodes_total", record.status, 1
+        )
+        if self._emitter:
+            self._emitter.multi_agent_program_linked(
+                parent_thread.id,
+                turn_id or self._turn_id,
+                program_id=program_id,
+                worker_id=record.worker_id,
+            )
+
+    def _complete_program_node(self, parent_thread: Thread, record: WorkerRecord) -> None:
+        ct = self._config.multi_agent.cross_thread
+        if not ct.enabled or not self._program_id:
+            return
+        from agent.multi_agent.program_state import ProgramNode
+
+        node = ProgramNode(
+            worker_id=record.worker_id,
+            thread_id=parent_thread.id,
+            turn_id=self._turn_id or "",
+            task=record.task,
+            status=record.status,
+            parent_thread_id=record.parent_thread_id,
+        )
+        self._program_store().upsert_node(self._program_id, node, thread_id=parent_thread.id)
+        MetricsCollector.global_collector().inc_labeled(
+            "agent_program_dag_nodes_total", record.status, 1
+        )
+        if self._emitter:
+            self._emitter.multi_agent_program_node_completed(
+                parent_thread.id,
+                self._turn_id,
+                program_id=self._program_id,
+                worker_id=record.worker_id,
+                status=record.status,
+            )
+
+    def _lookup_program_worker(self, worker_id: str) -> dict | None:
+        ct = self._config.multi_agent.cross_thread
+        if not ct.enabled:
+            return None
+        if not self._parent_thread:
+            return None
+        program_id = self._program_id or self._resolve_program_id(self._parent_thread)
+        node = self._program_store().get_node(program_id, worker_id)
+        if not node:
+            return None
+        return {
+            "worker_id": node.worker_id,
+            "status": node.status,
+            "task": node.task,
+            "thread_id": node.thread_id,
+            "cross_thread": True,
+        }
 
     def _load_persisted_dag(self) -> None:
         ma = self._config.multi_agent
@@ -318,6 +423,7 @@ class WorkerRegistry:
         model = arguments.get("model") or self._config.model
         worker_backend = arguments.get("execution_backend")
         depends_on = list(arguments.get("depends_on") or [])
+        program_scope = bool(arguments.get("program_scope", False))
         if not self.dag_enabled:
             depends_on = []
 
@@ -390,6 +496,13 @@ class WorkerRegistry:
                 item_id=collab.id,
             )
             collab.status = record.status  # type: ignore[assignment]
+
+        self._sync_program_node(
+            parent_thread,
+            record,
+            program_scope=program_scope,
+            turn_id=turn_id,
+        )
 
         MetricsCollector.global_collector().inc("workers_spawned")
         MetricsCollector.global_collector().inc_labeled("agent_workers_total", record.status, 1)
@@ -468,7 +581,13 @@ class WorkerRegistry:
 
     def get_worker_graph(self) -> str:
         snap = self.build_graph_snapshot()
-        return json.dumps(snap.to_dict(), indent=2)
+        payload = snap.to_dict()
+        ct = self._config.multi_agent.cross_thread
+        if ct.enabled and self._parent_thread:
+            program_id = self._program_id or self._resolve_program_id(self._parent_thread)
+            payload["program_id"] = program_id
+            payload["program_graph"] = self._program_store().graph_snapshot(program_id)
+        return json.dumps(payload, indent=2)
 
     def build_graph_snapshot(self) -> WorkerDagSnapshot:
         with self._lock:
@@ -629,6 +748,7 @@ class WorkerRegistry:
             MetricsCollector.global_collector().inc_labeled(
                 "agent_workers_total", record.status, 1
             )
+            self._complete_program_node(parent_thread, record)
             self._emit_dag("multi_agent_dag_node_completed", worker_id, status=record.status)
             MetricsCollector.global_collector().inc_labeled(
                 "agent_workers_dag_nodes_total", record.status, 1
@@ -737,6 +857,10 @@ class WorkerRegistry:
         for wid in targets:
             record = self._workers.get(wid)
             if not record:
+                prog = self._lookup_program_worker(wid)
+                if prog:
+                    results.append(prog)
+                    continue
                 results.append({"worker_id": wid, "status": "not_found"})
                 continue
             remaining = max(0.0, deadline - time.monotonic())

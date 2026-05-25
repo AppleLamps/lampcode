@@ -234,6 +234,14 @@ class ExecutionSettings:
 
 
 @dataclass
+class CrossThreadSettings:
+    enabled: bool = False
+    program_id_auto: bool = True
+    state_dir: str = "~/.agent-cli/programs"
+    max_threads_linked: int = 20
+
+
+@dataclass
 class MultiAgentSettings:
     enabled: bool = False
     max_workers_per_turn: int = 5
@@ -257,6 +265,7 @@ class MultiAgentSettings:
     dag_max_age_sec: int = 86400
     dag_auto_resume: bool = False
     budgets: SwarmBudgetSettings = field(default_factory=SwarmBudgetSettings)
+    cross_thread: CrossThreadSettings = field(default_factory=CrossThreadSettings)
 
 
 @dataclass
@@ -286,6 +295,9 @@ class ServeIdeSettings:
     max_tree_entries: int = 2000
     max_tree_depth: int = 5
     monaco_cdn: str = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs"
+    max_open_tabs: int = 10
+    show_diff_gutter: bool = True
+    autosave: bool = False
 
 
 @dataclass
@@ -486,6 +498,9 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
     ma = data.get("multi_agent", {})
     if not isinstance(ma, dict):
         ma = {}
+    ct = ma.get("cross_thread", {})
+    if not isinstance(ct, dict):
+        ct = {}
     return MultiAgentSettings(
         enabled=bool(ma.get("enabled", False)),
         max_workers_per_turn=int(ma.get("max_workers_per_turn", 5)),
@@ -509,6 +524,12 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         dag_max_age_sec=int(ma.get("dag_max_age_sec", 86400)),
         dag_auto_resume=bool(ma.get("dag_auto_resume", False)),
         budgets=_parse_swarm_budgets(ma.get("budgets", {})),
+        cross_thread=CrossThreadSettings(
+            enabled=bool(ct.get("enabled", False)),
+            program_id_auto=bool(ct.get("program_id_auto", True)),
+            state_dir=str(ct.get("state_dir", "~/.agent-cli/programs")),
+            max_threads_linked=int(ct.get("max_threads_linked", 20)),
+        ),
     )
 
 
@@ -617,6 +638,13 @@ def load_kernel_sandbox_settings(path: Path | None = None):
             job_object_memory_mb=int(win_raw.get("job_object_memory_mb", 1024)),
             job_object_cpu_rate=int(win_raw.get("job_object_cpu_rate", 50)),
             allow_network=bool(win_raw.get("allow_network", False)),
+            backend_preference=str(
+                win_raw.get("backend_preference", "appcontainer_then_restricted")
+            ),
+            capability_sids=[str(x) for x in win_raw.get("capability_sids", [])]
+            if isinstance(win_raw.get("capability_sids"), list)
+            else [],
+            workspace_cap=bool(win_raw.get("workspace_cap", True)),
         ),
     )
 
@@ -725,6 +753,9 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
                     "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs",
                 )
             ),
+            max_open_tabs=int(ide_raw.get("max_open_tabs", 10)),
+            show_diff_gutter=bool(ide_raw.get("show_diff_gutter", True)),
+            autosave=bool(ide_raw.get("autosave", False)),
         ),
     )
 

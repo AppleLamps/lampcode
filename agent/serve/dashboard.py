@@ -63,6 +63,7 @@ def render_dashboard_html(
     oidc_enabled: bool = False,
     ide_enabled: bool = False,
     monaco_cdn: str = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs",
+    max_open_tabs: int = 10,
 ) -> str:
     token_js = html.escape(token, quote=True)
     role_js = html.escape(role, quote=True)
@@ -79,7 +80,8 @@ def render_dashboard_html(
   <div style="padding:0.5rem;border-bottom:1px solid #e5e7eb;font-size:0.85rem;">
     <strong>IDE</strong> <span id="ideCwd" class="badge">select thread</span>
   </div>
-  <div id="ideTree" style="max-height:35%;overflow:auto;padding:0.5rem;font-size:0.85rem;border-bottom:1px solid #e5e7eb;"></div>
+  <div id="ideTree" style="max-height:25%;overflow:auto;padding:0.5rem;font-size:0.85rem;border-bottom:1px solid #e5e7eb;"></div>
+  <div id="ideTabs" style="display:flex;gap:0.25rem;padding:0.25rem 0.5rem;border-bottom:1px solid #e5e7eb;overflow:auto;font-size:0.8rem;"></div>
   <div id="ideEditor" style="flex:1;min-height:200px;"></div>
   <div style="padding:0.5rem;border-top:1px solid #e5e7eb;display:flex;gap:0.5rem;">
     <button id="ideReload" type="button">Reload</button>
@@ -93,6 +95,51 @@ const MONACO_CDN = "{cdn}";
 let monacoEditor = null;
 let ideCurrentPath = null;
 let ideThreadCwd = "";
+let ideOpenTabs = [];
+const IDE_MAX_TABS = {max_open_tabs};
+
+function renderIdeTabs() {{
+  const bar = document.getElementById("ideTabs");
+  if (!bar) return;
+  bar.innerHTML = ideOpenTabs.map(p => {{
+    const active = p === ideCurrentPath ? "background:#dbeafe;" : "";
+    return `<span style="padding:2px 6px;cursor:pointer;${{active}}" data-tab="${{p}}">${{p.split("/").pop()}} ✕</span>`;
+  }}).join("");
+  bar.querySelectorAll("[data-tab]").forEach(el => {{
+    el.onclick = (ev) => {{
+      if (ev.target.textContent.includes("✕")) {{
+        ideOpenTabs = ideOpenTabs.filter(x => x !== el.getAttribute("data-tab"));
+        renderIdeTabs();
+      }} else {{
+        openIdeFile(el.getAttribute("data-tab"));
+      }}
+    }};
+  }});
+}}
+
+function addIdeTab(path) {{
+  if (!ideOpenTabs.includes(path)) {{
+    ideOpenTabs.push(path);
+    if (ideOpenTabs.length > IDE_MAX_TABS) ideOpenTabs = ideOpenTabs.slice(-IDE_MAX_TABS);
+  }}
+  renderIdeTabs();
+}}
+
+async function loadDiffGutter(path, content) {{
+  if (!monacoEditor) return;
+  const res = await api("/ide/history?thread_id=" + encodeURIComponent(currentThread) + "&path=" + encodeURIComponent(path));
+  if (!res.ok) return;
+  const data = await res.json();
+  if (!data.gutter || !data.gutter.enabled) return;
+  const decos = [];
+  (data.gutter.added_lines || []).forEach(ln => {{
+    decos.push({{ range: new monaco.Range(ln,1,ln,1), options: {{ isWholeLine: true, className: "ide-gutter-added", linesDecorationsClassName: "ide-gutter-added-margin" }} }});
+  }});
+  (data.gutter.removed_lines || []).forEach(ln => {{
+    decos.push({{ range: new monaco.Range(Math.min(ln, monacoEditor.getModel().getLineCount()),1,Math.min(ln, monacoEditor.getModel().getLineCount()),1), options: {{ isWholeLine: true, className: "ide-gutter-removed" }} }});
+  }});
+  monacoEditor.deltaDecorations([], decos);
+}}
 
 function renderTree(entries, depth) {{
   let html = "";
@@ -121,11 +168,14 @@ async function loadIdeTree() {{
 
 async function openIdeFile(path) {{
   ideCurrentPath = path;
+  addIdeTab(path);
   const res = await api("/ide/file?thread_id=" + encodeURIComponent(currentThread) + "&path=" + encodeURIComponent(path));
   if (!res.ok) return alert("Cannot open file");
   const data = await res.json();
-  if (monacoEditor) monacoEditor.setValue(data.content || "");
-  else document.getElementById("ideEditor").textContent = data.content || "";
+  if (monacoEditor) {{
+    monacoEditor.setValue(data.content || "");
+    loadDiffGutter(path, data.content || "");
+  }} else document.getElementById("ideEditor").textContent = data.content || "";
 }}
 
 async function saveIdeFile() {{

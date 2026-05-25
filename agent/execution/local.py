@@ -64,6 +64,8 @@ class LocalExecutionBackend:
                 exec_meta["kernel_backend"] = kernel_result.backend
                 exec_meta["isolation_level"] = kernel_result.isolation_level or "kernel"
                 exec_meta.update(kernel_result.meta or {})
+                if kernel_result.backend == "windows_appcontainer":
+                    exec_meta["commandExecution"] = {"kernel_backend": "windows_appcontainer"}
                 if kernel_result.argv:
                     argv = kernel_result.argv
                     use_shell = False

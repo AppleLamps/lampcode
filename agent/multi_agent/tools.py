@@ -29,6 +29,10 @@ SPAWN_WORKER_SCHEMA = {
                     "items": {"type": "string"},
                     "description": "Worker IDs that must complete before this worker starts.",
                 },
+                "program_scope": {
+                    "type": "boolean",
+                    "description": "Register worker in cross-thread program DAG when enabled.",
+                },
             },
             "required": ["task"],
         },
@@ -63,6 +67,7 @@ SPAWN_WORKER_BATCH_SCHEMA = {
                                 "type": "string",
                                 "enum": ["local", "docker", "ssh"],
                             },
+                            "program_scope": {"type": "boolean"},
                         },
                         "required": ["task"],
                     },

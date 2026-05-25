@@ -135,6 +135,104 @@ def file_diff_from_thread(thread: Thread, rel_path: str) -> dict[str, Any]:
     return {"path": rel_path, "diff_snippet": None}
 
 
+def file_history_from_thread(
+    thread: Thread,
+    rel_path: str,
+    *,
+    limit: int = 20,
+) -> list[dict[str, Any]]:
+    """Recent fileChange summaries for a path (for IDE diff gutter)."""
+    norm = rel_path.replace("\\", "/").lstrip("./")
+    history: list[dict[str, Any]] = []
+    for turn in reversed(thread.turns):
+        for item in reversed(turn.items):
+            if item.type != "fileChange":
+                continue
+            item_path = (item.path or "").replace("\\", "/").lstrip("./")
+            if item_path != norm and not item_path.endswith("/" + norm):
+                continue
+            history.append(
+                {
+                    "turn_id": turn.id,
+                    "item_id": item.id,
+                    "path": item.path,
+                    "change_type": item.change_type,
+                    "status": item.status,
+                    "summary": item.summary,
+                    "diff_snippet": item.diff_snippet,
+                    "content_preview": (item.content or "")[:500] if item.content else None,
+                }
+            )
+            if len(history) >= limit:
+                return history
+    return history
+
+
+def compute_diff_gutter(
+    current_content: str,
+    history: list[dict[str, Any]],
+) -> dict[str, Any]:
+    """Build added/removed line hints from last diff snippet vs current content."""
+    if not history:
+        return {"enabled": False, "added_lines": [], "removed_lines": []}
+    snippet = history[0].get("diff_snippet") or history[0].get("content_preview") or ""
+    if not snippet.strip():
+        return {"enabled": False, "added_lines": [], "removed_lines": []}
+    old_lines = snippet.splitlines()
+    new_lines = current_content.splitlines()
+    added, removed = _simple_line_diff(old_lines, new_lines)
+    return {
+        "enabled": True,
+        "added_lines": added,
+        "removed_lines": removed,
+        "source_turn_id": history[0].get("turn_id"),
+    }
+
+
+def _simple_line_diff(old_lines: list[str], new_lines: list[str]) -> tuple[list[int], list[int]]:
+    """Return 1-based line numbers added in new and removed from old (LCS heuristic)."""
+    m, n = len(old_lines), len(new_lines)
+    dp = [[0] * (n + 1) for _ in range(m + 1)]
+    for i in range(m - 1, -1, -1):
+        for j in range(n - 1, -1, -1):
+            if old_lines[i] == new_lines[j]:
+                dp[i][j] = 1 + dp[i + 1][j + 1]
+            else:
+                dp[i][j] = max(dp[i + 1][j], dp[i][j + 1])
+    added: list[int] = []
+    removed: list[int] = []
+    i, j = 0, 0
+    while i < m and j < n:
+        if old_lines[i] == new_lines[j]:
+            i += 1
+            j += 1
+        elif dp[i + 1][j] >= dp[i][j + 1]:
+            removed.append(i + 1)
+            i += 1
+        else:
+            added.append(j + 1)
+            j += 1
+    while i < m:
+        removed.append(i + 1)
+        i += 1
+    while j < n:
+        added.append(j + 1)
+        j += 1
+    return added, removed
+
+
+def enforce_tab_limit(open_tabs: list[str], *, max_tabs: int) -> tuple[list[str], bool]:
+    if max_tabs <= 0:
+        return open_tabs, False
+    if len(open_tabs) <= max_tabs:
+        return open_tabs, False
+    return open_tabs[-max_tabs:], True
+
+
+def tabs_state_snapshot(open_tabs: list[str] | None = None, active: str | None = None) -> dict[str, Any]:
+    return {"open_tabs": open_tabs or [], "active": active}
+
+
 def resolve_thread_cwd(store: ThreadStore, thread_id: str) -> tuple[Thread, Path]:
     try:
         thread = store.load_thread(thread_id)

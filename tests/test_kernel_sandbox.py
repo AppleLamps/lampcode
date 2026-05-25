@@ -41,8 +41,11 @@ def test_kernel_enabled_for_workspace_write() -> None:
 
 
 def test_select_auto_windows() -> None:
+    import agent.sandbox.kernel.windows_appcontainer as mod
+
     s = KernelSandboxSettings(backend="auto")
-    with patch.object(sys, "platform", "win32"):
+    mod._force_available = False
+    with patch.object(sys, "platform", "win32"), patch.object(mod, "_win32_build", return_value=22000):
         b = select_kernel_backend(s)
     assert isinstance(b, WindowsRestrictedBackend)
 

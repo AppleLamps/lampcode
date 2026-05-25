@@ -68,6 +68,7 @@ marketplace_app = typer.Typer(help="Signed skill marketplace")
 skills_lock_app = typer.Typer(help="Skill lockfile for reproducible installs")
 skills_revocations_app = typer.Typer(help="Marketplace revocation list")
 multi_agent_budgets_app = typer.Typer(help="Swarm budget tracking")
+programs_app = typer.Typer(help="Cross-thread program DAG")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -88,6 +89,7 @@ skills_app.add_typer(marketplace_app, name="marketplace")
 skills_app.add_typer(skills_lock_app, name="lock")
 skills_app.add_typer(skills_revocations_app, name="revocations")
 multi_agent_app.add_typer(multi_agent_budgets_app, name="budgets")
+app.add_typer(programs_app, name="programs")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -612,6 +614,18 @@ def doctor(
         f"enabled={cfg.sandbox_kernel.enabled}, backend={kcap.get('backend')}, "
         f"available={kcap.get('available')}, fail_open={cfg.sandbox_kernel.fail_open}",
     )
+    if kcap.get("appcontainer"):
+        table.add_row(
+            "AppContainer",
+            f"{kcap.get('appcontainer')} ({kcap.get('appcontainer_reason', '')})",
+        )
+    if cfg.multi_agent.cross_thread.enabled and not cfg.multi_agent.budgets.enabled:
+        checks.append(
+            (
+                "budget warning",
+                "cross_thread enabled without swarm budgets — enable [multi_agent.budgets] for production",
+            )
+        )
     table.add_row(
         "docker file tools",
         "enabled" if cfg.execution.docker.file_tools_in_container else "disabled",
@@ -1629,6 +1643,73 @@ def sync_status_cmd(
     stdout_console.print(json.dumps(sync_status(config), indent=2))
 
 
+@programs_app.command("list")
+def programs_list() -> None:
+    """List cross-thread program DAG ids."""
+    import json
+
+    from agent.multi_agent.program_state import ProgramStore
+
+    cfg = Config.resolve()
+    store = ProgramStore(Path(cfg.multi_agent.cross_thread.state_dir).expanduser())
+    stdout_console.print(json.dumps({"programs": store.list_programs()}, indent=2))
+
+
+@programs_app.command("show")
+def programs_show(program_id: str = typer.Argument(...)) -> None:
+    """Show program-wide DAG state."""
+    import json
+
+    from agent.multi_agent.program_state import ProgramStore
+
+    cfg = Config.resolve()
+    store = ProgramStore(Path(cfg.multi_agent.cross_thread.state_dir).expanduser())
+    state = store.load(program_id)
+    if not state:
+        stdout_console.print(json.dumps({"error": "not found"}, indent=2))
+        raise typer.Exit(1)
+    stdout_console.print(json.dumps(state.to_dict(), indent=2))
+
+
+@programs_app.command("link-thread")
+def programs_link_thread(
+    program_id: str = typer.Option(..., "--program-id"),
+    thread_id: str = typer.Option(..., "--thread-id"),
+) -> None:
+    """Link a thread to a program DAG."""
+    import json
+
+    from agent.multi_agent.program_state import ProgramStore
+
+    cfg = Config.resolve()
+    ct = cfg.multi_agent.cross_thread
+    store = ProgramStore(Path(ct.state_dir).expanduser())
+    try:
+        state = store.link_thread(program_id, thread_id, max_threads=ct.max_threads_linked)
+    except ValueError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(1) from exc
+    stdout_console.print(json.dumps(state.to_dict(), indent=2))
+
+
+@programs_app.command("clear")
+def programs_clear(
+    program_id: str = typer.Argument(...),
+    yes: bool = typer.Option(False, "--yes", "-y"),
+) -> None:
+    """Clear a program DAG state file."""
+    if not yes and not typer.confirm(f"Clear program {program_id}?"):
+        raise typer.Exit(0)
+    from agent.multi_agent.program_state import ProgramStore
+
+    cfg = Config.resolve()
+    cleared = ProgramStore(Path(cfg.multi_agent.cross_thread.state_dir).expanduser()).clear(program_id)
+    if cleared:
+        console.print(f"[green]Cleared[/green] program {program_id}")
+    else:
+        console.print("[yellow]Program not found[/yellow]")
+
+
 @multi_agent_budgets_app.command("show")
 def multi_agent_budgets_show(
     thread_id: str = typer.Option(..., "--thread-id"),
@@ -1659,12 +1740,23 @@ def multi_agent_status(
 
 @multi_agent_app.command("graph")
 def multi_agent_graph(
-    thread_id: str = typer.Option(..., "--thread-id"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id"),
     turn_id: Optional[str] = typer.Option(None, "--turn-id"),
+    program_id: Optional[str] = typer.Option(None, "--program-id"),
 ) -> None:
-    """Show worker DAG nodes and edges from checkpoint."""
+    """Show worker DAG nodes and edges from checkpoint or program scope."""
     import json
 
+    if program_id:
+        from agent.multi_agent.program_state import ProgramStore
+
+        cfg = Config.resolve()
+        store = ProgramStore(Path(cfg.multi_agent.cross_thread.state_dir).expanduser())
+        stdout_console.print(json.dumps(store.graph_snapshot(program_id), indent=2))
+        return
+    if not thread_id:
+        console.print("[red]--thread-id or --program-id required[/red]")
+        raise typer.Exit(1)
     from agent.multi_agent.checkpoint import CheckpointStore
 
     store = ThreadStore()
