@@ -96,6 +96,9 @@ agent repl --cwd examples/demo-project
 agent tui --resume-last
 agent hooks list
 agent memories list
+agent memories suggest
+agent runs export <turn-id> --format bundle --out run.bundle.tar.gz
+agent doctor --json
 ```
 
 See [docs/codex-comparison.md](docs/codex-comparison.md) for Codex parity details.

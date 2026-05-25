@@ -1,5 +1,22 @@
 # Changelog
 
+## [2.9.0] — 2026-05-25
+
+Phase 28 observability and trust (solo only).
+
+### Added
+
+- **Debug replay bundles:** `agent runs export <turn> --format bundle --out run.bundle.tar.gz`; `agent runs bundle-info`; redacted config snapshot (`schemas/run.bundle.v1.json`).
+- **Hooks lifecycle v2:** `on_session_start`, `on_user_prompt_submit`, `on_permission_request`, `on_pre_tool_use` (block + context_append); stdout JSON parsing; `agent/hooks/schema.md`.
+- **Memories v3:** suggest queue (`.agent-cli/memory-suggestions.json`); `agent memories suggest|accept|reject`; `agent memories inject --dry-run`; scoring v3.
+- **Plan mode v2:** `<proposed_plan>` parsing; `plan.proposed` JSON event; REPL `/plan` status.
+- **Doctor JSON:** `agent doctor --json` harness report (shell, hooks, memories, exec-policy, kernel sandbox).
+- **Compaction tuning:** `[compaction] auto_mid_turn`; REPL `/compact` force compact.
+
+### Tests
+
+- `tests/test_phase28.py` — **990** pytest cases (970 baseline + 20 new).
+
 ## [2.8.0] — 2026-05-25
 
 Phase 27 terminal and embed (solo only).

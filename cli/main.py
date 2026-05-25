@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import shutil
 import signal
@@ -692,14 +693,12 @@ def hooks_list(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
 ) -> None:
     """List configured lifecycle hooks."""
-    from agent.hooks.runner import load_hooks_config
+    from agent.hooks.runner import SUPPORTED_HOOK_EVENTS, load_hooks_config
 
     root = (cwd or Path.cwd()).resolve()
     hooks = load_hooks_config(root)
-    if not hooks:
-        console.print("No hooks.json found.")
-        return
-    for event, entries in hooks.items():
+    for event in SUPPORTED_HOOK_EVENTS:
+        entries = hooks.get(event, [])
         console.print(f"[bold]{event}[/bold] ({len(entries)})")
         for entry in entries:
             console.print(f"  - {entry.get('command', '')}")
@@ -774,6 +773,81 @@ def memories_search_cmd(
         console.print(f"{mem.id[:8]}  score={entry.score:.1f}  {mem.text}")
 
 
+@memories_app.command("suggest")
+def memories_suggest_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+) -> None:
+    """List pending memory suggestions."""
+    from agent.memories import SuggestQueue
+
+    root = (cwd or Path.cwd()).resolve()
+    pending = SuggestQueue(root).list_pending()
+    if not pending:
+        console.print("No pending suggestions.")
+        return
+    for mem in pending:
+        console.print(f"{mem.id[:8]}  {mem.text[:120]}")
+
+
+@memories_app.command("accept")
+def memories_accept_cmd(
+    memory_id: str = typer.Argument(..., help="Suggestion id or prefix"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Accept a pending memory suggestion."""
+    from agent.memories import MemoryStore, SuggestQueue
+
+    root = (cwd or Path.cwd()).resolve()
+    queue = SuggestQueue(root)
+    store = MemoryStore()
+    for mem in queue.list_pending():
+        if mem.id == memory_id or mem.id.startswith(memory_id):
+            accepted = queue.accept(mem.id, store=store)
+            if accepted:
+                console.print(f"Accepted {accepted.id}")
+                return
+    console.print("[red]Not found[/red]")
+    raise typer.Exit(1)
+
+
+@memories_app.command("reject")
+def memories_reject_cmd(
+    memory_id: str = typer.Argument(..., help="Suggestion id or prefix"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Reject a pending memory suggestion."""
+    from agent.memories import SuggestQueue
+
+    root = (cwd or Path.cwd()).resolve()
+    queue = SuggestQueue(root)
+    for mem in queue.list_pending():
+        if mem.id == memory_id or mem.id.startswith(memory_id):
+            if queue.reject(mem.id):
+                console.print(f"Rejected {mem.id}")
+                return
+    console.print("[red]Not found[/red]")
+    raise typer.Exit(1)
+
+
+@memories_app.command("inject")
+def memories_inject_cmd(
+    prompt: str = typer.Argument(..., help="Prompt text to match memories against"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Preview inject block without writing"),
+) -> None:
+    """Preview or show memory injection block for a prompt."""
+    from agent.memories import inject_memories_dry_run, inject_memories_prompt
+
+    cfg = Config.resolve(cwd=cwd)
+    cwd_str = str(cfg.cwd)
+    if dry_run:
+        stdout_console.print(inject_memories_dry_run(prompt, settings=cfg.memories, cwd=cwd_str))
+        return
+    stdout_console.print(
+        inject_memories_prompt(prompt, settings=cfg.memories, cwd=cwd_str) or "(no matching memories)"
+    )
+
+
 @config_app.command("validate")
 def config_validate_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd"),
@@ -809,10 +883,20 @@ def config_show(
 def doctor(
     deep: bool = typer.Option(False, "--deep", help="Try starting configured MCP servers"),
     models: bool = typer.Option(False, "--models", help="Show model preflight table for profiles"),
+    json_report: bool = typer.Option(False, "--json", help="Machine-readable harness diagnostics"),
 ) -> None:
     """Check environment: API key, git, ripgrep, node/npx, skills, config."""
-    config_path = default_config_path()
     cfg = Config.resolve()
+    if json_report:
+        from agent.doctor.report import build_doctor_report
+
+        report = build_doctor_report(cfg)
+        sys.stdout.write(json.dumps(report, indent=2) + "\n")
+        if not cfg.openrouter_api_key:
+            raise typer.Exit(1)
+        return
+
+    config_path = default_config_path()
     api_key = cfg.openrouter_api_key
     git_ok = shutil.which("git") is not None
     rg_ok = shutil.which("rg") is not None
@@ -2956,12 +3040,27 @@ def _load_thread(store: ThreadStore, thread_id: str) -> Thread:
     raise typer.Exit(1)
 
 
+@runs_app.command("bundle-info")
+def runs_bundle_info(
+    bundle: Path = typer.Argument(..., help="Path to run.bundle.tar.gz"),
+) -> None:
+    """Print manifest from a run bundle without extracting."""
+    from agent.recording.bundle import read_bundle_manifest
+
+    try:
+        manifest = read_bundle_manifest(bundle)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    sys.stdout.write(json.dumps(manifest, indent=2) + "\n")
+
+
 @runs_app.command("export")
 def runs_export(
     turn_id: str = typer.Argument(..., help="Turn ID (full or prefix)"),
     thread_id: Optional[str] = typer.Option(None, "--thread-id"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output markdown file"),
-    format: str = typer.Option("markdown", "--format", help="markdown | jsonl-v2"),
+    format: str = typer.Option("markdown", "--format", help="markdown | jsonl-v2 | bundle"),
 ) -> None:
     """Export run log to Markdown or normalized JSONL."""
     store = RunStore()
@@ -2980,6 +3079,22 @@ def runs_export(
             console.print(f"Exported to {out}")
         else:
             stdout_console.print(content)
+        return
+    if format == "bundle":
+        if not out:
+            console.print("[red]Error:[/red] --out is required for bundle export")
+            raise typer.Exit(1)
+        from agent.recording.bundle import export_run_bundle
+
+        cfg = Config.resolve()
+        manifest = export_run_bundle(
+            turn_id=turn_id,
+            thread_id=thread_id,
+            out_path=out,
+            config=cfg,
+            run_store=store,
+        )
+        console.print(f"Exported bundle to {out} (thread={manifest['thread_id'][:8]}…)")
         return
     md = export_run_markdown(events)
     if out:

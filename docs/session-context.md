@@ -160,11 +160,26 @@ Full step-by-step plans: **[docs/roadmap/phase-27.md](roadmap/phase-27.md)** (v2
 
 ---
 
-## Phase 28 direction (planned — see roadmap)
+## Phase 28 direction (complete — v2.9.0)
 
-Candidates from Phase 27 exit notes (not fully specified):
+Observability and local trust:
 
-- **JSON replay bundle export** — debug-compatible run export
+1. Debug replay bundle export ✅
+2. Hooks lifecycle v2 (8 events) ✅
+3. Memories suggest queue + accept/reject ✅
+4. Plan mode `<proposed_plan>` parsing ✅
+5. Doctor `--json` harness report ✅
+6. Compaction `auto_mid_turn` + REPL `/compact` ✅
+
+Target release: **v2.9.0** with tests for each feature + full pytest green. ✅
+
+---
+
+## Phase 29 direction (planned — see roadmap)
+
+Candidates from Phase 28 exit notes:
+
+- **`agent runs import-bundle`** — restore thread from bundle
 - **MCP approval elicitation** — headless approval via MCP client
 - Further Codex terminal parity as needed
 

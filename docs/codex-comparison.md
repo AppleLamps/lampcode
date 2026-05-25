@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.6.0 (Phase 25 daily UX).  
+**Current release:** v2.9.0 (Phase 28 observability).  
 **Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
 
 ---
@@ -19,7 +19,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | Approvals (exec/patch) | ✅ | `y` / `n` / `a` (turn) / `A` (session); `--auto-approve` |
 | Sandbox modes | ✅ | `read-only` / `workspace-write` / `danger-full-access` (heuristic + optional kernel — see Tier 2) |
 | Thread persistence + resume | ✅ | JSONL threads; `--resume-last`, `--resume` picker, REPL `/resume` (Phase 25) |
-| Compaction | ✅ | Auto at threshold; compaction items in transcript; `/compact` hint in REPL |
+| Compaction | ✅ | Auto at threshold; REPL `/compact` force compact; `auto_mid_turn` toggle (Phase 28) |
 | Config + profiles | ✅ | `[model_profiles.*]`, `--profile`, `--model-profile`, `[model_routing]` |
 | MCP tools | ✅ | `mcp__{server}__{tool}`; `agent mcp list|tools` |
 | Skills + AGENTS.md | ✅ | `SKILL.md` auto-select; `agent init`; project rules |
@@ -59,12 +59,14 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **`request_user_input` tool** | ✅ | Structured mid-turn questions; REPL/TTY + `AGENT_INPUT_ANSWERS` (Phase 22) |
 | **`request_permissions` (mid-turn escalation)** | ✅ | Approval gate + session flags; auto-deny in read-only review (Phase 22) |
 | **Thread fork** | ✅ | `agent threads fork`; `forked_from` in JSONL |
-| **Hooks (`hooks.json`)** | ✅ | `on_tool_pending`, `on_turn_completed`, `on_pre_compact`, `on_post_compact` (Phase 24) |
-| **Memories (cross-session)** | ⚠️ partial | v2 scoring + cwd inject; opt-in `[memories] enabled`; sandbox allowlist (Phase 25) |
+| **Hooks (`hooks.json`)** | ✅ | 8 events incl. session start, prompt submit, permission, pre-tool block (Phase 28) |
+| **Memories (cross-session)** | ✅ | v3 suggest queue + accept/reject; inject dry-run; opt-in `[memories] enabled` |
 | **`agent apply` (last patch)** | ✅ | `agent apply --dry-run` from thread history (Phase 25) |
 | **Ephemeral runs** | ✅ | `agent run --ephemeral`; REPL `/ephemeral on` (Phase 25) |
 | **Turn notifications** | ✅ | `[notify] command` on completion (Phase 25) |
-| **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `[plan_mode]` tool filter (Phase 22) |
+| **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `<proposed_plan>` + `plan.proposed` event (Phase 28) |
+| **Run replay bundle** | ✅ | `agent runs export --format bundle`; redacted config (Phase 28) |
+| **Doctor JSON** | ✅ | `agent doctor --json` harness diagnostics (Phase 28) |
 | **REPL `@skill` tab completion** | ✅ | readline completer when available (Phase 21) |
 | **Turn checkpoint / resume polish** | ✅ | `[turn_checkpoint]`; cancel saves messages; `--resume-turn` (Phase 21) |
 | **`threads pr-description`** | ✅ | Bullet summary + `--summary-only` (Phase 21) |
