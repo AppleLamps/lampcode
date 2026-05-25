@@ -40,7 +40,7 @@ from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_t
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.metrics import MetricsCollector
-from agent.settings import load_auth_storage_settings, load_serve_settings, load_skills_config
+from agent.settings import load_auth_storage_settings, load_schedule_settings, load_serve_settings, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
@@ -64,6 +64,9 @@ serve_app = typer.Typer(help="HTTP dashboard server", invoke_without_command=Tru
 serve_users_app = typer.Typer(help="RBAC user management")
 serve_oidc_app = typer.Typer(help="OIDC SSO configuration")
 auth_sessions_app = typer.Typer(help="Session management")
+auth_policy_app = typer.Typer(help="OAuth policy engine")
+serve_policy_app = typer.Typer(help="Serve policy status")
+schedule_app = typer.Typer(help="Scheduled swarm jobs")
 marketplace_app = typer.Typer(help="Signed skill marketplace")
 skills_lock_app = typer.Typer(help="Skill lockfile for reproducible installs")
 skills_revocations_app = typer.Typer(help="Marketplace revocation list")
@@ -85,6 +88,9 @@ app.add_typer(serve_app, name="serve")
 serve_app.add_typer(serve_users_app, name="users")
 serve_app.add_typer(serve_oidc_app, name="oidc")
 auth_app.add_typer(auth_sessions_app, name="sessions")
+auth_app.add_typer(auth_policy_app, name="policy")
+serve_app.add_typer(serve_policy_app, name="policy")
+app.add_typer(schedule_app, name="schedule")
 skills_app.add_typer(marketplace_app, name="marketplace")
 skills_app.add_typer(skills_lock_app, name="lock")
 skills_app.add_typer(skills_revocations_app, name="revocations")
@@ -688,6 +694,25 @@ def doctor(
         f"auth_mode={serve_cfg.auth_mode}, rbac={serve_cfg.rbac.enabled}, tls={serve_cfg.tls.enabled}, "
         f"control={serve_cfg.enable_control}, turn_start={serve_cfg.enable_turn_start}",
     )
+    table.add_row(
+        "auth policy",
+        f"enabled={serve_cfg.policy.enabled}, rules={len(serve_cfg.policy.rules)}, "
+        f"introspection={'yes' if serve_cfg.policy.introspection_url else 'no'}",
+    )
+    sched_cfg = load_schedule_settings(config_path)
+    table.add_row(
+        "scheduler",
+        f"enabled={sched_cfg.enabled}, require_budgets={sched_cfg.require_budgets}, "
+        f"approval={sched_cfg.default_approval_mode}",
+    )
+    if serve_cfg.ide.enabled:
+        diag = serve_cfg.ide.diagnostics
+        table.add_row(
+            "IDE diagnostics",
+            f"enabled={diag.enabled}, python={diag.python_tool}, js={diag.js_tool}, "
+            f"ruff={'found' if shutil.which('ruff') else 'missing'}, "
+            f"eslint={'found' if shutil.which('eslint') else 'missing'}",
+        )
     oidc = serve_cfg.oidc
     if oidc and oidc.enabled:
         table.add_row(
@@ -1149,19 +1174,252 @@ def auth_sessions_list() -> None:
 @auth_sessions_app.command("revoke")
 def auth_sessions_revoke(session_id: str = typer.Argument(...)) -> None:
     """Revoke a session by id prefix or full id."""
+    from agent.auth.policy.sessions import SessionRevocationRegistry
     from agent.serve.sessions import SessionStore
 
     store = SessionStore.global_store()
+    registry = SessionRevocationRegistry()
+    revoked_id: str | None = None
     if store.revoke_session(session_id):
-        console.print(f"[green]Revoked[/green] {session_id}")
+        revoked_id = session_id
+    else:
+        for rec in store.list_sessions():
+            if rec.session_id.startswith(session_id):
+                store.revoke_session(rec.session_id)
+                revoked_id = rec.session_id
+                break
+    if revoked_id:
+        registry.revoke(revoked_id, reason="cli-revoke")
+        MetricsCollector.global_collector().inc("agent_auth_session_revoked_total")
+        console.print(f"[green]Revoked[/green] {revoked_id}")
         return
-    for rec in store.list_sessions():
-        if rec.session_id.startswith(session_id):
-            store.revoke_session(rec.session_id)
-            console.print(f"[green]Revoked[/green] {rec.session_id}")
-            return
     console.print("[red]Session not found[/red]")
     raise typer.Exit(1)
+
+
+@auth_sessions_app.command("revoke-all")
+def auth_sessions_revoke_all(
+    yes: bool = typer.Option(False, "--yes", help="Skip confirmation"),
+    except_current: bool = typer.Option(False, "--except-current", help="Keep current CLI session"),
+) -> None:
+    """Revoke all sessions (registry + in-memory store)."""
+    from agent.auth.policy.sessions import SessionRevocationRegistry
+    from agent.serve.sessions import SessionStore
+
+    store = SessionStore.global_store()
+    sessions = store.list_sessions()
+    if not sessions:
+        console.print("No active sessions.")
+        return
+    if not yes:
+        console.print(f"Will revoke {len(sessions)} session(s). Re-run with --yes.")
+        raise typer.Exit(1)
+    keep: str | None = None
+    registry = SessionRevocationRegistry()
+    ids = [s.session_id for s in sessions]
+    n = registry.revoke_all_except(keep, ids, reason="revoke-all")
+    for sid in ids:
+        if keep and sid == keep:
+            continue
+        store.revoke_session(sid)
+    MetricsCollector.global_collector().inc("agent_auth_session_revoked_total", n)
+    console.print(f"[green]Revoked {n} session(s)[/green]")
+
+
+@auth_policy_app.command("test")
+def auth_policy_test(
+    role: str = typer.Option("operator", "--role"),
+    action: str = typer.Option("thread.run", "--action"),
+    mfa: bool = typer.Option(False, "--mfa", help="Simulate MFA claim in amr"),
+) -> None:
+    """Evaluate policy rules for a role/action pair."""
+    import json
+
+    from agent.auth.policy.engine import PolicyContext, evaluate
+    from agent.settings import load_serve_settings
+
+    cfg = load_serve_settings()
+    claims: dict = {}
+    if mfa:
+        claims["amr"] = ["mfa"]
+    result = evaluate(
+        PolicyContext(role=role, action=action, claims=claims, https=True),
+        cfg.policy,
+    )
+    stdout_console.print(json.dumps({"decision": result.decision, "message": result.message, "rule": result.rule}, indent=2))
+
+
+@serve_policy_app.command("status")
+def serve_policy_status() -> None:
+    """Show OAuth policy engine configuration."""
+    import json
+
+    from agent.auth.policy.sessions import SessionRevocationRegistry
+    from agent.settings import load_serve_settings
+
+    cfg = load_serve_settings()
+    pol = cfg.policy
+    reg = SessionRevocationRegistry()
+    stdout_console.print(
+        json.dumps(
+            {
+                "enabled": pol.enabled,
+                "require_https": pol.require_https,
+                "introspection_url": bool(pol.introspection_url),
+                "rules": [r.name for r in pol.rules],
+                "revoked_sessions": len(reg.list_revoked()),
+            },
+            indent=2,
+        )
+    )
+
+
+@schedule_app.command("list")
+def schedule_list() -> None:
+    """List scheduled jobs."""
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    path = Path(sched.state_file).expanduser()
+    store = ScheduleStore(path)
+    jobs = store.list_jobs()
+    if not jobs:
+        console.print("No scheduled jobs.")
+        return
+    table = Table(title="Scheduled jobs")
+    table.add_column("ID")
+    table.add_column("Cron")
+    table.add_column("Enabled")
+    table.add_column("Budget")
+    for j in jobs:
+        table.add_row(j.id, j.cron, str(j.enabled), j.budget_profile)
+    console.print(table)
+
+
+@schedule_app.command("add")
+def schedule_add(
+    job_id: str = typer.Argument(...),
+    cron: str = typer.Option("0 * * * *", "--cron"),
+    cwd: str = typer.Option(".", "--cwd"),
+    prompt: str = typer.Option("", "--prompt"),
+    budget_profile: str = typer.Option("strict", "--budget-profile"),
+) -> None:
+    from agent.schedule.store import ScheduleJob, ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    job = ScheduleJob(
+        id=job_id,
+        cron=cron,
+        cwd=cwd,
+        prompt=prompt or f"Scheduled job {job_id}",
+        budget_profile=budget_profile,
+    )
+    store.add(job)
+    console.print(f"[green]Added job[/green] {job.id}")
+
+
+@schedule_app.command("remove")
+def schedule_remove(job_id: str = typer.Argument(...)) -> None:
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    if store.remove(job_id):
+        console.print(f"[green]Removed[/green] {job_id}")
+    else:
+        console.print("[red]Job not found[/red]")
+        raise typer.Exit(1)
+
+
+@schedule_app.command("enable")
+def schedule_enable(job_id: str = typer.Argument(...)) -> None:
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    job = store.get(job_id)
+    if not job:
+        console.print("[red]Job not found[/red]")
+        raise typer.Exit(1)
+    job.enabled = True
+    store.add(job)
+    console.print(f"[green]Enabled[/green] {job_id}")
+
+
+@schedule_app.command("disable")
+def schedule_disable(job_id: str = typer.Argument(...)) -> None:
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    job = store.get(job_id)
+    if not job:
+        console.print("[red]Job not found[/red]")
+        raise typer.Exit(1)
+    job.enabled = False
+    store.add(job)
+    console.print(f"[green]Disabled[/green] {job_id}")
+
+
+@schedule_app.command("tick")
+def schedule_tick() -> None:
+    """Run due scheduled jobs once (for Windows Task Scheduler)."""
+    import json
+
+    from agent.events import EventEmitter
+    from agent.schedule.runner import run_due_jobs
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    if not sched.enabled:
+        console.print("[yellow]schedule.enabled=false — nothing to do[/yellow]")
+        raise typer.Exit(0)
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    results = run_due_jobs(store, sched, config=Config.resolve(), emitter=EventEmitter())
+    stdout_console.print(json.dumps(results, indent=2))
+
+
+@schedule_app.command("run")
+def schedule_run(
+    job_id: str = typer.Argument(...),
+    now: bool = typer.Option(True, "--now", help="Run immediately"),
+) -> None:
+    import json
+
+    from agent.events import EventEmitter
+    from agent.schedule.runner import run_due_jobs
+    from agent.schedule.store import ScheduleStore
+    from agent.settings import load_schedule_settings
+
+    sched = load_schedule_settings()
+    sched.enabled = True
+    store = ScheduleStore(Path(sched.state_file).expanduser())
+    results = run_due_jobs(
+        store,
+        sched,
+        config=Config.resolve(),
+        emitter=EventEmitter(),
+        force_job_id=job_id,
+    )
+    stdout_console.print(json.dumps(results, indent=2))
+
+
+@schedule_app.command("history")
+def schedule_history(
+    job_id: str | None = typer.Option(None, "--job-id"),
+) -> None:
+    import json
+
+    from agent.schedule.store import list_run_history
+
+    stdout_console.print(json.dumps(list_run_history(job_id), indent=2))
 
 
 @marketplace_app.command("list")
