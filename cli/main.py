@@ -131,7 +131,11 @@ app.add_typer(programs_app, name="programs")
 programs_app.add_typer(programs_sync_app, name="sync")
 app.add_typer(profile_app, name="profile")
 app.add_typer(models_app, name="models")
+hooks_app = typer.Typer(help="Lifecycle hooks")
+memories_app = typer.Typer(help="Cross-session memory notes")
 app.add_typer(tools_app, name="tools")
+app.add_typer(hooks_app, name="hooks")
+app.add_typer(memories_app, name="memories")
 
 console = stderr_console
 
@@ -160,6 +164,15 @@ def run(
     ),
     jsonl_events: bool = typer.Option(
         False, "--jsonl-events", help="Emit machine-readable JSONL events on stdout"
+    ),
+    json_output: bool = typer.Option(
+        False, "--json", help="Emit normalized Codex-like JSONL events on stdout"
+    ),
+    plan: bool = typer.Option(
+        False, "--plan", help="Plan mode: restrict tools to read/search/planning only"
+    ),
+    output_schema: Optional[str] = typer.Option(
+        None, "--output-schema", help="JSON schema file or inline JSON for final output"
     ),
     quiet_tools: bool = typer.Option(
         False, "--quiet-tools", help="Hide tool action lines; show approvals + answer"
@@ -258,12 +271,12 @@ def run(
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
 
-    if routed_profile and not model_profile and not jsonl_events:
+    if routed_profile and not model_profile and not jsonl_events and not json_output:
         console.print(f"[dim]Auto-routed model profile:[/dim] {routed_profile}")
 
     models_cache = ModelsCache().load()
     warn = tool_support_warning(config.model, models_cache or None)
-    if warn and not jsonl_events:
+    if warn and not jsonl_events and not json_output:
         console.print(f"[yellow]Warning:[/yellow] {warn}")
 
     repo_root = detect_repo_root(config.cwd)
@@ -331,10 +344,11 @@ def run(
         )
         stdout_console.print("---")
 
-    if session_auto_approve and not jsonl_events:
+    machine_output = jsonl_events or json_output
+    if session_auto_approve and not machine_output:
         console.print("[dim][approval] session auto-approve enabled[/dim]")
 
-    if not jsonl_events:
+    if not machine_output:
         console.print(f"[dim]Thread:[/dim] {thread.display_label()} ({thread.id})")
         console.print(f"[dim]Model:[/dim] {config.model}")
         console.print(f"[dim]CWD:[/dim] {thread.cwd}")
@@ -348,12 +362,25 @@ def run(
             console.print(f"[dim]Repo:[/dim] {thread.repo_root}")
         console.print()
 
-    output = OutputHandler(jsonl_events=jsonl_events, quiet_tools=quiet_tools)
+    output = OutputHandler(
+        jsonl_events=jsonl_events and not json_output,
+        json_stream=json_output,
+        quiet_tools=quiet_tools,
+    )
     emitter = build_event_emitter(
         output.handle,
         recording=config.recording.enabled,
         recording_keep=config.recording.keep_last_runs_per_thread,
     )
+    if json_output:
+        emitter.thread_started(thread.id, title=thread.title)
+
+    schema_obj = None
+    if output_schema:
+        from agent.output_schema import load_output_schema
+
+        schema_obj = load_output_schema(output_schema)
+
     cancel_token = CancelToken()
 
     def _handle_sigint(signum, frame) -> None:  # noqa: ARG001
@@ -387,7 +414,7 @@ def run(
             if not resume_cp:
                 console.print("[red]Error:[/red] No single-agent turn checkpoint found for this thread.")
                 raise typer.Exit(1)
-            if not jsonl_events:
+            if not machine_output:
                 console.print(
                     f"[dim]Resuming cancelled turn {resume_cp.turn_id[:8]}…[/dim]"
                 )
@@ -403,6 +430,9 @@ def run(
                 force_sync=force_sync,
                 budget_profile=budget_profile,
                 resume_checkpoint=resume_cp,
+                plan_mode=plan,
+                headless_json=json_output,
+                output_schema=schema_obj,
             )
         else:
             turn = run_turn(
@@ -416,9 +446,12 @@ def run(
                 session_auto_approve=session_auto_approve,
                 force_sync=force_sync,
                 budget_profile=budget_profile,
+                plan_mode=plan,
+                headless_json=json_output,
+                output_schema=schema_obj,
             )
     except CancelledError:
-        if not jsonl_events:
+        if not machine_output:
             console.print()
             console.print(f"[yellow]Cancelled.[/yellow] Thread: {thread.id}")
         raise typer.Exit(130) from None
@@ -429,7 +462,7 @@ def run(
     finally:
         signal.signal(signal.SIGINT, previous)
 
-    if not jsonl_events:
+    if not machine_output:
         console.print()
         if turn.status == "completed":
             console.print(f"[green]Done.[/green] Thread: {thread.id}")
@@ -440,8 +473,214 @@ def run(
             console.print(f"[yellow]Turn {turn.status}.[/yellow] Thread: {thread.id}")
             console.print(format_run_summary(turn), markup=False)
 
+    if json_output and output.stream_handler:
+        from datetime import datetime, timezone
+
+        summary = {
+            "ts": datetime.now(timezone.utc).isoformat(),
+            "status": turn.status,
+            "model": turn.usage.model_used or config.model,
+            "cost": turn.usage.estimated_cost_usd,
+            "input_tokens": turn.usage.input_tokens,
+            "output_tokens": turn.usage.output_tokens,
+        }
+        line = output.stream_handler.emit_run_summary(
+            thread_id=thread.id, turn_id=turn.id, summary=summary
+        )
+        stdout_console.print(line)
+
+    if schema_obj and turn.status == "completed":
+        from agent.models import AgentMessageItem
+        from agent.output_schema import parse_final_output
+
+        final_text = ""
+        for item in reversed(turn.items):
+            if isinstance(item, AgentMessageItem):
+                final_text = item.text
+                break
+        parsed, errors = parse_final_output(final_text, schema_obj)
+        if errors or parsed is None:
+            if json_output and output.stream_handler:
+                line = output.stream_handler.emit_run_result(
+                    thread_id=thread.id,
+                    turn_id=turn.id,
+                    result={"valid": False, "errors": errors},
+                )
+                stdout_console.print(line)
+            else:
+                console.print(f"[red]Output schema validation failed:[/red] {errors}")
+            raise typer.Exit(1)
+        import json as _json
+
+        if json_output and output.stream_handler:
+            line = output.stream_handler.emit_run_result(
+                thread_id=thread.id,
+                turn_id=turn.id,
+                result={"valid": True, "data": parsed},
+            )
+            stdout_console.print(line)
+        else:
+            stdout_console.print(_json.dumps(parsed, indent=2))
+
     if turn.status == "cancelled":
         raise typer.Exit(130)
+
+
+@app.command("review")
+def review_cmd(
+    uncommitted: bool = typer.Option(False, "--uncommitted", help="Review uncommitted changes"),
+    base: Optional[str] = typer.Option(None, "--base", help="Review diff vs branch (e.g. main)"),
+    commit: Optional[str] = typer.Option(None, "--commit", help="Review a specific commit SHA"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory"),
+    model: Optional[str] = typer.Option(None, "--model", help="OpenRouter model slug"),
+    model_profile: Optional[str] = typer.Option(None, "--model-profile", help="Model profile"),
+    auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve tool prompts"),
+    json_output: bool = typer.Option(False, "--json", help="Emit JSON report + event stream"),
+    fix: bool = typer.Option(False, "--fix", help="Allow write tools (not read-only review)"),
+    skip_git_check: bool = typer.Option(False, "--skip-git-check"),
+) -> None:
+    """Run a read-only code review on git changes."""
+    modes = sum([uncommitted, base is not None, commit is not None])
+    if modes == 0:
+        uncommitted = True
+    elif modes > 1:
+        console.print("[red]Error:[/red] Specify only one of --uncommitted, --base, or --commit")
+        raise typer.Exit(1)
+
+    try:
+        config = Config.resolve(
+            cwd=cwd,
+            model=model,
+            auto_approve=auto_approve if auto_approve else None,
+            skip_git_check=skip_git_check,
+            model_profile=model_profile,
+        )
+        config.require_api_key()
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+
+    from agent.review import collect_review_context
+    from agent.review_runner import run_review
+
+    if uncommitted:
+        mode = "uncommitted"
+        ctx = collect_review_context(config.cwd, mode=mode)
+    elif base is not None:
+        mode = "base"
+        ctx = collect_review_context(config.cwd, mode=mode, base=base)
+    else:
+        mode = "commit"
+        ctx = collect_review_context(config.cwd, mode=mode, commit=commit)
+
+    output = OutputHandler(json_stream=json_output, quiet_tools=True)
+    emitter = build_event_emitter(output.handle)
+    if json_output:
+        emitter.thread_started("pending", title=ctx.title)
+
+    result = run_review(
+        config,
+        ctx=ctx,
+        events=emitter,
+        auto_approve=auto_approve,
+        allow_fix=fix,
+        json_output=json_output,
+        model_profile=model_profile,
+    )
+
+    if json_output:
+        if output.stream_handler:
+            line = output.stream_handler.emit_run_result(
+                thread_id=result.thread_id,
+                turn_id=result.turn_id,
+                result=result.structured or {},
+            )
+            stdout_console.print(line)
+        if result.report_json:
+            stdout_console.print(result.report_json)
+    else:
+        stdout_console.print(result.report_markdown)
+
+
+@hooks_app.command("list")
+def hooks_list(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """List configured lifecycle hooks."""
+    from agent.hooks.runner import load_hooks_config
+
+    root = (cwd or Path.cwd()).resolve()
+    hooks = load_hooks_config(root)
+    if not hooks:
+        console.print("No hooks.json found.")
+        return
+    for event, entries in hooks.items():
+        console.print(f"[bold]{event}[/bold] ({len(entries)})")
+        for entry in entries:
+            console.print(f"  - {entry.get('command', '')}")
+
+
+@hooks_app.command("test")
+def hooks_test(
+    event: str = typer.Argument(..., help="Hook event name (e.g. on_tool_pending)"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Run hooks for an event with a sample payload."""
+    from agent.hooks.runner import HooksRunner
+
+    root = (cwd or Path.cwd()).resolve()
+    runner = HooksRunner.from_cwd(root)
+    errors = runner.run(event, {"test": True}, tool_name="read_file")
+    if errors:
+        console.print(f"[yellow]Hook errors:[/yellow] {errors}")
+        raise typer.Exit(1)
+    console.print("[green]Hooks OK[/green]")
+
+
+@memories_app.command("list")
+def memories_list_cmd() -> None:
+    """List stored memories."""
+    from agent.memories import MemoryStore
+
+    for mem in MemoryStore().list_all():
+        console.print(f"{mem.id[:8]}  {mem.text[:80]}")
+
+
+@memories_app.command("add")
+def memories_add_cmd(
+    text: str = typer.Argument(..., help="Memory text"),
+    tag: Optional[str] = typer.Option(None, "--tag"),
+) -> None:
+    """Add a memory note."""
+    from agent.memories import MemoryStore
+
+    tags = [tag] if tag else []
+    mem = MemoryStore().add(text, tags=tags)
+    console.print(f"Added {mem.id}")
+
+
+@memories_app.command("delete")
+def memories_delete_cmd(memory_id: str = typer.Argument(..., help="Memory id or prefix")) -> None:
+    """Delete a memory by id."""
+    from agent.memories import MemoryStore
+
+    store = MemoryStore()
+    for mem in store.list_all():
+        if mem.id == memory_id or mem.id.startswith(memory_id):
+            if store.delete(mem.id):
+                console.print(f"Deleted {mem.id}")
+                return
+    console.print("[red]Not found[/red]")
+    raise typer.Exit(1)
+
+
+@memories_app.command("search")
+def memories_search_cmd(query: str = typer.Argument(..., help="Search query")) -> None:
+    """Search memories by keyword overlap."""
+    from agent.memories import MemoryStore
+
+    for mem in MemoryStore().search(query):
+        console.print(f"{mem.id[:8]}  {mem.text}")
 
 
 @config_app.command("validate")
@@ -559,6 +798,13 @@ def doctor(
     tui_ok, tui_msg = check_tui_available()
     table.add_row("TUI (textual)", "installed" if tui_ok else tui_msg)
     table.add_row("execution backend", cfg.execution.backend)
+    from agent.execution.shell_session import pty_support_status
+
+    pty = pty_support_status()
+    table.add_row(
+        "persistent shell / PTY",
+        f"enabled={cfg.shell.enabled}, pty={pty.get('available')}, {pty.get('note', '')}",
+    )
     table.add_row(
         "multi-agent",
         f"enabled={cfg.multi_agent.enabled}, max_workers={cfg.multi_agent.max_workers_per_turn}, "
@@ -2510,14 +2756,26 @@ def runs_export(
     turn_id: str = typer.Argument(..., help="Turn ID (full or prefix)"),
     thread_id: Optional[str] = typer.Option(None, "--thread-id"),
     out: Optional[Path] = typer.Option(None, "--out", help="Output markdown file"),
+    format: str = typer.Option("markdown", "--format", help="markdown | jsonl-v2"),
 ) -> None:
-    """Export run log to Markdown."""
+    """Export run log to Markdown or normalized JSONL."""
     store = RunStore()
     try:
         events = store.load_events(turn_id, thread_id=thread_id)
     except FileNotFoundError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+    if format == "jsonl-v2":
+        from agent.json_stream import normalize_event
+
+        lines = [normalize_event(ev).to_json() for ev in events]
+        content = "\n".join(lines)
+        if out:
+            out.write_text(content, encoding="utf-8")
+            console.print(f"Exported to {out}")
+        else:
+            stdout_console.print(content)
+        return
     md = export_run_markdown(events)
     if out:
         out.write_text(md, encoding="utf-8")
