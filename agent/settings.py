@@ -226,6 +226,9 @@ class MultiAgentSettings:
     dag_enabled: bool = False
     dag_wall_clock_budget_sec: int = 3600
     dag_fail_fast: bool = False
+    dag_persist_across_turns: bool = False
+    dag_max_age_sec: int = 86400
+    dag_auto_resume: bool = False
 
 
 @dataclass
@@ -244,6 +247,17 @@ class ServeTlsSettings:
     cert_file: str = "~/.agent-cli/certs/server.crt"
     key_file: str = "~/.agent-cli/certs/server.key"
     auto_generate_self_signed: bool = False
+    require_client_cert: bool = False
+    client_ca_file: str = "~/.agent-cli/certs/client-ca.pem"
+
+
+@dataclass
+class ServeIdeSettings:
+    enabled: bool = False
+    max_file_bytes: int = 1_048_576
+    max_tree_entries: int = 2000
+    max_tree_depth: int = 5
+    monaco_cdn: str = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs"
 
 
 @dataclass
@@ -278,6 +292,7 @@ class ServeSettings:
     tls: ServeTlsSettings = field(default_factory=ServeTlsSettings)
     rbac: ServeRbacSettings = field(default_factory=ServeRbacSettings)
     oidc: "ServeOidcSettings | None" = None
+    ide: ServeIdeSettings = field(default_factory=ServeIdeSettings)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -462,6 +477,9 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         dag_enabled=bool(ma.get("dag_enabled", False)),
         dag_wall_clock_budget_sec=int(ma.get("dag_wall_clock_budget_sec", 3600)),
         dag_fail_fast=bool(ma.get("dag_fail_fast", False)),
+        dag_persist_across_turns=bool(ma.get("dag_persist_across_turns", False)),
+        dag_max_age_sec=int(ma.get("dag_max_age_sec", 86400)),
+        dag_auto_resume=bool(ma.get("dag_auto_resume", False)),
     )
 
 
@@ -605,7 +623,12 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
                 claim_groups_key=str(rm_raw.get("claim_groups_key", "groups")),
                 claim_email_key=str(rm_raw.get("claim_email_key", "email")),
             ),
+            device_code_enabled=bool(oidc_raw.get("device_code_enabled", False)),
+            device_client_id=str(oidc_raw.get("device_client_id", "")),
         )
+    ide_raw = serve.get("ide", {})
+    if not isinstance(ide_raw, dict):
+        ide_raw = {}
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
@@ -625,6 +648,8 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             cert_file=str(tls_raw.get("cert_file", "~/.agent-cli/certs/server.crt")),
             key_file=str(tls_raw.get("key_file", "~/.agent-cli/certs/server.key")),
             auto_generate_self_signed=bool(tls_raw.get("auto_generate_self_signed", False)),
+            require_client_cert=bool(tls_raw.get("require_client_cert", False)),
+            client_ca_file=str(tls_raw.get("client_ca_file", "~/.agent-cli/certs/client-ca.pem")),
         ),
         rbac=ServeRbacSettings(
             enabled=bool(rbac_raw.get("enabled", False)),
@@ -632,6 +657,18 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             users=users,
         ),
         oidc=oidc_cfg,
+        ide=ServeIdeSettings(
+            enabled=bool(ide_raw.get("enabled", False)),
+            max_file_bytes=int(ide_raw.get("max_file_bytes", 1_048_576)),
+            max_tree_entries=int(ide_raw.get("max_tree_entries", 2000)),
+            max_tree_depth=int(ide_raw.get("max_tree_depth", 5)),
+            monaco_cdn=str(
+                ide_raw.get(
+                    "monaco_cdn",
+                    "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs",
+                )
+            ),
+        ),
     )
 
 

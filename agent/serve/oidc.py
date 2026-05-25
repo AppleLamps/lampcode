@@ -34,6 +34,20 @@ class ServeOidcSettings:
     pkce: bool = True
     session_ttl_sec: int = 28800
     role_mapping: OidcRoleMapping = field(default_factory=OidcRoleMapping)
+    device_code_enabled: bool = False
+    device_client_id: str = ""
+
+
+@dataclass
+class OidcDeviceFlow:
+    device_code: str
+    user_code: str
+    verification_uri: str
+    verification_uri_complete: str
+    expires_in: int
+    interval: int
+    created_at: float
+    client_id: str
 
 
 @dataclass
@@ -48,6 +62,7 @@ class OidcClient:
     def __init__(self, settings: ServeOidcSettings) -> None:
         self.settings = settings
         self._pending: dict[str, OidcState] = {}
+        self._device_pending: dict[str, OidcDeviceFlow] = {}
         self._discovery: dict[str, Any] | None = None
 
     def _generate_pkce(self) -> tuple[str, str]:
@@ -146,6 +161,92 @@ class OidcClient:
         name = str(claims.get("name", email))
         role = self.map_role(claims)
         return AuthPrincipal(name=name, role=role, auth_method="oidc")
+
+    def device_client_id(self) -> str:
+        return self.settings.device_client_id or self.settings.client_id
+
+    def start_device_flow(
+        self,
+        *,
+        http_client: httpx.Client | None = None,
+    ) -> OidcDeviceFlow:
+        client_id = self.device_client_id()
+        data = {
+            "client_id": client_id,
+            "scope": " ".join(self.settings.scopes),
+        }
+        client = http_client or httpx.Client(timeout=30)
+        own_client = http_client is None
+        try:
+            resp = client.post(self._device_endpoint(), data=data)
+            resp.raise_for_status()
+            payload = resp.json()
+        finally:
+            if own_client:
+                client.close()
+        flow = OidcDeviceFlow(
+            device_code=str(payload["device_code"]),
+            user_code=str(payload["user_code"]),
+            verification_uri=str(payload.get("verification_uri", "")),
+            verification_uri_complete=str(payload.get("verification_uri_complete", "")),
+            expires_in=int(payload.get("expires_in", 600)),
+            interval=int(payload.get("interval", 5)),
+            created_at=time.time(),
+            client_id=client_id,
+        )
+        self._device_pending[flow.device_code] = flow
+        return flow
+
+    def poll_device_token(
+        self,
+        device_code: str,
+        *,
+        http_client: httpx.Client | None = None,
+    ) -> tuple[str, dict[str, Any] | None]:
+        """Return (status, token_data). status: success | pending | expired | error."""
+        flow = self._device_pending.get(device_code)
+        if flow is None:
+            return "error", None
+        if time.time() - flow.created_at > flow.expires_in:
+            self._device_pending.pop(device_code, None)
+            return "expired", None
+        data = {
+            "grant_type": "urn:ietf:params:oauth:grant-type:device_code",
+            "device_code": device_code,
+            "client_id": flow.client_id,
+        }
+        if self.settings.client_secret:
+            data["client_secret"] = self.settings.client_secret
+        client = http_client or httpx.Client(timeout=30)
+        own_client = http_client is None
+        try:
+            resp = client.post(self._token_endpoint(), data=data)
+            if resp.status_code == 400:
+                body = resp.json()
+                err = body.get("error", "")
+                if err in ("authorization_pending", "slow_down"):
+                    return "pending", None
+                if err == "expired_token":
+                    self._device_pending.pop(device_code, None)
+                    return "expired", None
+                return "error", body
+            resp.raise_for_status()
+            token_data = resp.json()
+        finally:
+            if own_client:
+                client.close()
+        self._device_pending.pop(device_code, None)
+        return "success", token_data
+
+    def claims_from_token_response(self, token_data: dict[str, Any]) -> dict[str, Any]:
+        id_token = token_data.get("id_token", "")
+        if id_token:
+            return _decode_jwt_payload(id_token)
+        return {}
+
+    def _device_endpoint(self) -> str:
+        issuer = self.settings.issuer_url.rstrip("/")
+        return f"{issuer}/device"
 
 
 def _decode_jwt_payload(token: str) -> dict[str, Any]:

@@ -14,6 +14,7 @@ class Permission(str, Enum):
     CANCEL = "cancel"
     SYNC_RESOLVE = "sync_resolve"
     MANAGE_USERS = "manage_users"
+    IDE_WRITE = "ide_write"
 
 
 ROLE_PERMISSIONS: dict[str, set[Permission]] = {
@@ -25,6 +26,7 @@ ROLE_PERMISSIONS: dict[str, set[Permission]] = {
         Permission.APPROVE,
         Permission.CANCEL,
         Permission.SYNC_RESOLVE,
+        Permission.IDE_WRITE,
     },
     "admin": set(Permission),
 }
@@ -83,10 +85,15 @@ def permission_for_route(method: str, path: str) -> Permission | None:
     if method == "GET":
         if clean.endswith("/events"):
             return Permission.SSE
+        if clean.startswith("/ide/"):
+            return Permission.READ
         if clean in ("/", "/threads", "/metrics", "/metrics/prometheus") or clean.startswith(
             ("/threads/", "/runs/")
         ):
             return Permission.READ
+    if method == "PUT":
+        if clean.startswith("/ide/file"):
+            return Permission.IDE_WRITE
     if method == "POST":
         if clean.endswith("/run"):
             return Permission.START_TURN

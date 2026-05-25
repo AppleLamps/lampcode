@@ -11,11 +11,35 @@ def expand_path(path: str) -> Path:
     return Path(path).expanduser()
 
 
-def load_ssl_context(cert_file: Path, key_file: Path) -> ssl.SSLContext:
+def load_ssl_context(
+    cert_file: Path,
+    key_file: Path,
+    *,
+    require_client_cert: bool = False,
+    client_ca_file: Path | None = None,
+) -> ssl.SSLContext:
     ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
     ctx.load_cert_chain(certfile=str(cert_file), keyfile=str(key_file))
     ctx.minimum_version = ssl.TLSVersion.TLSv1_2
+    if require_client_cert:
+        if not client_ca_file or not client_ca_file.is_file():
+            raise FileNotFoundError(f"Client CA file required for mTLS: {client_ca_file}")
+        ctx.verify_mode = ssl.CERT_REQUIRED
+        ctx.load_verify_locations(cafile=str(client_ca_file))
     return ctx
+
+
+def validate_client_ca(client_ca_file: Path) -> tuple[bool, str]:
+    if not client_ca_file.is_file():
+        return False, "client CA file not found"
+    try:
+        from cryptography import x509
+        from cryptography.hazmat.backends import default_backend
+
+        x509.load_pem_x509_certificate(client_ca_file.read_bytes(), default_backend())
+        return True, "ok"
+    except Exception as exc:
+        return False, f"invalid client CA PEM: {exc}"
 
 
 def cert_fingerprint(cert_file: Path) -> str | None:

@@ -61,18 +61,112 @@ def render_dashboard_html(
     user_name: str = "legacy",
     session_mode: bool = False,
     oidc_enabled: bool = False,
+    ide_enabled: bool = False,
+    monaco_cdn: str = "https://cdn.jsdelivr.net/npm/monaco-editor@0.52.0/min/vs",
 ) -> str:
     token_js = html.escape(token, quote=True)
     role_js = html.escape(role, quote=True)
     user_js = html.escape(user_name, quote=True)
     can_control = role in ("operator", "admin")
+    can_edit_ide = role in ("operator", "admin")
+    grid_cols = "280px 360px 1fr" if ide_enabled else "280px 1fr"
+    ide_panel = ""
+    ide_script = ""
+    if ide_enabled:
+        cdn = html.escape(monaco_cdn, quote=True)
+        ide_panel = f"""
+<section id="idePanel" style="border-right:1px solid #e5e7eb;display:flex;flex-direction:column;height:100vh;">
+  <div style="padding:0.5rem;border-bottom:1px solid #e5e7eb;font-size:0.85rem;">
+    <strong>IDE</strong> <span id="ideCwd" class="badge">select thread</span>
+  </div>
+  <div id="ideTree" style="max-height:35%;overflow:auto;padding:0.5rem;font-size:0.85rem;border-bottom:1px solid #e5e7eb;"></div>
+  <div id="ideEditor" style="flex:1;min-height:200px;"></div>
+  <div style="padding:0.5rem;border-top:1px solid #e5e7eb;display:flex;gap:0.5rem;">
+    <button id="ideReload" type="button">Reload</button>
+    <button id="ideSave" type="button" {"disabled" if not can_edit_ide else ""}>Save</button>
+  </div>
+</section>"""
+        ide_script = f"""
+const IDE_ENABLED = true;
+const CAN_EDIT_IDE = {"true" if can_edit_ide else "false"};
+const MONACO_CDN = "{cdn}";
+let monacoEditor = null;
+let ideCurrentPath = null;
+let ideThreadCwd = "";
+
+function renderTree(entries, depth) {{
+  let html = "";
+  entries.forEach(e => {{
+    const pad = depth * 12;
+    const icon = e.type === "dir" ? "📁" : "📄";
+    html += `<div style="padding-left:${{pad}}px;cursor:pointer" data-path="${{e.path}}" data-type="${{e.type}}">${{icon}} ${{e.name}}</div>`;
+    if (e.children) html += renderTree(e.children, depth + 1);
+  }});
+  return html;
+}}
+
+async function loadIdeTree() {{
+  if (!currentThread) return;
+  const res = await api("/ide/tree?thread_id=" + encodeURIComponent(currentThread) + "&path=.");
+  if (!res.ok) return;
+  const data = await res.json();
+  ideThreadCwd = data.cwd || "";
+  document.getElementById("ideCwd").textContent = ideThreadCwd;
+  const el = document.getElementById("ideTree");
+  el.innerHTML = renderTree(data.entries || [], 0);
+  el.querySelectorAll("[data-type=file]").forEach(node => {{
+    node.onclick = () => openIdeFile(node.getAttribute("data-path"));
+  }});
+}}
+
+async function openIdeFile(path) {{
+  ideCurrentPath = path;
+  const res = await api("/ide/file?thread_id=" + encodeURIComponent(currentThread) + "&path=" + encodeURIComponent(path));
+  if (!res.ok) return alert("Cannot open file");
+  const data = await res.json();
+  if (monacoEditor) monacoEditor.setValue(data.content || "");
+  else document.getElementById("ideEditor").textContent = data.content || "";
+}}
+
+async function saveIdeFile() {{
+  if (!CAN_EDIT_IDE || !ideCurrentPath) return;
+  const content = monacoEditor ? monacoEditor.getValue() : "";
+  const res = await api("/ide/file?thread_id=" + encodeURIComponent(currentThread) + "&path=" + encodeURIComponent(ideCurrentPath), {{
+    method: "PUT",
+    body: JSON.stringify({{ content }}),
+  }});
+  if (!res.ok) {{ const b = await res.json(); alert(b.error || "Save failed"); }}
+}}
+
+function initMonaco() {{
+  if (!window.require) return;
+  require.config({{ paths: {{ vs: MONACO_CDN }} }});
+  require(["vs/editor/editor.main"], function() {{
+    monacoEditor = monaco.editor.create(document.getElementById("ideEditor"), {{
+      value: "",
+      language: "plaintext",
+      readOnly: !CAN_EDIT_IDE,
+      automaticLayout: true,
+      theme: "vs",
+    }});
+  }});
+}}
+
+document.getElementById("ideReload")?.addEventListener("click", () => {{
+  if (ideCurrentPath) openIdeFile(ideCurrentPath);
+  else loadIdeTree();
+}});
+document.getElementById("ideSave")?.addEventListener("click", saveIdeFile);
+"""
+    else:
+        ide_script = "const IDE_ENABLED = false;"
     return f"""<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="utf-8"/>
 <title>agent-cli dashboard</title>
 <style>
-body {{ font-family: system-ui, sans-serif; margin: 0; display: grid; grid-template-columns: 280px 1fr; height: 100vh; }}
+body {{ font-family: system-ui, sans-serif; margin: 0; display: grid; grid-template-columns: {grid_cols}; height: 100vh; }}
 aside {{ border-right: 1px solid #e5e7eb; padding: 1rem; overflow: auto; }}
 main {{ display: flex; flex-direction: column; height: 100vh; }}
 #threads li {{ margin: 0.35rem 0; cursor: pointer; }}
@@ -95,6 +189,7 @@ button:disabled {{ opacity: 0.5; cursor: not-allowed; }}
   <div class="badge">User: {user_js} · Role: {role_js}</div>
   <ul id="threads"></ul>
 </aside>
+{ide_panel}
 <main>
   <div id="status" style="padding:0.75rem;border-bottom:1px solid #e5e7eb;">Select a thread</div>
   <div id="transcript"></div>
@@ -108,6 +203,7 @@ const TOKEN = "{token_js}";
 const SESSION_MODE = {"true" if session_mode else "false"};
 const USER_ROLE = "{role_js}";
 const CAN_CONTROL = {"true" if can_control else "false"};
+{ide_script}
 let currentThread = null;
 let eventSource = null;
 
@@ -188,6 +284,10 @@ async function selectThread(id, label) {{
   document.getElementById("status").textContent = "Thread: " + label;
   document.getElementById("transcript").innerHTML = "";
   startSSE(id);
+  if (IDE_ENABLED) {{
+    ideCurrentPath = null;
+    loadIdeTree();
+  }}
 }}
 
 async function approve(id, decision) {{
@@ -216,6 +316,12 @@ if (SESSION_MODE && !sessionId() && !TOKEN) {{
 }} else {{
   loadThreads();
   setInterval(loadThreads, 5000);
+  if (IDE_ENABLED) {{
+    const s = document.createElement("script");
+    s.src = MONACO_CDN + "/loader.js";
+    s.onload = initMonaco;
+    document.head.appendChild(s);
+  }}
 }}
 </script>
 </body>
