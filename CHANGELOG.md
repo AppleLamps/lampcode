@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.4.0] — 2026-05-25
+
+Phase 23 harness hardening (solo only).
+
+### Added
+
+- **Windows persistent shell:** Pipe-based `cmd.exe` sessions when `[shell] enabled = true`; completion markers for reliable output boundaries (no ConPTY required).
+- **Compaction regression test:** Proves task marker survives compact + `build_thread_messages` rebuild.
+- **Review `--json` CI fixture:** Structured findings payload for scripted review runs.
+
+### Changed
+
+- **Doctor / PTY status:** Windows reports `persistent-pipes` backend instead of one-shot-only fallback.
+- **Session context:** Phase 23 direction and v2.3.0 baseline in `docs/session-context.md`.
+
+### Tests
+
+- `tests/test_phase23.py` — persistent shell, compaction resume context, review JSON fixture.
+
 ## [2.3.0] — 2026-05-25
 
 Phase 22 Codex harness parity (solo only).

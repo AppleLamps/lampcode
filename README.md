@@ -219,12 +219,12 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 920+ tests
+pytest   # 924+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.3.0 (Phase 22).
+See [CHANGELOG.md](CHANGELOG.md) for v2.4.0 (Phase 23).
 
 ## Further reading
 

@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.3.0 (Phase 22 harness parity).  
+**Current release:** v2.4.0 (Phase 23 harness hardening).  
 **Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
 
 ---
@@ -53,7 +53,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **`codex review` (first-class review)** | ✅ | `agent review --uncommitted` / `--base` / `--commit` (Phase 22) |
 | **Exec policy (Starlark rules)** | ⚠️ partial | TOML glob allow/deny + modes (`prompt` / `untrusted` / `never`); `agent exec-policy test` |
 | **OS-native sandbox** | ⚠️ partial | Heuristic sandbox default; opt-in kernel (bubblewrap/seatbelt/AppContainer) — not Codex-lightweight-by-default |
-| **Unified exec (PTY + stdin)** | ⚠️ partial | Opt-in `[shell] enabled`; persistent session per thread; Windows falls back to one-shot (doctor reports PTY) |
+| **Unified exec (PTY + stdin)** | ✅ partial | Opt-in `[shell] enabled`; pipe-persistent on Windows (cmd.exe) + Unix; ConPTY future |
 | **`request_user_input` tool** | ✅ | Structured mid-turn questions; REPL/TTY + `AGENT_INPUT_ANSWERS` (Phase 22) |
 | **`request_permissions` (mid-turn escalation)** | ✅ | Approval gate + session flags; auto-deny in read-only review (Phase 22) |
 | **Thread fork** | ✅ | `agent threads fork`; `forked_from` in JSONL |
@@ -71,7 +71,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | P0 | `agent review --uncommitted` / `--base <branch>` | ✅ |
 | P1 | Richer JSONL event parity (`--json` typed stream for CI) | ✅ |
 | P2 | `request_user_input` tool | ✅ |
-| P3 | PTY / unified exec (persistent shell + stdin) | ⚠️ opt-in; Windows one-shot fallback documented in doctor |
+| P3 | PTY / unified exec (persistent shell + stdin) | ✅ pipes on Windows; ConPTY still future |
 | P4 | `--output-schema` / structured final output | ✅ |
 | P5 | `request_permissions` mid-turn sandbox escalation | ✅ |
 | P6 | Hooks (`hooks.json`) | ✅ |
@@ -123,6 +123,6 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Review workflow | ✅ First-class command |
 | CI / JSON events | ✅ `--json` + jsonl-v2 export |
 | Mid-turn UX tools | ✅ input + permissions |
-| Persistent shell | ⚠️ Opt-in; platform limits |
+| Persistent shell | ✅ Opt-in pipes; Windows cmd.exe persistent (Phase 23) |
 | Memories | ⚠️ Minimal v1 |
 | Enterprise cloud | ❌ By design — see enterprise.md |

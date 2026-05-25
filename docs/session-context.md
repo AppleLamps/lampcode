@@ -15,17 +15,26 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.3.0 — Phase 22 complete)
+## Current state (v2.4.0 — Phase 23 complete)
 
-Phase 22 shipped as **v2.3.0**. Before doing new work, verify:
+Phase 23 shipped as **v2.4.0**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~920 passed, 1 skipped, 0 failed
-git log --oneline -15   # expect Phase 21 + Phase 22 logical commits after Phase 20
+pytest -q               # expect ~924 passed, 1 skipped, 0 failed
+git log --oneline -15   # expect Phase 23 commits after Phase 22
 ```
 
-**Bottom line:** You're on **v2.3.0 / Phase 22 complete**. The next work is **Phase 23** (or polish on the two ⚠️ Phase 22 items below) — **not** the old Phase 21 backlog from earlier briefings.
+**Bottom line:** You're on **v2.4.0 / Phase 23 complete**. Next work is **Phase 24** (deeper polish on partial Tier-2 items) unless you explicitly pivot to enterprise features.
+
+### Phase 23 (v2.4.0) — just shipped
+
+- **Windows persistent shell:** Pipe-based `cmd.exe` when `[shell] enabled`; completion markers
+- **Compaction regression test:** Task marker survives compact + message rebuild
+- **Review `--json` CI fixture:** Structured findings for scripted runs
+- **Doctor:** Windows reports `persistent-pipes` instead of one-shot-only
+
+### Phase 22 (v2.3.0)
 
 ### What's already done
 
@@ -111,14 +120,32 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 23 direction (suggested — not started)
+## Phase 24 direction (suggested — not started)
+
+Prioritize **deeper polish** on remaining ⚠️ Tier-2 gaps:
+
+### P0
+1. **ConPTY / interactive PTY on Windows** — full TUI programs in persistent shell
+2. **Memories v2** — tag + recency scoring (still opt-in)
+3. **Long-session compaction dogfood** — manual + fixture for multi-compact threads
+
+### P1
+4. Exec policy depth (richer TOML rules)
+5. Kernel sandbox doctor + safer solo defaults
+6. Web search provider upgrade path
+
+Target next release: **v2.5.0**.
+
+---
+
+## Phase 23 direction (complete — v2.4.0)
 
 Prioritize **daily-driver polish** and closing ⚠️ gaps from Phase 22. Suggested order:
 
 ### P0 — harden what Phase 22 shipped
-1. **PTY / persistent shell on Windows** — better fallback UX or ConPTY path where feasible
+1. **PTY / persistent shell on Windows** — better fallback UX or ConPTY path where feasible ✅ pipe-persistent shipped
 2. **Memories v2** — smarter retrieval/inject (still opt-in; no ML pipeline unless asked)
-3. **Compaction regression tests** — long-thread fixture proving task survives compact + resume
+3. **Compaction regression tests** — long-thread fixture proving task survives compact + resume ✅ shipped
 
 ### P1 — remaining Codex mechanics (Tier 2 partials)
 4. **Exec policy depth** — richer rules without full Starlark unless justified
@@ -126,7 +153,7 @@ Prioritize **daily-driver polish** and closing ⚠️ gaps from Phase 22. Sugges
 6. **Web search quality** — optional provider upgrade path (still OpenRouter-first)
 
 ### P2 — polish
-7. Review UX — structured findings schema, `--json` CI fixtures
+7. Review UX — structured findings schema, `--json` CI fixtures ✅ shipped
 8. JSON stream — event parity audit vs Codex `--json` (field names, ordering)
 9. Hook coverage — additional lifecycle events if Codex adds them
 
@@ -136,7 +163,7 @@ Prioritize **daily-driver polish** and closing ⚠️ gaps from Phase 22. Sugges
 - Multi-agent swarms, distributed scheduler, webhook federation
 - Code mode (V8), voice/realtime, remote app-server
 
-Target next release: **v2.4.0** with tests for each feature + full pytest green.
+Target release: **v2.4.0** with tests for each feature + full pytest green. ✅
 
 ---
 
