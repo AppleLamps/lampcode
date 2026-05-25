@@ -120,21 +120,19 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 24 direction (suggested — not started)
+## Phase 24 direction (planned — see roadmap)
 
-Prioritize **deeper polish** on remaining ⚠️ Tier-2 gaps:
+Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phases 24–26 → v2.5.0–v2.7.0).
 
-### P0
-1. **ConPTY / interactive PTY on Windows** — full TUI programs in persistent shell
-2. **Memories v2** — tag + recency scoring (still opt-in)
-3. **Long-session compaction dogfood** — manual + fixture for multi-compact threads
+Summary — prioritize **reliability core** before more surface area:
 
-### P1
-4. Exec policy depth (richer TOML rules)
-5. Kernel sandbox doctor + safer solo defaults
-6. Web search provider upgrade path
+### P0 (Phase 24 / v2.5.0)
+1. Unified exec v1 — stdin, output caps, session ids
+2. Approval cache + sandbox retry escalation
+3. Compaction v2 — AGENTS-aware summaries, compact hooks, multi-compact warning
+4. Parallel read-only tools
 
-Target next release: **v2.5.0**.
+Target release: **v2.5.0**. Details: [phase-24.md](roadmap/phase-24.md). Phase 25–26: [phase-25.md](roadmap/phase-25.md), [phase-26.md](roadmap/phase-26.md).
 
 ---
 
@@ -188,7 +186,7 @@ Demo bug: `calc.add(2, 3)` returns `-1` instead of `5`. Agent should patch and p
 
 1. **Implement in `lampcode/agent-cli` only** — Codex repo is reference unless I say otherwise
 2. **Harness-first** — every change should improve the solo dev loop above
-3. **Read before coding:** `README.md`, `docs/codex-comparison.md`, `CHANGELOG.md`, this file, relevant `agent/` modules
+3. **Read before coding:** `README.md`, `docs/codex-comparison.md`, `docs/roadmap/`, `CHANGELOG.md`, this file, relevant `agent/` modules
 4. **Tests required** — mocked where possible; no flaky globals (approval state, DAG threads); run `pytest -q` before claiming done
 5. **Logical commits** — one concern per commit, not one giant dump
 6. **Docs:** keep README solo-first; enterprise stays in `docs/enterprise.md`

@@ -230,4 +230,5 @@ See [CHANGELOG.md](CHANGELOG.md) for v2.4.0 (Phase 23).
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
 - [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)
+- [Roadmap (Phases 24–26)](docs/roadmap/README.md) — step-by-step harness plans
 - [Enterprise features](docs/enterprise.md) — serve, OIDC, RBAC, DAG, scheduler (Phases 6–18)
