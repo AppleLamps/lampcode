@@ -8,6 +8,8 @@ from agent.compaction import compact_thread_if_needed
 from agent.config import Config
 from agent.context import build_thread_messages, estimate_tokens, load_project_rules
 from agent.events import EventEmitter
+from agent.sandbox.retry import apply_sandbox_escalation_for_reason
+from agent.tool_round import can_parallelize_tool_round, run_parallel_tool_dispatches
 from agent.profiles import project_config_path
 from agent.mcp.manager import McpManager
 from agent.models import (
@@ -436,7 +438,14 @@ def _run_loop(
                     thread, turn, store, emitter, registry, budget, metric, cancel
                 )
 
-        compact_result = compact_thread_if_needed(thread, config, store, client)
+        compact_result = compact_thread_if_needed(
+            thread,
+            config,
+            store,
+            client,
+            hooks_runner=hooks_runner,
+            project_rules=project_rules,
+        )
         if compact_result.performed:
             emitter.compaction(thread.id, compact_result.removed_items)
             emitter.compaction_completed(
@@ -446,6 +455,8 @@ def _run_loop(
                 estimated_tokens_before=compact_result.estimated_tokens_before,
                 estimated_tokens_after=compact_result.estimated_tokens_after,
             )
+            if compact_result.warning:
+                emitter.compaction_warning(thread.id, compact_result.warning)
             messages = build_thread_messages(
                 thread,
                 active_skills=active_skills,
@@ -524,7 +535,32 @@ def _run_loop(
         }
         messages.append(assistant_msg)
 
-        for tc in result.tool_calls:
+        tool_calls_list = list(result.tool_calls)
+        tool_names_round = [tc["function"]["name"] for tc in tool_calls_list]
+        if (
+            len(tool_calls_list) > 1
+            and can_parallelize_tool_round(tool_names_round)
+            and config.harness.max_parallel_read_tools > 1
+        ):
+            _run_parallel_read_tool_round(
+                tool_calls_list,
+                thread=thread,
+                turn=turn,
+                config=config,
+                store=store,
+                mcp_manager=mcp_manager,
+                messages=messages,
+                emitter=emitter,
+                cancel=cancel,
+                allowed_tools=allowed_tools,
+                turn_state=turn_state,
+                session=session,
+                hooks_runner=hooks_runner,
+                max_workers=config.harness.max_parallel_read_tools,
+            )
+            continue
+
+        for tc in tool_calls_list:
             cancel.check()
             if budget:
                 metric = budget.record_tool_call()
@@ -574,12 +610,10 @@ def _run_loop(
                 store.append_item(thread, turn.id, item)
                 emitter.item_started(thread.id, turn.id, item.type, item.id)
 
-            block_reason = _precheck_tool(
-                tool_name, arguments, config, mcp_manager, session=session, read_only_review=read_only_review
-            )
-            if block_reason:
+            policy_block = _exec_policy_block(tool_name, arguments, config)
+            if policy_block:
                 _handle_blocked_tool(
-                    block_reason,
+                    policy_block,
                     tracking_items,
                     store,
                     thread,
@@ -623,10 +657,43 @@ def _run_loop(
                         }
                     )
                     continue
-
                 _mark_approved(tracking_items)
             elif requires_approval:
                 _mark_approved(tracking_items)
+                if session:
+                    session.approval_cache.record(tool_name, arguments)
+
+            block_reason, retryable = _precheck_tool(
+                tool_name,
+                arguments,
+                config,
+                mcp_manager,
+                session=session,
+                read_only_review=read_only_review,
+            )
+            if block_reason and retryable and session:
+                apply_sandbox_escalation_for_reason(session, block_reason)
+                block_reason, _retryable = _precheck_tool(
+                    tool_name,
+                    arguments,
+                    config,
+                    mcp_manager,
+                    session=session,
+                    read_only_review=read_only_review,
+                )
+            if block_reason:
+                _handle_blocked_tool(
+                    block_reason,
+                    tracking_items,
+                    store,
+                    thread,
+                    turn,
+                    emitter,
+                    tool_call_id,
+                    messages,
+                    config,
+                )
+                continue
 
             if tool_name == "run_command" and config.execution.backend == "ssh":
                 session.ssh_command_approved = True
@@ -1111,6 +1178,202 @@ def _finalize_cancelled(
     emitter.turn_completed(thread.id, turn.id, turn.status)
 
 
+def _run_parallel_read_tool_round(
+    tool_calls_list: list,
+    *,
+    thread: Thread,
+    turn: Turn,
+    config: Config,
+    store: ThreadStore,
+    mcp_manager: McpManager,
+    messages: list,
+    emitter: EventEmitter,
+    cancel: CancelToken,
+    allowed_tools: list[str] | None,
+    turn_state: TurnApprovalState,
+    session: HarnessSession,
+    hooks_runner,
+    max_workers: int,
+) -> None:
+    prepared: list[dict] = []
+
+    for tc in tool_calls_list:
+        cancel.check()
+        tool_name = tc["function"]["name"]
+        tool_call_id = tc["id"]
+        raw_args = tc["function"].get("arguments", "")
+        arguments = parse_tool_arguments(raw_args)
+        source = "builtin"
+
+        if allowed_tools is not None and tool_name not in allowed_tools:
+            emitter.tool_pending(thread.id, turn.id, tool_name, arguments, source=source)
+            emitter.tool_completed(thread.id, turn.id, tool_name, "blocked", source=source)
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": tool_call_id,
+                    "content": f"Tool {tool_name} is not available in this mode.",
+                }
+            )
+            continue
+
+        emitter.tool_pending(thread.id, turn.id, tool_name, arguments, source=source)
+        if hooks_runner:
+            hooks_runner.run(
+                "on_tool_pending",
+                {"tool_name": tool_name, "arguments": arguments},
+                tool_name=tool_name,
+                thread_id=thread.id,
+                turn_id=turn.id,
+            )
+
+        tracking_items = _create_tracking_items(
+            tool_name, arguments, config, tool_call_id, raw_args, mcp_manager, thread.id
+        )
+        for item in tracking_items:
+            turn.items.append(item)
+            store.append_item(thread, turn.id, item)
+            emitter.item_started(thread.id, turn.id, item.type, item.id)
+
+        policy_block = _exec_policy_block(tool_name, arguments, config)
+        if policy_block:
+            _handle_blocked_tool(
+                policy_block,
+                tracking_items,
+                store,
+                thread,
+                turn,
+                emitter,
+                tool_call_id,
+                messages,
+                config,
+            )
+            continue
+
+        requires_approval = tool_requires_approval(tool_name, mcp_manager, config)
+        if requires_approval and needs_approval_prompt(
+            tool_name,
+            arguments,
+            config,
+            turn_state=turn_state,
+            session=session,
+        ):
+            summary = format_tool_summary(tool_name, arguments)
+            emitter.approval_requested(thread.id, turn.id, tool_name, summary)
+            approved = prompt_approval(
+                tool_name,
+                arguments,
+                auto_approve=config.auto_approve,
+                turn_state=turn_state,
+                session=session,
+            )
+            if not approved:
+                _mark_denied(tracking_items, store, thread, turn.id)
+                for item in tracking_items:
+                    emitter.item_completed(thread.id, turn.id, item.type, item.id, "denied")
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": tool_call_id,
+                        "content": "User denied this action.",
+                    }
+                )
+                continue
+            _mark_approved(tracking_items)
+        elif requires_approval:
+            _mark_approved(tracking_items)
+            session.approval_cache.record(tool_name, arguments)
+
+        block_reason, retryable = _precheck_tool(
+            tool_name,
+            arguments,
+            config,
+            mcp_manager,
+            session=session,
+        )
+        if block_reason and retryable:
+            apply_sandbox_escalation_for_reason(session, block_reason)
+            block_reason, _ = _precheck_tool(
+                tool_name,
+                arguments,
+                config,
+                mcp_manager,
+                session=session,
+            )
+        if block_reason:
+            _handle_blocked_tool(
+                block_reason,
+                tracking_items,
+                store,
+                thread,
+                turn,
+                emitter,
+                tool_call_id,
+                messages,
+                config,
+            )
+            continue
+
+        prepared.append(
+            {
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "arguments": arguments,
+                "tracking_items": tracking_items,
+                "source": source,
+            }
+        )
+
+    if not prepared:
+        return
+
+    def _dispatch_entry(entry: dict) -> str:
+        dispatch_result = dispatch_tool(
+            entry["tool_name"],
+            entry["arguments"],
+            config,
+            mcp_manager=mcp_manager,
+            thread_id=thread.id,
+        )
+        _emit_execution_events(dispatch_result, thread.id, turn.id, config, emitter)
+        return _apply_dispatch_results(
+            dispatch_result,
+            entry["tracking_items"],
+            store,
+            thread,
+            turn.id,
+            emitter,
+        )
+
+    jobs = [(index, lambda entry=entry: _dispatch_entry(entry)) for index, entry in enumerate(prepared)]
+    results = run_parallel_tool_dispatches(jobs, max_workers=max_workers)
+
+    for (index, result_text), entry in zip(results, prepared, strict=True):
+        tool_name = entry["tool_name"]
+        tracking_items = entry["tracking_items"]
+        emitter.tool_completed(
+            thread.id,
+            turn.id,
+            tool_name,
+            tracking_items[0].status if tracking_items else "completed",
+            source=entry["source"],
+        )
+        messages.append(
+            {
+                "role": "tool",
+                "tool_call_id": entry["tool_call_id"],
+                "content": result_text,
+            }
+        )
+
+
+def _exec_policy_block(tool_name: str, arguments: dict, config: Config) -> str | None:
+    if tool_name == "run_command":
+        cmd = arguments.get("cmd", "")
+        return exec_policy_block_reason(cmd, config)
+    return None
+
+
 def _precheck_tool(
     tool_name: str,
     arguments: dict,
@@ -1119,38 +1382,35 @@ def _precheck_tool(
     *,
     session: HarnessSession | None = None,
     read_only_review: bool = False,
-) -> str | None:
+) -> tuple[str | None, bool]:
     if read_only_review and tool_name in ("apply_patch", "write_file", "git_commit"):
-        return f"{tool_name} blocked in read-only review mode (pass --fix to allow writes)"
+        return f"{tool_name} blocked in read-only review mode (pass --fix to allow writes)", False
     if tool_name == "request_permissions" and read_only_review:
-        return "permission escalation denied in read-only review mode"
+        return "permission escalation denied in read-only review mode", False
     if tool_name == "run_command":
         cmd = arguments.get("cmd", "")
-        policy_reason = exec_policy_block_reason(cmd, config)
-        if policy_reason:
-            return policy_reason
         decision = check_run_command(cmd, config.cwd, config.sandbox_mode, session=session)
         if decision.blocked:
-            return decision.reason
+            return decision.reason, decision.retryable
     elif tool_name == "write_file":
         decision = check_write_file(
             arguments.get("path", ""), config.cwd, config.sandbox_mode
         )
         if decision.blocked:
-            return decision.reason
+            return decision.reason, decision.retryable
     elif tool_name == "apply_patch":
         decision = check_apply_patch(config.cwd, config.sandbox_mode)
         if decision.blocked:
-            return decision.reason
+            return decision.reason, decision.retryable
     elif tool_name == "web_search":
         if config.sandbox_mode.value == "read-only":
-            return "web search denied in read-only sandbox"
+            return "web search denied in read-only sandbox", False
     elif tool_name in ("spawn_worker", "spawn_worker_batch"):
         if not config.multi_agent.enabled:
-            return f"{tool_name} requires multi_agent.enabled or --multi-agent"
+            return f"{tool_name} requires multi_agent.enabled or --multi-agent", False
     elif tool_name in ("wait_workers", "list_workers", "get_worker_graph"):
         if not config.multi_agent.enabled:
-            return f"{tool_name} requires multi_agent.enabled or --multi-agent"
+            return f"{tool_name} requires multi_agent.enabled or --multi-agent", False
     elif mcp_manager.is_mcp_tool(tool_name):
         ref = mcp_manager.tool_map.get(tool_name)
         decision = check_mcp_tool(
@@ -1159,8 +1419,8 @@ def _precheck_tool(
             require_approval=ref.require_approval if ref else True,
         )
         if decision.blocked:
-            return decision.reason
-    return None
+            return decision.reason, decision.retryable
+    return None, False
 
 
 def _handle_blocked_tool(
