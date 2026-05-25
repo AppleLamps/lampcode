@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.5.0] — 2026-05-25
+
+Phase 24 reliability core (solo only).
+
+### Added
+
+- **Unified exec v1:** `stdin`, `max_output_chars`, `yield_ms`, and session meta on `run_command`; truncation marker in output.
+- **Approval cache:** Session-scoped cache skips re-prompt for identical approved commands; per-file keys for `apply_patch`.
+- **Sandbox retry escalation:** One automatic retry after user-approved sandbox denial when escalation is possible.
+- **Compaction v2:** AGENTS.md + original task in compact prompt; `on_pre_compact` / `on_post_compact` hooks; multi-compact accuracy warning.
+- **Parallel read-only tools:** Concurrent dispatch for `read_file`, `search_repo`, and `web_search` within a round (configurable cap).
+
+### Changed
+
+- **Doctor:** Shell output limits and harness parallelism rows.
+- **Loop orchestration:** Exec policy → approval → sandbox precheck with retry; parallel read batching when an entire round is read-only.
+
+### Tests
+
+- `tests/test_phase24.py` — **934** pytest cases (924 baseline + 10 new).
+
 ## [2.4.0] — 2026-05-25
 
 Phase 23 harness hardening (solo only).

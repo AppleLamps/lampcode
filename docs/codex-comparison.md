@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.4.0 (Phase 23 harness hardening).  
+**Current release:** v2.5.0 (Phase 24 reliability core).  
 **Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
 
 ---
@@ -33,7 +33,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 
 1. Golden path — `examples/demo-project`: init → run → patch → pytest green ✅ (mocked E2E + manual)
 2. Resume restores context — thread JSONL + turn checkpoint messages on `--resume-turn` ✅
-3. Compaction preserves task — summary item in thread; re-read after compact ⚠️ verify on long sessions
+3. Compaction preserves task — AGENTS-aware summaries; multi-compact warning; task marker survives double compact ✅
 4. Patch UX — preview in approval + diff on tool done (Phase 21) ✅
 5. Sandbox defaults safe — demo uses `workspace-write`; default in scaffold is sensible ✅
 6. Exec policy predictable — TOML allow/deny + `agent exec-policy test` ✅ (not Starlark — see Tier 2)
@@ -53,11 +53,13 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **`codex review` (first-class review)** | ✅ | `agent review --uncommitted` / `--base` / `--commit` (Phase 22) |
 | **Exec policy (Starlark rules)** | ⚠️ partial | TOML glob allow/deny + modes (`prompt` / `untrusted` / `never`); `agent exec-policy test` |
 | **OS-native sandbox** | ⚠️ partial | Heuristic sandbox default; opt-in kernel (bubblewrap/seatbelt/AppContainer) — not Codex-lightweight-by-default |
-| **Unified exec (PTY + stdin)** | ✅ partial | Opt-in `[shell] enabled`; pipe-persistent on Windows (cmd.exe) + Unix; ConPTY future |
+| **Unified exec (PTY + stdin)** | ✅ | Opt-in `[shell] enabled`; stdin + output caps + yield_ms (Phase 24); pipe-persistent Windows + Unix |
+| **Orchestration (approval cache + sandbox retry)** | ✅ | Session approval cache; one sandbox escalation retry after approved denial (Phase 24) |
+| **Parallel read-only tools** | ✅ | `read_file` / `search_repo` / `web_search` batched per round (Phase 24) |
 | **`request_user_input` tool** | ✅ | Structured mid-turn questions; REPL/TTY + `AGENT_INPUT_ANSWERS` (Phase 22) |
 | **`request_permissions` (mid-turn escalation)** | ✅ | Approval gate + session flags; auto-deny in read-only review (Phase 22) |
 | **Thread fork** | ✅ | `agent threads fork`; `forked_from` in JSONL |
-| **Hooks (`hooks.json`)** | ✅ | `on_tool_pending`, `on_turn_completed`; `agent hooks list|test` (Phase 22) |
+| **Hooks (`hooks.json`)** | ✅ | `on_tool_pending`, `on_turn_completed`, `on_pre_compact`, `on_post_compact` (Phase 24) |
 | **Memories (cross-session)** | ⚠️ partial | CRUD + keyword inject; opt-in `[memories] enabled`; no ML extraction pipeline |
 | **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `[plan_mode]` tool filter (Phase 22) |
 | **REPL `@skill` tab completion** | ✅ | readline completer when available (Phase 21) |
@@ -71,7 +73,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | P0 | `agent review --uncommitted` / `--base <branch>` | ✅ |
 | P1 | Richer JSONL event parity (`--json` typed stream for CI) | ✅ |
 | P2 | `request_user_input` tool | ✅ |
-| P3 | PTY / unified exec (persistent shell + stdin) | ✅ pipes on Windows; ConPTY still future |
+| P3 | PTY / unified exec (persistent shell + stdin) | ✅ exec v1; ConPTY still future |
 | P4 | `--output-schema` / structured final output | ✅ |
 | P5 | `request_permissions` mid-turn sandbox escalation | ✅ |
 | P6 | Hooks (`hooks.json`) | ✅ |
@@ -123,6 +125,9 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Review workflow | ✅ First-class command |
 | CI / JSON events | ✅ `--json` + jsonl-v2 export |
 | Mid-turn UX tools | ✅ input + permissions |
-| Persistent shell | ✅ Opt-in pipes; Windows cmd.exe persistent (Phase 23) |
+| Persistent shell | ✅ Opt-in pipes; stdin + output caps (Phase 24) |
+| Orchestration | ✅ Approval cache + sandbox retry (Phase 24) |
+| Compaction quality | ✅ AGENTS-aware + multi-compact warning (Phase 24) |
+| Parallel reads | ✅ Read-only tool batching (Phase 24) |
 | Memories | ⚠️ Minimal v1 |
 | Enterprise cloud | ❌ By design — see enterprise.md |

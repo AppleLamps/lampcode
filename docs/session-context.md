@@ -15,19 +15,26 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.4.0 — Phase 23 complete)
+## Current state (v2.5.0 — Phase 24 complete)
 
-Phase 23 shipped as **v2.4.0**. Before doing new work, verify:
+Phase 24 shipped as **v2.5.0**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~924 passed, 1 skipped, 0 failed
-git log --oneline -15   # expect Phase 23 commits after Phase 22
+pytest -q               # expect ~934 passed, 1 skipped, 0 failed
+git log --oneline -15   # expect Phase 24 commits after Phase 23
 ```
 
-**Bottom line:** You're on **v2.4.0 / Phase 23 complete**. Next work is **Phase 24** (deeper polish on partial Tier-2 items) unless you explicitly pivot to enterprise features.
+**Bottom line:** You're on **v2.5.0 / Phase 24 complete**. Next work is **Phase 25** (exec policy depth, memories v2, web search) unless you explicitly pivot to enterprise features.
 
-### Phase 23 (v2.4.0) — just shipped
+### Phase 24 (v2.5.0) — just shipped
+
+- **Unified exec v1:** stdin, output caps, yield_ms, session meta on shell tool
+- **Approval cache + sandbox retry:** skip duplicate prompts; one escalation retry after approved denial
+- **Compaction v2:** AGENTS-aware summaries, compact hooks, multi-compact warning
+- **Parallel read-only tools:** batched `read_file` / `search_repo` / `web_search` per round
+
+### Phase 23 (v2.4.0)
 
 - **Windows persistent shell:** Pipe-based `cmd.exe` when `[shell] enabled`; completion markers
 - **Compaction regression test:** Task marker survives compact + message rebuild
@@ -81,7 +88,7 @@ git log --oneline -15   # expect Phase 23 commits after Phase 22
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
 - `CHANGELOG.md` — v2.1.0 / v2.2.0 / v2.3.0 notes
 
-**Tests:** 920 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 934 passed, 1 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)
@@ -92,9 +99,9 @@ git log --oneline -15   # expect Phase 23 commits after Phase 22
 
 | Item | Status |
 |------|--------|
-| P3 PTY / unified exec | ⚠️ opt-in; Windows one-shot fallback (doctor reports PTY) |
+| P3 PTY / unified exec | ✅ exec v1 — stdin, caps, yield_ms; ConPTY still future |
 | P8 Memories | ⚠️ minimal v1; opt-in keyword inject only |
-| Long-session compaction | ⚠️ verify task preservation after compact (10-spot check #3) |
+| Long-session compaction | ✅ AGENTS-aware summaries + multi-compact warning (Phase 24) |
 | Starlark exec policy | ⚠️ TOML glob allow/deny only |
 | OS-native sandbox | ⚠️ heuristic default; kernel modes opt-in |
 
@@ -120,19 +127,32 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 24 direction (planned — see roadmap)
+## Phase 25 direction (planned — see roadmap)
 
-Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phases 24–26 → v2.5.0–v2.7.0).
+Full step-by-step plans: **[docs/roadmap/](roadmap/README.md)** (Phases 25–26 → v2.6.0–v2.7.0).
 
-Summary — prioritize **reliability core** before more surface area:
+Summary — prioritize **depth over breadth**:
 
-### P0 (Phase 24 / v2.5.0)
-1. Unified exec v1 — stdin, output caps, session ids
-2. Approval cache + sandbox retry escalation
-3. Compaction v2 — AGENTS-aware summaries, compact hooks, multi-compact warning
-4. Parallel read-only tools
+### P0 (Phase 25 / v2.6.0)
+1. Exec policy depth — richer TOML rules without full Starlark
+2. Memories v2 — smarter retrieval/inject (still opt-in)
+3. Web search quality — optional provider upgrade path
 
-Target release: **v2.5.0**. Details: [phase-24.md](roadmap/phase-24.md). Phase 25–26: [phase-25.md](roadmap/phase-25.md), [phase-26.md](roadmap/phase-26.md).
+Target release: **v2.6.0**. Details: [phase-25.md](roadmap/phase-25.md). Phase 26: [phase-26.md](roadmap/phase-26.md).
+
+---
+
+## Phase 24 direction (complete — v2.5.0)
+
+Prioritize **reliability core** before more surface area:
+
+### P0 (Phase 24 / v2.5.0) ✅
+1. Unified exec v1 — stdin, output caps, session ids ✅
+2. Approval cache + sandbox retry escalation ✅
+3. Compaction v2 — AGENTS-aware summaries, compact hooks, multi-compact warning ✅
+4. Parallel read-only tools ✅
+
+Target release: **v2.5.0** with tests for each feature + full pytest green. ✅
 
 ---
 

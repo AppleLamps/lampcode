@@ -141,6 +141,8 @@ agent exec-policy test "del /s /q foo"
 
 `exec_policy`: `prompt` | `untrusted` (allow-list + read/test auto) | `never` (CI + `--auto-approve`).
 
+Opt-in persistent shell (`[shell] enabled = true`) supports `stdin`, output caps (`max_output_chars`), and partial returns (`yield_ms`). Read-only tools (`read_file`, `search_repo`, `web_search`) dispatch in parallel within a model round when configured via `[harness] max_parallel_read_tools`.
+
 ## Threads & cost
 
 ```powershell
@@ -219,12 +221,12 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 924+ tests
+pytest   # 934+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.4.0 (Phase 23).
+See [CHANGELOG.md](CHANGELOG.md) for v2.5.0 (Phase 24).
 
 ## Further reading
 
