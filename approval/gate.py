@@ -223,11 +223,14 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
         return f"write_file (overwrite): {path} ({lines} lines)"
 
     if tool_name == "apply_patch":
+        from tools.patch import format_patch_brief, format_patch_preview_block
+
         patch = arguments.get("patch", "")
-        files = _extract_patch_files(patch)
-        if files:
-            return f"apply_patch: {', '.join(files)}"
-        return "apply_patch: (see patch content)"
+        brief = format_patch_brief(patch)
+        preview = format_patch_preview_block(patch, max_preview_lines=4)
+        if preview and preview not in brief:
+            return f"{brief}\n{preview}"
+        return brief
 
     if tool_name.startswith("mcp__"):
         return f"MCP tool {tool_name}: {arguments}"

@@ -53,6 +53,11 @@ class OutputHandler:
             name = event.data.get("tool_name", "")
             status = event.data.get("status", "ok")
             self._stderr.print(f"[dim][tool done][/dim] {name}: {status}")
+            if name == "apply_patch":
+                diff = event.data.get("diff_preview") or event.data.get("summary")
+                if diff:
+                    for ln in str(diff).splitlines()[:8]:
+                        self._stderr.print(f"[dim]  {ln}[/dim]")
         elif event.type == "approval.requested":
             summary = event.data.get("summary", "")
             self._stderr.print(f"[yellow][approval pending][/yellow] {summary}")

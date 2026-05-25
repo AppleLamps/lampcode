@@ -306,3 +306,111 @@ def _truncate(text: str, max_len: int) -> str:
     if len(text) <= max_len:
         return text
     return text[: max_len - 20] + "\n[... truncated ...]"
+
+
+@dataclass
+class PatchPreviewOp:
+    path: str
+    change_type: str
+    additions: int = 0
+    deletions: int = 0
+    diff_preview: str = ""
+
+
+def preview_patch(
+    patch_text: str,
+    *,
+    cwd: Path | None = None,
+    max_preview_lines: int = 8,
+) -> tuple[list[PatchPreviewOp], str | None]:
+    """Parse patch and return per-file preview stats without applying."""
+    try:
+        operations = parse_patch(patch_text)
+    except ValueError as exc:
+        return [], str(exc)
+
+    previews: list[PatchPreviewOp] = []
+    for op in operations:
+        if isinstance(op, _AddOp):
+            adds = len(op.lines)
+            diff = "\n".join(f"+{ln}" for ln in op.lines[:max_preview_lines])
+            previews.append(
+                PatchPreviewOp(
+                    path=op.path,
+                    change_type="add",
+                    additions=adds,
+                    deletions=0,
+                    diff_preview=_truncate(diff, 400),
+                )
+            )
+        elif isinstance(op, _DeleteOp):
+            previews.append(
+                PatchPreviewOp(
+                    path=op.path,
+                    change_type="delete",
+                    additions=0,
+                    deletions=1,
+                    diff_preview=f"--- {op.path} (delete)",
+                )
+            )
+        elif isinstance(op, _UpdateOp):
+            adds = sum(1 for h in op.hunks for p, _ in h if p == "+")
+            dels = sum(1 for h in op.hunks for p, _ in h if p == "-")
+            diff_lines: list[str] = []
+            for hunk in op.hunks:
+                for prefix, content in hunk:
+                    if prefix in ("+", "-"):
+                        diff_lines.append(f"{prefix}{content or ''}")
+                    if len(diff_lines) >= max_preview_lines:
+                        break
+                if len(diff_lines) >= max_preview_lines:
+                    break
+            note = ""
+            if cwd is not None:
+                resolved = resolve_path_within_cwd(cwd, op.path)
+                if not resolved.is_file():
+                    note = " (file missing — read_file first)"
+            previews.append(
+                PatchPreviewOp(
+                    path=op.path + note,
+                    change_type="update",
+                    additions=adds,
+                    deletions=dels,
+                    diff_preview=_truncate("\n".join(diff_lines), 400),
+                )
+            )
+    return previews, None
+
+
+def format_patch_brief(patch_text: str, *, max_files: int = 3) -> str:
+    """One-line summary for tool pending / approval prompts."""
+    previews, err = preview_patch(patch_text)
+    if err:
+        return f"apply_patch: invalid ({err[:60]})"
+    if not previews:
+        return "apply_patch: (empty)"
+    parts: list[str] = []
+    for op in previews[:max_files]:
+        stats = f"+{op.additions}/-{op.deletions}"
+        parts.append(f"{op.path} ({op.change_type}, {stats})")
+    extra = len(previews) - max_files
+    suffix = f" +{extra} more" if extra > 0 else ""
+    return "apply_patch: " + ", ".join(parts) + suffix
+
+
+def format_patch_preview_block(patch_text: str, *, max_preview_lines: int = 6) -> str:
+    """Multi-line preview for approvals and stderr output."""
+    previews, err = preview_patch(patch_text, max_preview_lines=max_preview_lines)
+    if err:
+        return f"Patch error: {err}"
+    if not previews:
+        return "Patch: (no operations)"
+    lines: list[str] = ["Patch preview:"]
+    for op in previews:
+        lines.append(
+            f"  • {op.path} [{op.change_type}] +{op.additions}/-{op.deletions}"
+        )
+        if op.diff_preview:
+            for ln in op.diff_preview.splitlines()[:max_preview_lines]:
+                lines.append(f"    {ln}")
+    return "\n".join(lines)

@@ -957,12 +957,19 @@ class EventEmitter:
         status: str,
         *,
         source: str = "builtin",
+        diff_preview: str | None = None,
+        summary: str | None = None,
     ) -> None:
+        data: dict[str, Any] = {"tool_name": tool_name, "status": status, "source": source}
+        if diff_preview:
+            data["diff_preview"] = diff_preview
+        if summary:
+            data["summary"] = summary
         self.emit(
             AgentEvent(
                 "tool.completed",
                 thread_id=thread_id,
                 turn_id=turn_id,
-                data={"tool_name": tool_name, "status": status, "source": source},
+                data=data,
             )
         )
