@@ -30,11 +30,31 @@ def _cfg(tmp_path: Path, **ma_kw) -> Config:
         "dag_enabled": True,
         "max_concurrent_workers": 2,
         "checkpoint_enabled": False,
+        "worker_auto_approve": True,
     }
     defaults.update(ma_kw)
     c = Config(cwd=tmp_path, model="test", openrouter_api_key="x")
     c.multi_agent = MultiAgentSettings(**defaults)
     return c
+
+
+def _fast_run_turn(wt, prompt, cfg, st, **kwargs):
+    from agent.models import AgentMessageItem, Turn
+
+    turn = Turn(status="completed")
+    turn.items.append(AgentMessageItem(text=f"done: {prompt[:30]}"))
+    wt.turns.append(turn)
+    return turn
+
+
+def _registry(tmp_path: Path, **ma_kw) -> WorkerRegistry:
+    return WorkerRegistry(
+        _cfg(tmp_path, **ma_kw),
+        ThreadStore(),
+        parent_thread=_parent(),
+        turn_id="turn1",
+        run_turn_fn=_fast_run_turn,
+    )
 
 
 def _parent() -> Thread:
@@ -90,7 +110,7 @@ def test_aggregate_dependency_summaries() -> None:
 
 
 def test_spawn_rejects_cycle(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     msg, collab = reg.enqueue(_parent(), {"task": "b", "worker_id": "b", "depends_on": ["a"]})
     assert collab.status != "failed"
@@ -110,7 +130,7 @@ def test_spawn_rejects_cycle(tmp_path: Path) -> None:
 
 
 def test_blocked_worker_not_in_pending(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     _, collab = reg.enqueue(
         _parent(),
@@ -121,7 +141,7 @@ def test_blocked_worker_not_in_pending(tmp_path: Path) -> None:
 
 
 def test_batch_register(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     msg, collabs = reg.enqueue_batch(
         _parent(),
         [
@@ -134,7 +154,7 @@ def test_batch_register(tmp_path: Path) -> None:
 
 
 def test_get_worker_graph(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     data = json.loads(reg.get_worker_graph())
     assert len(data["nodes"]) == 1
@@ -142,7 +162,7 @@ def test_get_worker_graph(tmp_path: Path) -> None:
 
 
 def test_wait_workers_any_mode(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     _, c1 = reg.enqueue(_parent(), {"task": "slow", "worker_id": "slow"})
     reg._workers["slow"].status = "running"
     reg._workers["slow"]._done.clear()
@@ -155,8 +175,7 @@ def test_wait_workers_any_mode(tmp_path: Path) -> None:
 
 
 def test_concurrency_cap(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, max_concurrent_workers=1)
-    reg = WorkerRegistry(cfg, ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path, max_concurrent_workers=1)
     reg.enqueue(_parent(), {"task": "w1", "worker_id": "w1"})
     reg.enqueue(_parent(), {"task": "w2", "worker_id": "w2"})
     time.sleep(0.05)
@@ -164,8 +183,7 @@ def test_concurrency_cap(tmp_path: Path) -> None:
 
 
 def test_fail_fast_cancels_pending(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, dag_fail_fast=True, max_concurrent_workers=1)
-    reg = WorkerRegistry(cfg, ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path, dag_fail_fast=True, max_concurrent_workers=1)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     reg.enqueue(_parent(), {"task": "b", "worker_id": "b", "depends_on": ["a"]})
     reg._workers["a"].status = "failed"
@@ -174,8 +192,7 @@ def test_fail_fast_cancels_pending(tmp_path: Path) -> None:
 
 
 def test_diamond_d_runs_last(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, max_concurrent_workers=4)
-    reg = WorkerRegistry(cfg, ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path, max_concurrent_workers=4)
     reg.enqueue_batch(
         _parent(),
         [
@@ -250,8 +267,7 @@ def test_restore_registry_dag_ready_only(tmp_path: Path) -> None:
 
 
 def test_dag_disabled_ignores_deps(tmp_path: Path) -> None:
-    cfg = _cfg(tmp_path, dag_enabled=False)
-    reg = WorkerRegistry(cfg, ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path, dag_enabled=False)
     _, collab = reg.enqueue(
         _parent(),
         {"task": "x", "worker_id": "x", "depends_on": ["missing"]},
@@ -260,7 +276,7 @@ def test_dag_disabled_ignores_deps(tmp_path: Path) -> None:
 
 
 def test_batch_cycle_rejected(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     msg, collabs = reg.enqueue_batch(
         _parent(),
         [
@@ -273,7 +289,7 @@ def test_batch_cycle_rejected(tmp_path: Path) -> None:
 
 
 def test_wait_workers_deps_mode(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue_batch(
         _parent(),
         [
@@ -290,7 +306,7 @@ def test_wait_workers_deps_mode(tmp_path: Path) -> None:
 
 
 def test_graph_snapshot_edges(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     reg.enqueue(_parent(), {"task": "b", "worker_id": "b", "depends_on": ["a"]})
     snap = reg.build_graph_snapshot()
@@ -298,7 +314,7 @@ def test_graph_snapshot_edges(tmp_path: Path) -> None:
 
 
 def test_promote_blocked_to_ready(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     reg.enqueue(_parent(), {"task": "b", "worker_id": "b", "depends_on": ["a"]})
     assert reg._workers["b"].status == "blocked"
@@ -308,7 +324,7 @@ def test_promote_blocked_to_ready(tmp_path: Path) -> None:
 
 
 def test_missing_dependency_rejected(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     msg, collab = reg.enqueue(
         _parent(),
         {"task": "x", "worker_id": "x", "depends_on": ["nope"]},
@@ -318,7 +334,7 @@ def test_missing_dependency_rejected(tmp_path: Path) -> None:
 
 
 def test_self_dependency_rejected(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     msg, collab = reg.enqueue(
         _parent(),
         {"task": "x", "worker_id": "x", "depends_on": ["x"]},
@@ -327,7 +343,7 @@ def test_self_dependency_rejected(tmp_path: Path) -> None:
 
 
 def test_update_dag_status_completed(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg._workers["a"] = reg._workers.get("a") or __import__(
         "agent.multi_agent.registry", fromlist=["WorkerRecord"]
     ).WorkerRecord("a", "t1", "t", 0, status="completed")
@@ -337,7 +353,7 @@ def test_update_dag_status_completed(tmp_path: Path) -> None:
 
 
 def test_list_workers_includes_deps(tmp_path: Path) -> None:
-    reg = WorkerRegistry(_cfg(tmp_path), ThreadStore(), parent_thread=_parent(), turn_id="turn1")
+    reg = _registry(tmp_path)
     reg.enqueue(_parent(), {"task": "a", "worker_id": "a"})
     reg.enqueue(_parent(), {"task": "b", "worker_id": "b", "depends_on": ["a"]})
     data = json.loads(reg.list_workers())

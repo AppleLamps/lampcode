@@ -205,7 +205,8 @@ def test_init_skips_without_yes(tmp_path: Path) -> None:
     _init_git_repo(tmp_path)
     init_project(tmp_path, yes=True)
     result = init_project(tmp_path, yes=False)
-    assert "skipped" in result
+    assert "config" not in result
+    assert "skipped_config" in result or "message" in result
 
 
 def test_profile_merge_model_profile(tmp_path: Path) -> None:
@@ -429,6 +430,13 @@ def test_tools_list_cli(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None
 def test_init_cli_requires_git(tmp_path: Path) -> None:
     result = runner.invoke(app, ["init", "--cwd", str(tmp_path), "--yes"])
     assert result.exit_code == 1
+    assert "git" in _cli_out(result).lower()
+
+
+def test_init_cli_skip_git_check(tmp_path: Path) -> None:
+    result = runner.invoke(app, ["init", "--cwd", str(tmp_path), "--yes", "--skip-git-check"])
+    assert result.exit_code == 0
+    assert "Created" in _cli_out(result) or "exists" in _cli_out(result).lower()
 
 
 def test_init_cli_in_git_repo(tmp_path: Path) -> None:
