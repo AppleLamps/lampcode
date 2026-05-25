@@ -25,6 +25,7 @@ from agent.settings import (
     TurnCheckpointSettings,
     ShellSettings,
     HooksSettings,
+    BudgetSettings,
     HarnessSettings,
     MemoriesSettings,
     NotifySettings,
@@ -41,6 +42,7 @@ from agent.settings import (
     load_turn_checkpoint_settings,
     load_shell_settings,
     load_hooks_settings,
+    load_budget_settings,
     load_harness_settings,
     load_memories_settings,
     load_notify_settings,
@@ -138,6 +140,7 @@ class Config:
     shell: ShellSettings = field(default_factory=ShellSettings)
     hooks: HooksSettings = field(default_factory=HooksSettings)
     harness: HarnessSettings = field(default_factory=HarnessSettings)
+    budget: BudgetSettings = field(default_factory=BudgetSettings)
     memories: MemoriesSettings = field(default_factory=MemoriesSettings)
     notify: NotifySettings = field(default_factory=NotifySettings)
     plan_mode: PlanModeSettings = field(default_factory=PlanModeSettings)
@@ -157,6 +160,7 @@ class Config:
     force_sync: bool = False
     reasoning_effort: str | None = None
     model_profile_fallbacks: list[str] = field(default_factory=list)
+    max_cost_usd_per_turn: float | None = None
 
     @property
     def auto_approve(self) -> bool:
@@ -196,6 +200,7 @@ class Config:
         config_path: Path | None = None,
         profile: str | None = None,
         model_profile: str | None = None,
+        max_cost_usd: float | None = None,
     ) -> Config:
         resolved_config_path = config_path or default_config_path()
 
@@ -325,6 +330,7 @@ class Config:
         notify_cfg = load_notify_settings(resolved_config_path, project_path=project_path)
         plan_mode_cfg = load_plan_mode_settings(resolved_config_path, project_path=project_path)
         harness_cfg = load_harness_settings(resolved_config_path, project_path=project_path)
+        budget_cfg = load_budget_settings(resolved_config_path, project_path=project_path)
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
         execution_cfg = load_execution_settings(resolved_config_path)
@@ -380,6 +386,7 @@ class Config:
             shell=shell_cfg,
             hooks=hooks_cfg,
             harness=harness_cfg,
+            budget=budget_cfg,
             memories=memories_cfg,
             notify=notify_cfg,
             plan_mode=plan_mode_cfg,
@@ -397,6 +404,7 @@ class Config:
             force_sync=force_sync,
             reasoning_effort=str(reasoning) if reasoning else None,
             model_profile_fallbacks=[str(x) for x in profile_fallbacks] if isinstance(profile_fallbacks, list) else [],
+            max_cost_usd_per_turn=max_cost_usd if max_cost_usd is not None else budget_cfg.max_cost_usd_per_turn,
         )
 
     def require_api_key(self) -> str:

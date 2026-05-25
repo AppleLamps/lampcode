@@ -197,8 +197,14 @@ class PlanModeSettings:
 
 
 @dataclass
+class BudgetSettings:
+    max_cost_usd_per_turn: float | None = None
+
+
+@dataclass
 class HarnessSettings:
     max_parallel_read_tools: int = 4
+    post_patch_test: str = ""
 
 
 @dataclass
@@ -630,6 +636,27 @@ def load_harness_settings(
     merged = {**user_h, **project_h}
     return HarnessSettings(
         max_parallel_read_tools=int(merged.get("max_parallel_read_tools", 4)),
+        post_patch_test=str(merged.get("post_patch_test", "")),
+    )
+
+
+def load_budget_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> BudgetSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_b = user_data.get("budget", {})
+    project_b = project_data.get("budget", {})
+    if not isinstance(user_b, dict):
+        user_b = {}
+    if not isinstance(project_b, dict):
+        project_b = {}
+    merged = {**user_b, **project_b}
+    max_cost = merged.get("max_cost_usd_per_turn")
+    return BudgetSettings(
+        max_cost_usd_per_turn=float(max_cost) if max_cost is not None else None,
     )
 
 

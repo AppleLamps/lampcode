@@ -21,6 +21,9 @@ class HarnessSession:
     turn_allow_network: bool = False
     turn_allow_write_outside_cwd: bool = False
     turn_allow_full_access: bool = False
+    tool_warn_emitted: bool = False
+    turn_cost_usd: float = 0.0
+    budget_exceeded: bool = False
     approval_cache: ApprovalCache = field(default_factory=ApprovalCache)
 
     def enable_session_auto_approve(self) -> None:
