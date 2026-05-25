@@ -76,7 +76,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | P0 | `agent review --uncommitted` / `--base <branch>` | ✅ |
 | P1 | Richer JSONL event parity (`--json` typed stream for CI) | ✅ |
 | P2 | `request_user_input` tool | ✅ |
-| P3 | PTY / unified exec (persistent shell + stdin) | ✅ exec v1; ConPTY still future |
+| P3 | PTY / unified exec (persistent shell + stdin) | ✅ ConPTY on Windows + exec v2 API (Phase 27) |
 | P4 | `--output-schema` / structured final output | ✅ |
 | P5 | `request_permissions` mid-turn sandbox escalation | ✅ |
 | P6 | Hooks (`hooks.json`) | ✅ |
@@ -114,7 +114,10 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Model routing / fallbacks | ✅ | `[model_routing]`, `fallback_models`, retries |
 | Cost visibility | ✅ | Pricing seed, `[done]` line, `agent threads cost` |
 | Tool-capable models | ✅ | Warnings for denylist / cache heuristics |
-| Web search | ⚠️ | DuckDuckGo optional — not Responses API quality |
+| Web search | ✅ | DuckDuckGo + Exa/Tavily providers (Phase 27) |
+| MCP server (embed) | ✅ | `agent mcp-server` + `agent_run` tool (Phase 27) |
+| Exec policy session amend | ✅ | Prefix allow list + `p` approval key (Phase 27) |
+| Review merge-base diff | ✅ | `--base` uses merge-base; custom prompt (Phase 27) |
 | Model preflight table | ✅ | `agent doctor --models` (Phase 26) |
 | Per-turn cost cap | ✅ | `--max-cost`, `[budget] max_cost_usd_per_turn` (Phase 26) |
 | Review CI exit codes | ✅ | `--fail-on`, `review.v1.json` schema (Phase 26) |
@@ -134,7 +137,11 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Review workflow | ✅ First-class command |
 | CI / JSON events | ✅ `--json` + jsonl-v2 export |
 | Mid-turn UX tools | ✅ input + permissions |
-| Persistent shell | ✅ Opt-in pipes; stdin + output caps (Phase 24) |
+| Persistent shell | ✅ ConPTY (Windows) + pipes/pty; stdin API (Phase 27) |
+| MCP embed | ✅ `agent mcp-server` (Phase 27) |
+| Web search providers | ✅ Exa/Tavily + DuckDuckGo (Phase 27) |
+| Exec policy amend | ✅ Prefix allow list (Phase 27) |
+| Review merge-base | ✅ Custom prompt + merge-base diff (Phase 27) |
 | Orchestration | ✅ Approval cache + sandbox retry (Phase 24) |
 | Compaction quality | ✅ AGENTS-aware + multi-compact warning (Phase 24) |
 | Parallel reads | ✅ Read-only tool batching (Phase 24) |

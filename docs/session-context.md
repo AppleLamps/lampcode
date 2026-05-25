@@ -144,17 +144,29 @@ When I ask "how does Codex do X?" or "should we match Y?":
 
 ---
 
-## Phase 27 direction (planned — see roadmap)
+## Phase 27 direction (complete — v2.8.0)
 
-Candidates from Phase 26 exit notes (not fully specified):
+Terminal and embed parity:
 
-- **ConPTY / interactive PTY on Windows** — richer terminal than pipe-persistent shell
-- **`agent mcp-server`** — expose harness as MCP tool for external clients
-- **Web search provider upgrade** — Exa/Tavily config slot (OpenRouter-first)
-- **Exec policy amendments** — session-scoped allow rules without Starlark
-- **JSON replay bundle export** — debug-compatible run export
+1. Windows ConPTY shell backend ✅
+2. `agent mcp-server` stdio tool ✅
+3. Exa/Tavily web search providers ✅
+4. Exec-policy prefix amendments ✅
+5. Review custom prompt + merge-base diff ✅
+
+Target release: **v2.8.0** with tests for each feature + full pytest green. ✅
 
 Full step-by-step plans: **[docs/roadmap/phase-27.md](roadmap/phase-27.md)** (v2.8.0) and **[phase-28.md](roadmap/phase-28.md)** (v2.9.0).
+
+---
+
+## Phase 28 direction (planned — see roadmap)
+
+Candidates from Phase 27 exit notes (not fully specified):
+
+- **JSON replay bundle export** — debug-compatible run export
+- **MCP approval elicitation** — headless approval via MCP client
+- Further Codex terminal parity as needed
 
 ---
 

@@ -123,6 +123,7 @@ See [docs/codex-comparison.md](docs/codex-comparison.md) for Codex parity detail
 - `n` — deny (default)
 - `a` — approve all for this **turn**
 - `A` — approve all for this **session**
+- `p` — approve and save command prefix to project allow list (first two tokens)
 
 ## Sandbox & exec policy
 
@@ -137,6 +138,19 @@ Heuristic checks before shell/MCP/file tools — **not OS-level isolation** (ker
 ```powershell
 agent exec-policy test "git status --short"
 agent exec-policy test "del /s /q foo"
+agent exec-policy amend --prefix "pytest -q"
+```
+
+```toml
+[web_search]
+enabled = true
+provider = "exa"   # duckduckgo | exa | tavily
+# api_key_env = "EXA_API_KEY"
+```
+
+```powershell
+agent mcp-server   # stdio MCP server — expose agent_run to Claude Desktop / Cursor
+agent review "security focus" --uncommitted --json
 ```
 
 `exec_policy`: `prompt` | `untrusted` (allow-list + read/test auto) | `never` (CI + `--auto-approve`).

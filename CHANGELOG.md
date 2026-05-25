@@ -1,5 +1,21 @@
 # Changelog
 
+## [2.8.0] — 2026-05-25
+
+Phase 27 terminal and embed (solo only).
+
+### Added
+
+- **Windows ConPTY shell:** Optional `pywinpty` backend (`pip install -e ".[windows]"`); `[shell] backend = "auto|pipes|conpty|pty"`; `write_stdin()` on persistent sessions; doctor reports ConPTY probe.
+- **`agent mcp-server`:** Stdio MCP server with `agent_run` tool for external clients (Claude Desktop, Cursor); ephemeral headless turns via `run_turn`.
+- **Web search providers:** Exa and Tavily via `[web_search] provider` + `api_key_env` / inline key; doctor row for provider and key status.
+- **Exec-policy prefix amendments:** Project `.agent-cli/exec-policy.toml` `[allow_prefixes]`; approval `p` key; `agent exec-policy amend --prefix`.
+- **Review polish:** Positional custom prompt (`-` for stdin); merge-base diff for `--base` reviews; optional `merge_base_sha`, `review_scope`, `custom_prompt` in `review.v1.json`.
+
+### Tests
+
+- `tests/test_phase27.py` — **970** pytest cases (953 baseline + 17 new).
+
 ## [2.7.0] — 2026-05-25
 
 Phase 26 OpenRouter differentiation (solo only).
