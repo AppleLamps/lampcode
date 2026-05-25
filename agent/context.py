@@ -124,7 +124,12 @@ Rules:
 - Prefer small, focused changes over large refactors.
 - Use `apply_patch` for modifying existing files; reserve `write_file` for new files or full rewrites.
 - Run relevant tests or commands to verify your work when appropriate.
-- Explain briefly what you are doing as you work.
+"""
+    if repo_root:
+        prompt += """
+- When using git, prefer small commits with clear messages via the `git_commit` tool after completing a logical unit of work.
+"""
+    prompt += """- Explain briefly what you are doing as you work.
 - Use the provided tools instead of assuming anything about the codebase.
 - When MCP tools are available, you may use them for specialized tasks.
 

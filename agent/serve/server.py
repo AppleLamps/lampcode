@@ -446,6 +446,18 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 items = run_diagnostics(file_path, settings=ide.diagnostics)
                 self._ide_metric("diagnostics", "ok")
                 self._json_response({"items": items, "path": rel_path})
+            elif path == "/ide/completions":
+                from agent.ide_lsp import fetch_completions_stub, probe_python_lsp
+
+                qs = parse_qs(parsed.query)
+                rel_path = (qs.get("path") or [""])[0]
+                line = int((qs.get("line") or ["0"])[0])
+                col = int((qs.get("col") or ["0"])[0])
+                probe = probe_python_lsp()
+                items = fetch_completions_stub(path=rel_path, line=line, col=col)
+                self._json_response(
+                    {"items": items, "path": rel_path, "lsp_available": probe.available, "server": probe.server}
+                )
             else:
                 self._error(404, "Not found")
         except IdeError as exc:

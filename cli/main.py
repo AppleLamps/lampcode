@@ -40,7 +40,25 @@ from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_t
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.metrics import MetricsCollector
-from agent.settings import load_auth_storage_settings, load_schedule_settings, load_serve_settings, load_skills_config
+from agent.settings import (
+    load_auth_storage_settings,
+    load_mcp_config,
+    load_schedule_settings,
+    load_serve_settings,
+    load_skills_config,
+)
+from agent.profiles import (
+    load_model_profiles,
+    load_run_profiles,
+    merge_layered_config,
+    project_config_path,
+    thread_cost_summary,
+)
+from agent.init_scaffold import init_project
+from agent.repl import run_repl
+from agent.providers.openrouter import ModelsCache, recommend_model
+from agent.skills.doctor import skills_doctor_report
+from tools.registry import TOOL_REGISTRY, get_tool_schemas
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
@@ -76,6 +94,9 @@ skills_revocations_app = typer.Typer(help="Marketplace revocation list")
 multi_agent_budgets_app = typer.Typer(help="Swarm budget tracking")
 programs_app = typer.Typer(help="Cross-thread program DAG")
 programs_sync_app = typer.Typer(help="Cross-machine program sync")
+profile_app = typer.Typer(help="Run profile management")
+models_app = typer.Typer(help="OpenRouter model discovery")
+tools_app = typer.Typer(help="Built-in and MCP tools")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -104,6 +125,9 @@ skills_app.add_typer(skills_revocations_app, name="revocations")
 multi_agent_app.add_typer(multi_agent_budgets_app, name="budgets")
 app.add_typer(programs_app, name="programs")
 programs_app.add_typer(programs_sync_app, name="sync")
+app.add_typer(profile_app, name="profile")
+app.add_typer(models_app, name="models")
+app.add_typer(tools_app, name="tools")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -304,6 +328,12 @@ def run(
         "--budget-profile",
         help="Swarm budget profile: strict | standard | off",
     ),
+    profile: Optional[str] = typer.Option(
+        None, "--profile", help="Named run profile (merges overrides for this run)"
+    ),
+    model_profile: Optional[str] = typer.Option(
+        None, "--model-profile", help="Model profile: fast | deep | custom from config"
+    ),
 ) -> None:
     """Run the agent on a task."""
     try:
@@ -322,6 +352,8 @@ def run(
             multi_agent=multi_agent if multi_agent else None,
             sync_mode=sync_mode,
             force_sync=force_sync,
+            profile=profile,
+            model_profile=model_profile,
         )
         config.require_api_key()
     except ValueError as exc:
@@ -811,7 +843,33 @@ def doctor(
         "checkpoints",
         f"enabled={cfg.multi_agent.checkpoint_enabled}, dir writable={cp_writable}",
     )
+
+    solo = Table(title="Solo dev readiness")
+    solo.add_column("Check")
+    solo.add_column("Status")
+    project_cfg = project_config_path(cfg.cwd)
+    solo_checks = [
+        ("OPENROUTER_API_KEY", "ok" if api_key else "MISSING"),
+        ("git repository", "ok" if detect_repo_root(cfg.cwd) else "not in git repo"),
+        ("ripgrep", "ok" if rg_ok else "fallback search"),
+        ("project config", str(project_cfg) if project_cfg.is_file() else "run `agent init`"),
+        ("model fallbacks", str(len(cfg.openrouter.fallback_models))),
+    ]
+    try:
+        from agent.providers.openrouter import ModelsCache as MC
+
+        cached = MC().load()
+        solo_checks.append(("models cache", f"{len(cached)} models" if cached else "empty (run agent models list)"))
+    except Exception:
+        solo_checks.append(("models cache", "unavailable"))
+    for name, status in solo_checks:
+        style = "green" if status in ("ok",) or status.endswith("models") else "yellow"
+        if status == "MISSING":
+            style = "red"
+        solo.add_row(name, f"[{style}]{status}[/{style}]")
+
     console.print(table)
+    console.print(solo)
 
     if deep:
         import os
@@ -2286,6 +2344,7 @@ def multi_agent_resume_cmd(
 @threads_app.command("show")
 def threads_show(
     thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+    usage: bool = typer.Option(False, "--usage", help="Show per-turn token/cost usage"),
 ) -> None:
     """Show a human-readable transcript."""
     store = ThreadStore()
@@ -2343,7 +2402,27 @@ def threads_show(
                 )
                 for r in item.results[:3]:
                     console.print(f"  - {r.title}: {r.url}")
+        if usage and turn.usage:
+            u = turn.usage
+            cost = f", ${u.estimated_cost_usd:.4f}" if u.estimated_cost_usd else ""
+            model_used = f", model={u.model_used}" if u.model_used else ""
+            fb = ", fallback" if u.fallback_used else ""
+            console.print(
+                f"[dim]Usage: in={u.input_tokens} out={u.output_tokens}{cost}{model_used}{fb}[/dim]"
+            )
         console.print()
+
+
+@threads_app.command("cost")
+def threads_cost(
+    thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
+) -> None:
+    """Show accumulated token and cost estimate for a thread."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    import json
+
+    stdout_console.print(json.dumps(thread_cost_summary(thread), indent=2))
 
 
 @threads_app.command("delete")
@@ -2627,6 +2706,203 @@ def _git_commit_short() -> str | None:
     except (OSError, subprocess.SubprocessError):
         pass
     return None
+
+
+@app.command("init")
+def init_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Git repo root (default: cwd)"),
+    yes: bool = typer.Option(False, "--yes", help="Overwrite existing scaffold files"),
+    name: Optional[str] = typer.Option(None, "--name", help="Project name in config"),
+) -> None:
+    """Scaffold .agent-cli/ config, AGENTS.md, and seed skill in the current git repo."""
+    root = (cwd or Path.cwd()).resolve()
+    if detect_repo_root(root) is None:
+        console.print("[red]Error:[/red] Not inside a git repository.")
+        raise typer.Exit(1)
+    created = init_project(root, name=name, yes=yes)
+    if created.get("skipped"):
+        console.print(f"[yellow]{created['skipped']}[/yellow]")
+        raise typer.Exit(0)
+    for kind, path in created.items():
+        console.print(f"[green]Created[/green] {kind}: {path}")
+    console.print("Next: set OPENROUTER_API_KEY and run `agent run \"your task\"`")
+
+
+@app.command("repl")
+def repl_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    profile: Optional[str] = typer.Option(None, "--profile"),
+    model_profile: Optional[str] = typer.Option(None, "--model-profile"),
+    resume_last: bool = typer.Option(False, "--resume-last"),
+) -> None:
+    """Interactive multi-turn REPL (no Textual required)."""
+    try:
+        Config.resolve(
+            cwd=cwd,
+            profile=profile,
+            model_profile=model_profile,
+        ).require_api_key()
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    run_repl(
+        cwd=cwd,
+        profile=profile,
+        model_profile=model_profile,
+        resume_last=resume_last,
+    )
+
+
+@profile_app.command("list")
+def profile_list(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """List named run profiles from config layers."""
+    root = (cwd or Path.cwd()).resolve()
+    user = default_config_path()
+    project = project_config_path(root)
+    profiles = {**load_run_profiles(user), **load_run_profiles(project)}
+    if not profiles:
+        console.print("No [profiles.*] defined. Default profile keys: interactive, ci")
+        return
+    table = Table(title="Run profiles")
+    table.add_column("Name")
+    table.add_column("Model profile")
+    table.add_column("Sandbox")
+    table.add_column("Approval")
+    for name, rp in profiles.items():
+        table.add_row(name, rp.model_profile or "-", rp.sandbox_mode or "-", rp.approval_mode or "-")
+    console.print(table)
+
+
+@profile_app.command("show")
+def profile_show(
+    name: str = typer.Argument(..., help="Profile name"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Show merged effective settings for a profile."""
+    root = (cwd or Path.cwd()).resolve()
+    merged = merge_layered_config(root, cli_profile=name)
+    import json
+
+    stdout_console.print(json.dumps({k: v for k, v in merged.items() if not k.startswith("_")}, indent=2))
+
+
+@profile_app.command("use")
+def profile_use(
+    name: str = typer.Argument(..., help="Profile name to write as default"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Set default profile in project .agent-cli/config.toml."""
+    root = (cwd or Path.cwd()).resolve()
+    path = project_config_path(root)
+    if not path.parent.is_dir():
+        console.print("[red]Run agent init first.[/red]")
+        raise typer.Exit(1)
+    text = path.read_text(encoding="utf-8") if path.is_file() else ""
+    if "profile =" in text:
+        lines = []
+        for line in text.splitlines():
+            if line.strip().startswith("profile ="):
+                lines.append(f'profile = "{name}"')
+            else:
+                lines.append(line)
+        text = "\n".join(lines) + "\n"
+    else:
+        text = f'profile = "{name}"\n' + text
+    path.write_text(text, encoding="utf-8")
+    console.print(f"[green]Set profile[/green] to {name} in {path}")
+
+
+@models_app.command("list")
+def models_list(
+    refresh: bool = typer.Option(False, "--refresh", help="Fetch from OpenRouter API"),
+) -> None:
+    """List cached OpenRouter models."""
+    cache = ModelsCache()
+    models = cache.load()
+    if refresh or not models:
+        try:
+            cfg = Config.resolve()
+            cfg.require_api_key()
+            models = cache.fetch(cfg.require_api_key())
+        except ValueError as exc:
+            console.print(f"[red]{exc}[/red]")
+            raise typer.Exit(1) from exc
+    if not models:
+        console.print("No models cached. Set OPENROUTER_API_KEY and retry with --refresh")
+        raise typer.Exit(1)
+    table = Table(title=f"OpenRouter models ({len(models)})")
+    table.add_column("ID")
+    table.add_column("Name")
+    for m in models[:50]:
+        table.add_row(str(m.get("id", "")), str(m.get("name", ""))[:60])
+    console.print(table)
+    if len(models) > 50:
+        console.print(f"[dim]… and {len(models) - 50} more[/dim]")
+
+
+@models_app.command("recommend")
+def models_recommend(
+    task: str = typer.Option(..., "--task", help="Task description for model pick"),
+) -> None:
+    """Recommend a model for a task from cached listing."""
+    cache = ModelsCache()
+    models = cache.load()
+    if not models:
+        try:
+            cfg = Config.resolve()
+            models = cache.fetch(cfg.require_api_key())
+        except ValueError:
+            models = []
+    pick = recommend_model(task, models)
+    console.print(f"Recommended: [green]{pick}[/green]")
+
+
+@tools_app.command("list")
+def tools_list_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    include_mcp: bool = typer.Option(True, "--mcp/--no-mcp", help="Probe MCP tools"),
+) -> None:
+    """List built-in and MCP tools with descriptions."""
+    cfg = Config.resolve(cwd=cwd)
+    mcp_manager = None
+    if include_mcp:
+        mcp_cfg = load_mcp_config(cfg.config_path, cfg.cwd)
+        mcp_manager = McpManager(mcp_cfg)
+        try:
+            mcp_manager.connect_all(
+                on_failed=lambda s, e: console.print(f"[dim]MCP {s}: {e}[/dim]"),
+            )
+        except Exception:
+            pass
+    schemas = get_tool_schemas(mcp_manager, cfg, allow_spawn=cfg.multi_agent.enabled)
+    table = Table(title="Tools")
+    table.add_column("Name")
+    table.add_column("Description")
+    for sch in schemas:
+        fn = sch.get("function", {})
+        table.add_row(str(fn.get("name", "")), str(fn.get("description", ""))[:80])
+    console.print(table)
+    if mcp_manager:
+        mcp_manager.disconnect_all()
+
+
+@skills_app.command("doctor")
+def skills_doctor_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Check skills for missing frontmatter, duplicates, oversized bodies."""
+    root = (cwd or Path.cwd()).resolve()
+    report = skills_doctor_report(root)
+    if report["ok"] and not report["issues"]:
+        console.print("[green]All skills OK[/green]")
+        return
+    for issue in report["issues"]:
+        color = "red" if issue["level"] == "error" else "yellow"
+        console.print(f"[{color}]{issue['level']}[/] {issue['skill']}: {issue['message']}")
+    if not report["ok"]:
+        raise typer.Exit(1)
 
 
 @app.command("version")

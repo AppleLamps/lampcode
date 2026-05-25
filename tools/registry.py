@@ -9,6 +9,7 @@ from agent.execution.docker_files import docker_file_tools_enabled
 from agent.mcp.manager import McpManager
 from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem, WebSearchItem
 from tools.files import read_file, write_file
+from tools.git_commit import GIT_COMMIT_SCHEMA, git_commit
 from tools.patch import apply_patch
 from tools.search import search_repo
 from tools.shell import run_command
@@ -42,6 +43,11 @@ def get_tool_schemas(
     allow_spawn: bool = False,
 ) -> list[dict[str, Any]]:
     schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
+    if config:
+        from agent.git import detect_repo_root
+
+        if detect_repo_root(config.cwd):
+            schemas.append(GIT_COMMIT_SCHEMA)
     if config and config.web_search.enabled:
         schemas.append(WEB_SEARCH_SCHEMA)
     if config and config.multi_agent.enabled and allow_spawn:
@@ -61,6 +67,8 @@ def tool_requires_approval(
     if name in ("wait_workers", "list_workers", "get_worker_graph"):
         return False
     if name == "web_search":
+        return True
+    if name == "git_commit":
         return True
     if mcp_manager and mcp_manager.is_mcp_tool(name):
         return mcp_manager.requires_approval(name)
@@ -105,6 +113,18 @@ def dispatch_tool(
         item.status = "completed"
         text = format_results_for_model(results)
         return DispatchResult(text=text, web_search_item=item)
+
+    if name == "git_commit":
+        message = arguments.get("message", "")
+        all_files = bool(arguments.get("all", False))
+        output = git_commit(message, all_files=all_files, cwd=str(config.cwd))
+        item = CommandExecutionItem(
+            command=f"git commit -m {message!r}" + (" (all)" if all_files else ""),
+            cwd=str(config.cwd),
+            status="completed" if "failed" not in output.lower() else "failed",
+            output=output,
+        )
+        return DispatchResult(text=output, command_item=item)
 
     if name not in TOOL_REGISTRY:
         return DispatchResult(text=f"Unknown tool: {name}")
