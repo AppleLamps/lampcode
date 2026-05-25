@@ -873,6 +873,36 @@ class EventEmitter:
     def schedule_job_failed(self, job_id: str, **extra) -> None:
         self.emit(AgentEvent("schedule.job.failed", data={"job_id": job_id, **extra}))
 
+    def multi_agent_program_sync_conflict(
+        self,
+        *,
+        program_id: str,
+        node_ids: list[str] | None = None,
+        **extra,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "multi_agent.program.sync_conflict",
+                data={"program_id": program_id, "node_ids": node_ids or [], **extra},
+            )
+        )
+
+    def auth_webhook_received(self, *, event: str, subject: str = "", **extra) -> None:
+        self.emit(
+            AgentEvent(
+                "auth.webhook.received",
+                data={"event": event, "subject": subject, **extra},
+            )
+        )
+
+    def auth_session_revoked_bulk(self, *, event: str = "", subject: str = "", count: int = 0, **extra) -> None:
+        self.emit(
+            AgentEvent(
+                "auth.session.revoked_bulk",
+                data={"event": event, "subject": subject, "count": count, **extra},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

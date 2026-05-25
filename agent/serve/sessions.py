@@ -210,3 +210,8 @@ class SessionStore:
         with self._lock:
             self._purge_expired()
             return list(self._sessions.values())
+
+    def sessions_for_subject(self, subject: str) -> list[SessionRecord]:
+        with self._lock:
+            self._purge_expired()
+            return [s for s in self._sessions.values() if s.subject == subject]

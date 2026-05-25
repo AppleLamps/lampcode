@@ -126,8 +126,12 @@ class WorkerRegistry:
         if not ct.enabled or not program_scope:
             return
         from agent.multi_agent.program_state import ProgramNode
+        from agent.programs.sync.coordinator import get_coordinator
 
         program_id = self._resolve_program_id(parent_thread)
+        coord = get_coordinator(self._config)
+        if coord:
+            coord.pull_if_stale(program_id)
         self._program_id = program_id
         edges = [e.to_dict() for e in self._edges if e.to == record.worker_id]
         node = ProgramNode(

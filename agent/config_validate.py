@@ -253,4 +253,48 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
                 ValidationIssue("warning", "IDE diagnostics: eslint not on PATH")
             )
 
+    if serve.webhooks.enabled and not os.environ.get(serve.webhooks.shared_secret_env):
+        result.issues.append(
+            ValidationIssue(
+                "error",
+                f"serve.auth.webhooks.enabled but {serve.webhooks.shared_secret_env} not set",
+            )
+        )
+
+    sched = load_schedule_settings(cfg.config_path)
+    if sched.notifications.enabled and not sched.notifications.webhook_url:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "schedule.notifications.enabled but webhook_url empty — log-only mode",
+            )
+        )
+    if sched.notifications.enabled and sched.notifications.webhook_url:
+        secret_env = sched.notifications.webhook_secret_env
+        if not os.environ.get(secret_env):
+            result.issues.append(
+                ValidationIssue("warning", f"schedule notifications webhook secret {secret_env} not set")
+            )
+
+    ct = cfg.multi_agent.cross_thread
+    if ct.sync_enabled:
+        if ct.sync_backend == "s3":
+            if not ct.s3.bucket:
+                result.issues.append(ValidationIssue("error", "cross_thread.s3.bucket required when sync_backend=s3"))
+            if not os.environ.get(ct.s3.access_key_env) or not os.environ.get(ct.s3.secret_key_env):
+                result.issues.append(
+                    ValidationIssue(
+                        "warning",
+                        f"S3 sync credentials missing ({ct.s3.access_key_env}/{ct.s3.secret_key_env})",
+                    )
+                )
+        if ct.sign_program_state:
+            from agent.programs.sync.signing import key_paths
+
+            pub, priv = key_paths(ct.signing_key_id)
+            if not pub.is_file() or not priv.is_file():
+                result.issues.append(
+                    ValidationIssue("warning", f"Program signing keys missing for {ct.signing_key_id}")
+                )
+
     return result

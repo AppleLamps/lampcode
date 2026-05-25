@@ -16,6 +16,8 @@ from agent.models import Thread
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
 from agent.auth.policy.sessions import SessionRevocationRegistry
+from agent.auth.webhooks.revoke import revoke_for_event, verify_signature
+from agent.auth.webhooks.oidc_events import parse_oidc_event
 from agent.events import EventEmitter
 from agent.serve.approvals import ApprovalRegistry, map_api_decision
 from agent.serve.auth import authorize_request_v2, extract_bearer_token, extract_query_token, extract_session_token
@@ -175,6 +177,19 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             )
             return
 
+        if path == "/serve/webhooks/status":
+            ctx = self._get_ctx()
+            wh = ctx.settings.webhooks
+            self._json_response(
+                {
+                    "enabled": wh.enabled,
+                    "path": wh.path,
+                    "revoke_on_events": wh.revoke_on_events,
+                    "secret_configured": bool(__import__("os").environ.get(wh.shared_secret_env)),
+                }
+            )
+            return
+
         ctx = self._get_ctx()
         if ctx.settings.ide.enabled and path.startswith("/ide/"):
             self._ide_get(path, parsed)
@@ -300,6 +315,12 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         if path == "/auth/oidc/device/poll":
             self._oidc_device_poll()
+            return
+
+        ctx = self._get_ctx()
+        webhook_path = (ctx.settings.webhooks.path or "/auth/webhooks/oidc-events").rstrip("/") or "/auth/webhooks/oidc-events"
+        if ctx.settings.webhooks.enabled and path == webhook_path:
+            self._oidc_webhook()
             return
 
         if not self._authorize():
@@ -611,6 +632,40 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         if session_id and ctx.session_store:
             ctx.session_store.revoke_session(session_id)
         self._json_response({"ok": True})
+
+    def _oidc_webhook(self) -> None:
+        import os
+
+        ctx = self._get_ctx()
+        wh = ctx.settings.webhooks
+        if not wh.enabled:
+            self._error(404, "Webhooks disabled")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length) if length else b""
+        secret = os.environ.get(wh.shared_secret_env, "")
+        sig = self.headers.get("X-Agent-Signature") or self.headers.get("x-agent-signature") or ""
+        if not verify_signature(body, sig, secret):
+            MetricsCollector.global_collector().inc_labeled("agent_auth_webhook_total", "bad_signature")
+            self._error(401, "Invalid signature")
+            return
+        try:
+            payload = json.loads(body.decode("utf-8") or "{}")
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+        event = parse_oidc_event(payload)
+        if ctx.emitter:
+            ctx.emitter.auth_webhook_received(event=event.get("event", ""), subject=event.get("subject", ""))
+        result = revoke_for_event(
+            event,
+            session_store=ctx.session_store,
+            registry=ctx.revocation_registry,
+            revoke_on_events=wh.revoke_on_events,
+            revoke_all_subject_sessions=wh.revoke_all_subject_sessions,
+            emitter=ctx.emitter,
+        )
+        self._json_response({"ok": True, **result})
 
     def _oidc_login_redirect(self) -> None:
         ctx = self._get_ctx()

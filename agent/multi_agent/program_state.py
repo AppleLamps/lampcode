@@ -112,7 +112,19 @@ class ProgramStore:
         state.updated_at = time.time()
         path = self.path_for(state.program_id)
         path.write_text(json.dumps(state.to_dict(), indent=2), encoding="utf-8")
+        self._after_mutation(state.program_id)
         return path
+
+    def _after_mutation(self, program_id: str) -> None:
+        try:
+            from agent.config import Config
+            from agent.programs.sync.coordinator import get_coordinator
+
+            coord = get_coordinator(Config.resolve())
+            if coord:
+                coord.schedule_push(program_id)
+        except Exception:
+            pass
 
     def list_programs(self) -> list[str]:
         return sorted(p.stem for p in self.base_dir.glob("*.json"))
@@ -121,6 +133,7 @@ class ProgramStore:
         path = self.path_for(program_id)
         if path.is_file():
             path.unlink()
+            self._after_mutation(program_id)
             return True
         return False
 

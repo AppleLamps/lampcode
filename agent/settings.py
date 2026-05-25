@@ -236,11 +236,35 @@ class ExecutionSettings:
 
 
 @dataclass
+class CrossThreadGitSyncSettings:
+    repo_path: str = ".agent-cli/program-sync"
+    branch: str = "agent-programs"
+    remote: str = "origin"
+    auto_commit_message: str = "agent-cli program sync"
+
+
+@dataclass
+class CrossThreadS3SyncSettings:
+    endpoint_url: str = "https://s3.amazonaws.com"
+    bucket: str = ""
+    prefix: str = "programs/"
+    access_key_env: str = "AGENT_S3_ACCESS_KEY"
+    secret_key_env: str = "AGENT_S3_SECRET_KEY"
+
+
+@dataclass
 class CrossThreadSettings:
     enabled: bool = False
     program_id_auto: bool = True
     state_dir: str = "~/.agent-cli/programs"
     max_threads_linked: int = 20
+    sync_enabled: bool = False
+    sync_backend: str = "git"
+    sync_interval_sec: int = 60
+    sign_program_state: bool = True
+    signing_key_id: str = "program-sync"
+    git: CrossThreadGitSyncSettings = field(default_factory=CrossThreadGitSyncSettings)
+    s3: CrossThreadS3SyncSettings = field(default_factory=CrossThreadS3SyncSettings)
 
 
 @dataclass
@@ -320,11 +344,37 @@ class RbacUser:
     role: str = "viewer"
 
 
+from agent.auth.policy.rules import ServePolicySettings
+
+
+@dataclass
+class ServeWebhookSettings:
+    enabled: bool = False
+    path: str = "/auth/webhooks/oidc-events"
+    shared_secret_env: str = "AGENT_WEBHOOK_SECRET"
+    revoke_on_events: list[str] = field(
+        default_factory=lambda: ["role_changed", "session_revoked", "password_changed"]
+    )
+    revoke_all_subject_sessions: bool = True
+
+
 @dataclass
 class ServeRbacSettings:
     enabled: bool = False
     default_role: str = "viewer"
     users: list[RbacUser] = field(default_factory=list)
+
+
+@dataclass
+class ScheduleNotificationSettings:
+    enabled: bool = False
+    webhook_url: str = ""
+    webhook_secret_env: str = "AGENT_SCHEDULE_WEBHOOK_SECRET"
+    on_events: list[str] = field(default_factory=lambda: ["failed", "budget_exceeded", "completed"])
+    timeout_sec: int = 10
+    retry_count: int = 2
+    include_transcript_snippet: bool = True
+    max_snippet_chars: int = 4000
 
 
 @dataclass
@@ -335,6 +385,7 @@ class ScheduleSettings:
     default_approval_mode: str = "interactive"
     allow_unattended_auto: bool = False
     state_file: str = "~/.agent-cli/schedules.json"
+    notifications: ScheduleNotificationSettings = field(default_factory=ScheduleNotificationSettings)
 
 
 @dataclass
@@ -357,6 +408,7 @@ class ServeSettings:
     oidc: "ServeOidcSettings | None" = None
     ide: ServeIdeSettings = field(default_factory=ServeIdeSettings)
     policy: ServePolicySettings = field(default_factory=ServePolicySettings)
+    webhooks: ServeWebhookSettings = field(default_factory=ServeWebhookSettings)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -525,6 +577,12 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
     ct = ma.get("cross_thread", {})
     if not isinstance(ct, dict):
         ct = {}
+    git_raw = ct.get("git", {})
+    if not isinstance(git_raw, dict):
+        git_raw = {}
+    s3_raw = ct.get("s3", {})
+    if not isinstance(s3_raw, dict):
+        s3_raw = {}
     return MultiAgentSettings(
         enabled=bool(ma.get("enabled", False)),
         max_workers_per_turn=int(ma.get("max_workers_per_turn", 5)),
@@ -553,6 +611,24 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
             program_id_auto=bool(ct.get("program_id_auto", True)),
             state_dir=str(ct.get("state_dir", "~/.agent-cli/programs")),
             max_threads_linked=int(ct.get("max_threads_linked", 20)),
+            sync_enabled=bool(ct.get("sync_enabled", False)),
+            sync_backend=str(ct.get("sync_backend", "git")),
+            sync_interval_sec=int(ct.get("sync_interval_sec", 60)),
+            sign_program_state=bool(ct.get("sign_program_state", True)),
+            signing_key_id=str(ct.get("signing_key_id", "program-sync")),
+            git=CrossThreadGitSyncSettings(
+                repo_path=str(git_raw.get("repo_path", ".agent-cli/program-sync")),
+                branch=str(git_raw.get("branch", "agent-programs")),
+                remote=str(git_raw.get("remote", "origin")),
+                auto_commit_message=str(git_raw.get("auto_commit_message", "agent-cli program sync")),
+            ),
+            s3=CrossThreadS3SyncSettings(
+                endpoint_url=str(s3_raw.get("endpoint_url", "https://s3.amazonaws.com")),
+                bucket=str(s3_raw.get("bucket", "")),
+                prefix=str(s3_raw.get("prefix", "programs/")),
+                access_key_env=str(s3_raw.get("access_key_env", "AGENT_S3_ACCESS_KEY")),
+                secret_key_env=str(s3_raw.get("secret_key_env", "AGENT_S3_SECRET_KEY")),
+            ),
         ),
     )
 
@@ -744,6 +820,19 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
     from agent.auth.policy.rules import load_policy_settings
 
     policy = load_policy_settings(auth_raw if isinstance(auth_raw, dict) else {})
+    webhooks_raw = auth_raw.get("webhooks", {}) if isinstance(auth_raw, dict) else {}
+    if not isinstance(webhooks_raw, dict):
+        webhooks_raw = {}
+    revoke_events = webhooks_raw.get("revoke_on_events", ["role_changed", "session_revoked", "password_changed"])
+    if not isinstance(revoke_events, list):
+        revoke_events = ["role_changed", "session_revoked", "password_changed"]
+    webhooks = ServeWebhookSettings(
+        enabled=bool(webhooks_raw.get("enabled", False)),
+        path=str(webhooks_raw.get("path", "/auth/webhooks/oidc-events")),
+        shared_secret_env=str(webhooks_raw.get("shared_secret_env", "AGENT_WEBHOOK_SECRET")),
+        revoke_on_events=[str(x) for x in revoke_events],
+        revoke_all_subject_sessions=bool(webhooks_raw.get("revoke_all_subject_sessions", True)),
+    )
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
@@ -796,6 +885,7 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             ),
         ),
         policy=policy,
+        webhooks=webhooks,
     )
 
 
@@ -804,6 +894,12 @@ def load_schedule_settings(path: Path | None = None) -> ScheduleSettings:
     sched = data.get("schedule", {})
     if not isinstance(sched, dict):
         sched = {}
+    notif_raw = sched.get("notifications", {})
+    if not isinstance(notif_raw, dict):
+        notif_raw = {}
+    on_events = notif_raw.get("on_events", ["failed", "budget_exceeded", "completed"])
+    if not isinstance(on_events, list):
+        on_events = ["failed", "budget_exceeded", "completed"]
     return ScheduleSettings(
         enabled=bool(sched.get("enabled", False)),
         require_budgets=bool(sched.get("require_budgets", True)),
@@ -811,6 +907,16 @@ def load_schedule_settings(path: Path | None = None) -> ScheduleSettings:
         default_approval_mode=str(sched.get("default_approval_mode", "interactive")),
         allow_unattended_auto=bool(sched.get("allow_unattended_auto", False)),
         state_file=str(sched.get("state_file", "~/.agent-cli/schedules.json")),
+        notifications=ScheduleNotificationSettings(
+            enabled=bool(notif_raw.get("enabled", False)),
+            webhook_url=str(notif_raw.get("webhook_url", "")),
+            webhook_secret_env=str(notif_raw.get("webhook_secret_env", "AGENT_SCHEDULE_WEBHOOK_SECRET")),
+            on_events=[str(x) for x in on_events],
+            timeout_sec=int(notif_raw.get("timeout_sec", 10)),
+            retry_count=int(notif_raw.get("retry_count", 2)),
+            include_transcript_snippet=bool(notif_raw.get("include_transcript_snippet", True)),
+            max_snippet_chars=int(notif_raw.get("max_snippet_chars", 4000)),
+        ),
     )
 
 
