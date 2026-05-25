@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://agent-cli.local/schemas/review.v1.json",
+  "title": "agent-cli review report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "summary",
+    "findings",
+    "severity_counts",
+    "suggested_fixes",
+    "test_gaps",
+    "thread_id",
+    "model"
+  ],
+  "properties": {
+    "schema_version": { "type": "string", "const": "v1" },
+    "summary": { "type": "string" },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["severity", "title", "detail"],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["critical", "major", "minor", "nit"]
+          },
+          "title": { "type": "string" },
+          "detail": { "type": "string" },
+          "file": { "type": ["string", "null"] },
+          "line": { "type": ["integer", "null"] }
+        },
+        "additionalProperties": false
+      }
+    },
+    "severity_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer" }
+    },
+    "suggested_fixes": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "test_gaps": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "thread_id": { "type": "string" },
+    "model": { "type": "string" },
+    "cost": { "type": ["number", "null"] }
+  },
+  "additionalProperties": false
+}

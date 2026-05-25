@@ -181,15 +181,43 @@ def _section(text: str, name: str) -> str:
     return m.group(1).strip() if m else ""
 
 
+REVIEW_SCHEMA_VERSION = "v1"
+
+SEVERITY_RANK = {
+    "critical": 4,
+    "major": 3,
+    "minor": 2,
+    "nit": 1,
+}
+
+
+def parse_fail_on_severities(raw: str) -> list[str]:
+    parts = [p.strip().lower() for p in raw.split(",") if p.strip()]
+    return [p for p in parts if p in SEVERITY_RANK]
+
+
+def review_exceeds_fail_threshold(report: ReviewReport, fail_on: list[str]) -> bool:
+    if not fail_on:
+        return False
+    threshold = min(SEVERITY_RANK[s] for s in fail_on if s in SEVERITY_RANK)
+    for finding in report.findings:
+        rank = SEVERITY_RANK.get(finding.severity, 0)
+        if rank >= threshold:
+            return True
+    return False
+
+
 def review_report_to_json(
     report: ReviewReport,
     *,
     thread_id: str,
     model: str,
     cost: float | None,
+    schema_version: str = REVIEW_SCHEMA_VERSION,
 ) -> str:
     return json.dumps(
         {
+            "schema_version": schema_version,
             "summary": report.summary,
             "findings": [
                 {

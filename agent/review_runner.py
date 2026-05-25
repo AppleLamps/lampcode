@@ -12,6 +12,7 @@ from agent.models import AgentMessageItem, Thread, new_id, utc_now_iso
 from agent.review import (
     REVIEW_SYSTEM_APPEND,
     ReviewContext,
+    ReviewReport,
     build_review_user_prompt,
     collect_review_context,
     parse_review_markdown,
@@ -34,6 +35,7 @@ class ReviewRunResult:
     report_markdown: str
     report_json: str | None
     structured: dict[str, Any] | None
+    report: ReviewReport | None = None
 
 
 def run_review(
@@ -127,4 +129,5 @@ def run_review(
         report_markdown=report.raw_markdown or final_text,
         report_json=report_json,
         structured=structured,
+        report=report,
     )

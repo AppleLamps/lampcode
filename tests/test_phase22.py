@@ -399,6 +399,7 @@ def test_review_report_to_json() -> None:
         raw_markdown="md",
     )
     payload = json.loads(review_report_to_json(report, thread_id="t", model="m", cost=0.01))
+    assert payload["schema_version"] == "v1"
     assert payload["severity_counts"]["major"] == 1
 
 
