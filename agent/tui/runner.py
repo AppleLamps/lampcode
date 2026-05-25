@@ -37,6 +37,8 @@ def launch_tui(
     cwd: Path | None = None,
     thread_id: str | None = None,
     resume_last: bool = False,
+    profile: str | None = None,
+    model_profile: str | None = None,
 ) -> None:
     ok, message = check_tui_available()
     if not ok:
@@ -49,6 +51,8 @@ def launch_tui(
         cwd=cwd,
         thread_id=thread_id,
         resume_last=resume_last,
+        profile=profile,
+        model_profile=model_profile,
     )
     app.run()
 

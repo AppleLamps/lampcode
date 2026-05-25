@@ -1,13 +1,20 @@
 from __future__ import annotations
 
+import json
 import sys
 from pathlib import Path
 from typing import Callable
 
 from agent.config import Config
+from agent.events import build_event_emitter
 from agent.loop import run_turn
 from agent.models import Thread, new_id
-from agent.profiles import merge_layered_config, apply_merged_to_resolve_kwargs, thread_cost_summary
+from agent.output_handler import OutputHandler, format_run_summary
+from agent.profiles import (
+    apply_merged_to_resolve_kwargs,
+    merge_layered_config,
+    thread_cost_summary,
+)
 from agent.session import HarnessSession
 from agent.store import ThreadStore
 
@@ -24,6 +31,8 @@ class ReplSession:
         thread: Thread | None = None,
         print_fn: ReplHandler | None = None,
         input_fn: Callable[[], str] | None = None,
+        profile: str | None = None,
+        model_profile: str | None = None,
     ) -> None:
         self.config = config
         self.store = store or ThreadStore()
@@ -32,11 +41,27 @@ class ReplSession:
         self._input = input_fn or (lambda: input("> "))
         self.session = HarnessSession()
         self.model_override: str | None = None
+        self.profile_override = profile
+        self.model_profile_override = model_profile
+        self.output = OutputHandler(quiet_tools=False)
+
+    def _resolve_config(self) -> Config:
+        merged = merge_layered_config(
+            self.config.cwd,
+            cli_profile=self.profile_override,
+            cli_model_profile=self.model_profile_override,
+            cli_model=self.model_override,
+        )
+        kwargs = apply_merged_to_resolve_kwargs(merged)
+        if self.config.auto_approve:
+            kwargs["auto_approve"] = True
+        return Config.resolve(cwd=self.config.cwd, **kwargs)
 
     def _ensure_thread(self) -> Thread:
         if self.thread:
             return self.thread
-        self.thread = Thread(id=new_id(), cwd=str(self.config.cwd), model=self.config.model)
+        cfg = self._resolve_config()
+        self.thread = Thread(id=new_id(), cwd=str(cfg.cwd), model=cfg.model)
         self.store.create_thread(self.thread)
         return self.thread
 
@@ -48,17 +73,22 @@ class ReplSession:
         if stripped.startswith("/"):
             return self._handle_command(stripped)
         thread = self._ensure_thread()
-        cfg = self.config
-        if self.model_override:
-            cfg = Config.resolve(cwd=cfg.cwd, model=self.model_override, config_path=cfg.config_path)
-        turn = run_turn(thread, stripped, cfg, self.store, harness_session=self.session)
+        cfg = self._resolve_config()
+        emitter = build_event_emitter(self.output.handle)
+        turn = run_turn(
+            thread,
+            stripped,
+            cfg,
+            self.store,
+            events=emitter,
+            harness_session=self.session,
+            session_auto_approve=cfg.auto_approve,
+        )
         for item in reversed(turn.items):
             if item.type == "agentMessage":
                 self._print(item.text)
                 break
-        cost = thread_cost_summary(thread)
-        if cost.get("estimated_cost_usd"):
-            self._print(f"[cost: ${cost['estimated_cost_usd']:.4f} | model: {turn.usage.model_used or cfg.model}]")
+        self._print(format_run_summary(turn))
         return True
 
     def _handle_command(self, cmd: str) -> bool:
@@ -72,12 +102,10 @@ class ReplSession:
             t = self._ensure_thread()
             self._print(f"thread {t.id} ({len(t.turns)} turns)")
             return True
-        if name == "/cost":
+        if name == "/cost" or name == "/usage":
             if not self.thread:
                 self._print("No thread yet")
             else:
-                import json
-
                 self._print(json.dumps(thread_cost_summary(self.thread), indent=2))
             return True
         if name == "/model":
@@ -87,6 +115,20 @@ class ReplSession:
             else:
                 self._print(self.model_override or self.config.model)
             return True
+        if name == "/profile":
+            if arg:
+                self.profile_override = arg
+                self._print(f"Profile set to {arg}")
+            else:
+                self._print(self.profile_override or "(default)")
+            return True
+        if name in ("/model-profile", "/modelprofile"):
+            if arg:
+                self.model_profile_override = arg
+                self._print(f"Model profile set to {arg}")
+            else:
+                self._print(self.model_profile_override or "(default)")
+            return True
         if name == "/clear":
             self.thread = None
             self._print("Started fresh thread context")
@@ -95,12 +137,19 @@ class ReplSession:
             from agent.skills.discovery import discover_skills
 
             skills = discover_skills(self.config.cwd)
-            self._print(", ".join(s.name for s in skills) or "(none)")
+            names = [s.name for s in skills]
+            if arg:
+                prefix = arg.lower()
+                names = [n for n in names if n.lower().startswith(prefix)]
+            self._print(", ".join(names) or "(none)")
             return True
         if name == "/compact":
             self._print("Compaction runs automatically when context threshold is reached")
             return True
-        self._print(f"Unknown command {name}. Try /quit, /thread, /cost, /model, /skills")
+        self._print(
+            "Unknown command. Try /quit, /thread, /cost, /model, /profile, "
+            "/model-profile, /skills, /usage"
+        )
         return True
 
     def run(self) -> None:
@@ -132,4 +181,10 @@ def run_repl(
         threads = [t for t in store.list_threads() if Path(t.cwd).resolve() == cwd]
         if threads:
             thread = max(threads, key=lambda t: t.updated_at)
-    ReplSession(config=config, store=store, thread=thread).run()
+    ReplSession(
+        config=config,
+        store=store,
+        thread=thread,
+        profile=profile,
+        model_profile=model_profile,
+    ).run()

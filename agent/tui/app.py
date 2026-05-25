@@ -11,6 +11,7 @@ from textual.widgets import Footer, Input, Label, ListItem, ListView, RichLog, S
 
 from agent.cancel import CancelToken, CancelledError
 from agent.config import Config
+from agent.profiles import merge_layered_config, apply_merged_to_resolve_kwargs, thread_cost_summary
 from agent.events import AgentEvent
 from agent.execution.factory import backend_display
 from agent.git import detect_repo_root
@@ -50,9 +51,21 @@ class AgentTuiApp(App):
         cwd: Path | None = None,
         thread_id: str | None = None,
         resume_last: bool = False,
+        profile: str | None = None,
+        model_profile: str | None = None,
     ) -> None:
         super().__init__()
-        self._config = Config.resolve(cwd=cwd)
+        resolved_cwd = (cwd or Path.cwd()).resolve()
+        merged = merge_layered_config(
+            resolved_cwd,
+            cli_profile=profile,
+            cli_model_profile=model_profile,
+        )
+        kwargs = apply_merged_to_resolve_kwargs(merged)
+        self._config = Config.resolve(cwd=resolved_cwd, **kwargs)
+        self._profile = profile or merged.get("profile", "")
+        self._model_profile = model_profile or merged.get("model_profile", "")
+        self._last_turn_cost: float | None = None
         self._config.require_api_key()
         self._store = ThreadStore()
         self._run_store = RunStore()
@@ -130,8 +143,23 @@ class AgentTuiApp(App):
         isolation = "on" if self._config.use_isolation else "off"
         backend = backend_display(self._config)
         thread_label = self._thread.display_label() if self._thread else "(new thread)"
+        profile_bits = []
+        if self._profile:
+            profile_bits.append(f"profile={self._profile}")
+        if self._model_profile:
+            profile_bits.append(f"model-profile={self._model_profile}")
+        profile_str = " | ".join(profile_bits)
+        if profile_str:
+            profile_str = f" | {profile_str}"
+        cost_str = ""
+        if self._last_turn_cost is not None:
+            cost_str = f" | last cost≈${self._last_turn_cost:.4f}"
+        elif self._thread:
+            summary = thread_cost_summary(self._thread)
+            if summary.get("estimated_cost_usd"):
+                cost_str = f" | thread cost≈${summary['estimated_cost_usd']:.4f}"
         meta.update(
-            f"cwd: {self._config.cwd.name} | model: {self._config.model} | "
+            f"cwd: {self._config.cwd.name} | model: {self._config.model}{profile_str}{cost_str} | "
             f"sandbox: {sandbox} | exec: {backend} | isolation: {isolation} | thread: {thread_label}"
         )
 
@@ -150,9 +178,9 @@ class AgentTuiApp(App):
             return
         thread_id = self._thread_id_by_index[index]
         self._thread = self._store.load_thread(thread_id)
-            self._state.transcript = thread_transcript_from_store(self._thread)
-            self._refresh_meta()
-            self._render_transcript()
+        self._state.transcript = thread_transcript_from_store(self._thread)
+        self._refresh_meta()
+        self._render_transcript()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -224,10 +252,20 @@ class AgentTuiApp(App):
 
     def _handle_event(self, event: AgentEvent) -> None:
         self._state = apply_event_to_state(self._state, event)
+        if event.type == "turn.completed" and self._thread:
+            if self._thread.turns:
+                last = self._thread.turns[-1]
+                if last.usage.estimated_cost_usd:
+                    self._last_turn_cost = last.usage.estimated_cost_usd
         self._render_transcript()
 
     def _turn_finished(self) -> None:
         self._turn_running = False
+        if self._thread:
+            try:
+                self._thread = self._store.load_thread(self._thread.id)
+            except FileNotFoundError:
+                pass
         self._load_threads()
         self._refresh_meta()
 
