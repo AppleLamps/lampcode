@@ -676,6 +676,42 @@ class EventEmitter:
             )
         )
 
+    def sandbox_kernel_selected(
+        self, thread_id: str | None, turn_id: str | None, *, backend: str, mode: str
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.kernel.selected",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"backend": backend, "mode": mode},
+            )
+        )
+
+    def sandbox_kernel_applied(
+        self, thread_id: str | None, turn_id: str | None, *, backend: str, mode: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.kernel.applied",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"backend": backend, "mode": mode, **extra},
+            )
+        )
+
+    def sandbox_kernel_fallback(
+        self, thread_id: str | None, turn_id: str | None, *, reason: str, **extra
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "sandbox.kernel.fallback",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"reason": reason, **extra},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

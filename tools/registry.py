@@ -137,6 +137,10 @@ def dispatch_tool(
             item.image = exec_meta.get("image")
             item.remote_host = exec_meta.get("remote_host")
             item.remote_user = exec_meta.get("remote_user")
+            item.kernel_backend = exec_meta.get("kernel_backend")
+            il = exec_meta.get("isolation_level")
+            if il in ("heuristic", "profile", "kernel"):
+                item.isolation_level = il
         return DispatchResult(
             text=output,
             command_item=item,

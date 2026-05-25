@@ -31,6 +31,7 @@ from agent.settings import (
     load_openrouter_settings,
     load_recording_settings,
     load_sandbox_profile_settings,
+    load_kernel_sandbox_settings,
     load_telemetry_settings,
     load_web_search_settings,
 )
@@ -124,6 +125,9 @@ class Config:
     multi_agent: MultiAgentSettings = field(default_factory=MultiAgentSettings)
     telemetry: TelemetrySettings = field(default_factory=TelemetrySettings)
     sandbox_profiles: SandboxProfileSettings = field(default_factory=SandboxProfileSettings)
+    sandbox_kernel: Any = field(default_factory=lambda: __import__(
+        "agent.sandbox.kernel", fromlist=["KernelSandboxSettings"]
+    ).KernelSandboxSettings())
     openrouter_api_key: str | None = None
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
@@ -252,6 +256,7 @@ class Config:
         multi_agent_cfg = load_multi_agent_settings(resolved_config_path)
         telemetry_cfg = load_telemetry_settings(resolved_config_path)
         sandbox_profiles_cfg = load_sandbox_profile_settings(resolved_config_path)
+        sandbox_kernel_cfg = load_kernel_sandbox_settings(resolved_config_path)
 
         if os.environ.get("AGENT_OTEL_ENABLED", "").strip().lower() in ("1", "true", "yes"):
             telemetry_cfg.enabled = True
@@ -297,6 +302,7 @@ class Config:
             multi_agent=multi_agent_cfg,
             telemetry=telemetry_cfg,
             sandbox_profiles=sandbox_profiles_cfg,
+            sandbox_kernel=sandbox_kernel_cfg,
             openrouter_api_key=api_key,
             openrouter_base_url=base_url,
             config_path=resolved_config_path,

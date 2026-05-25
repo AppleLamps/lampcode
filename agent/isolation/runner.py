@@ -52,6 +52,8 @@ def run_isolated_command(
     settings: IsolationSettings,
     source_env: dict[str, str] | None = None,
     kill_tree: Callable[[int], None] | None = None,
+    argv: list[str] | None = None,
+    use_shell: bool = True,
 ) -> IsolationResult:
     """Run shell command with env hardening and strict cwd lock."""
     locked_cwd = enforce_workdir(cwd, workdir)
@@ -65,21 +67,26 @@ def run_isolated_command(
     start = time.monotonic()
     kill_fn = kill_tree or kill_process_tree
     popen_kwargs: dict = {
-        "shell": True,
         "cwd": str(locked_cwd),
         "env": env,
         "stdout": subprocess.PIPE,
         "stderr": subprocess.PIPE,
         "text": True,
     }
+    if argv:
+        popen_kwargs["args"] = argv
+        popen_kwargs["shell"] = False
+    else:
+        popen_kwargs["args"] = cmd
+        popen_kwargs["shell"] = use_shell
+        if sys.platform != "win32":
+            popen_kwargs["executable"] = "/bin/bash"
     if sys.platform == "win32":
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP  # type: ignore[attr-defined]
     else:
         popen_kwargs["start_new_session"] = True
-    if sys.platform != "win32":
-        popen_kwargs["executable"] = "/bin/bash"
 
-    proc = subprocess.Popen(cmd, **popen_kwargs)
+    proc = subprocess.Popen(**popen_kwargs)
     pid = proc.pid
     try:
         stdout, stderr = proc.communicate(timeout=timeout)

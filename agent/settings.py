@@ -277,6 +277,7 @@ class ServeSettings:
     session_persist: bool = True
     tls: ServeTlsSettings = field(default_factory=ServeTlsSettings)
     rbac: ServeRbacSettings = field(default_factory=ServeRbacSettings)
+    oidc: "ServeOidcSettings | None" = None
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -497,6 +498,57 @@ def load_sandbox_profile_settings(path: Path | None = None) -> SandboxProfileSet
     )
 
 
+def load_kernel_sandbox_settings(path: Path | None = None):
+    from agent.sandbox.kernel import (
+        KernelLinuxSettings,
+        KernelMacosSettings,
+        KernelSandboxSettings,
+        KernelWindowsSettings,
+    )
+
+    data = _load_toml(path or default_config_path())
+    sk = data.get("sandbox", {}).get("kernel", data.get("sandbox_kernel", {}))
+    if not isinstance(sk, dict):
+        sk = {}
+    linux_raw = sk.get("linux", {})
+    if not isinstance(linux_raw, dict):
+        linux_raw = {}
+    mac_raw = sk.get("macos", {})
+    if not isinstance(mac_raw, dict):
+        mac_raw = {}
+    win_raw = sk.get("windows", {})
+    if not isinstance(win_raw, dict):
+        win_raw = {}
+    ro = linux_raw.get("ro_bind_paths", ["/usr", "/lib", "/bin"])
+    if not isinstance(ro, list):
+        ro = ["/usr", "/lib", "/bin"]
+    apply_to = sk.get("apply_to", ["run_command"])
+    if not isinstance(apply_to, list):
+        apply_to = ["run_command"]
+    return KernelSandboxSettings(
+        enabled=bool(sk.get("enabled", False)),
+        backend=str(sk.get("backend", "auto")),
+        fail_open=bool(sk.get("fail_open", True)),
+        apply_to=[str(x) for x in apply_to],
+        linux=KernelLinuxSettings(
+            bwrap_binary=str(linux_raw.get("bwrap_binary", "bwrap")),
+            unshare_user=bool(linux_raw.get("unshare_user", False)),
+            ro_bind_paths=[str(x) for x in ro],
+            allow_network=bool(linux_raw.get("allow_network", False)),
+        ),
+        macos=KernelMacosSettings(
+            sandbox_exec=str(mac_raw.get("sandbox_exec", "/usr/bin/sandbox-exec")),
+            profile_template=str(mac_raw.get("profile_template", "workspace-write")),
+        ),
+        windows=KernelWindowsSettings(
+            use_restricted_token=bool(win_raw.get("use_restricted_token", True)),
+            job_object_memory_mb=int(win_raw.get("job_object_memory_mb", 1024)),
+            job_object_cpu_rate=int(win_raw.get("job_object_cpu_rate", 50)),
+            allow_network=bool(win_raw.get("allow_network", False)),
+        ),
+    )
+
+
 def load_serve_settings(path: Path | None = None) -> ServeSettings:
     data = _load_toml(path or default_config_path())
     serve = data.get("serve", {})
@@ -521,11 +573,44 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
                     role=str(u.get("role", "viewer")),
                 )
             )
+    auth_raw = serve.get("auth", {})
+    if not isinstance(auth_raw, dict):
+        auth_raw = {}
+    auth_mode = str(auth_raw.get("mode", serve.get("auth_mode", "bearer")))
+    session_ttl = int(auth_raw.get("session_ttl_sec", serve.get("session_ttl_sec", 28800)))
+    oidc_cfg = None
+    oidc_raw = auth_raw.get("oidc", serve.get("oidc", {}))
+    if isinstance(oidc_raw, dict) and oidc_raw.get("issuer_url"):
+        from agent.serve.oidc import OidcRoleMapping, ServeOidcSettings
+
+        rm_raw = oidc_raw.get("role_mapping", {})
+        if not isinstance(rm_raw, dict):
+            rm_raw = {}
+        admin_g = rm_raw.get("admin_groups", [])
+        op_g = rm_raw.get("operator_groups", [])
+        scopes = oidc_raw.get("scopes", ["openid", "profile", "email"])
+        oidc_cfg = ServeOidcSettings(
+            enabled=True,
+            issuer_url=str(oidc_raw.get("issuer_url", "")),
+            client_id=str(oidc_raw.get("client_id", "")),
+            client_secret=str(oidc_raw.get("client_secret", "")),
+            redirect_uri=str(oidc_raw.get("redirect_uri", "https://127.0.0.1:8765/auth/oidc/callback")),
+            scopes=[str(s) for s in scopes] if isinstance(scopes, list) else ["openid", "profile", "email"],
+            pkce=bool(oidc_raw.get("pkce", True)),
+            session_ttl_sec=int(oidc_raw.get("session_ttl_sec", session_ttl)),
+            role_mapping=OidcRoleMapping(
+                admin_groups=[str(x) for x in admin_g] if isinstance(admin_g, list) else [],
+                operator_groups=[str(x) for x in op_g] if isinstance(op_g, list) else [],
+                default_role=str(rm_raw.get("default_role", "viewer")),
+                claim_groups_key=str(rm_raw.get("claim_groups_key", "groups")),
+                claim_email_key=str(rm_raw.get("claim_email_key", "email")),
+            ),
+        )
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
-        auth_token=str(serve.get("auth_token", "")),
-        auth_mode=str(serve.get("auth_mode", "bearer")),
+        auth_token=str(serve.get("auth_token", auth_raw.get("legacy_token", ""))),
+        auth_mode=auth_mode,
         allow_remote_bind=bool(serve.get("allow_remote_bind", False)),
         enable_control=bool(serve.get("enable_control", True)),
         enable_turn_start=bool(serve.get("enable_turn_start", False)),
@@ -533,7 +618,7 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
         approval_timeout_sec=int(serve.get("approval_timeout_sec", 300)),
         stream_buffer_size=int(serve.get("stream_buffer_size", 256)),
         cors=bool(serve.get("cors", False)),
-        session_ttl_sec=int(serve.get("session_ttl_sec", 28800)),
+        session_ttl_sec=session_ttl,
         session_persist=bool(serve.get("session_persist", True)),
         tls=ServeTlsSettings(
             enabled=bool(tls_raw.get("enabled", False)),
@@ -546,6 +631,7 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             default_role=str(rbac_raw.get("default_role", "viewer")),
             users=users,
         ),
+        oidc=oidc_cfg,
     )
 
 

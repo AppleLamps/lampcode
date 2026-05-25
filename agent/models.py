@@ -50,6 +50,8 @@ class CommandExecutionItem(BaseModel):
     image: str | None = None
     remote_host: str | None = None
     remote_user: str | None = None
+    kernel_backend: str | None = None
+    isolation_level: Literal["heuristic", "profile", "kernel"] | None = None
 
 
 class FileChangeItem(BaseModel):

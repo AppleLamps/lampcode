@@ -128,6 +128,38 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
         if not key.is_file():
             result.issues.append(ValidationIssue("error", f"TLS key missing: {key}"))
 
+    if serve.oidc and serve.oidc.enabled:
+        if not serve.oidc.issuer_url or not serve.oidc.client_id:
+            result.issues.append(
+                ValidationIssue("error", "OIDC enabled but issuer_url or client_id missing")
+            )
+        if not serve.tls.enabled:
+            result.issues.append(
+                ValidationIssue(
+                    "error",
+                    "OIDC requires TLS enabled (serve.tls.enabled=true)",
+                )
+            )
+        if not serve.rbac.enabled:
+            result.issues.append(
+                ValidationIssue(
+                    "warning",
+                    "OIDC enabled without RBAC — role mapping still applies but local RBAC table unused",
+                )
+            )
+
+    if cfg.sandbox_kernel.enabled:
+        from agent.sandbox.kernel.doctor import probe_capabilities
+
+        cap = probe_capabilities(cfg.sandbox_kernel)
+        if not cap.get("available"):
+            result.issues.append(
+                ValidationIssue(
+                    "warning",
+                    f"Kernel sandbox enabled but {cap.get('backend')} unavailable — will fail_open={cfg.sandbox_kernel.fail_open}",
+                )
+            )
+
     import os
 
     if not os.environ.get("OPENROUTER_API_KEY") and not getattr(cfg, "openrouter_api_key", None):
