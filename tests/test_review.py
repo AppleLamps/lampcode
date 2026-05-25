@@ -119,5 +119,5 @@ def test_review_read_only_blocks_patch(tmp_path: Path, monkeypatch: pytest.Monke
     cfg = Config.resolve(cwd=tmp_path, skip_git_check=True)
     cfg.sandbox_mode = SandboxMode.READ_ONLY
     mcp = McpManager({})
-    reason = _precheck_tool("apply_patch", {"patch": "x"}, cfg, mcp, read_only_review=True)
+    reason, _retryable = _precheck_tool("apply_patch", {"patch": "x"}, cfg, mcp, read_only_review=True)
     assert reason and "read-only review" in reason
