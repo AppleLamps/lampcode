@@ -6,15 +6,8 @@ from typing import Any, Callable
 
 import httpx
 
+from agent.cancel import CancelToken
 from agent.config import Config
-
-
-@dataclass
-class StreamDelta:
-    content: str = ""
-    tool_calls: list[dict[str, Any]] = field(default_factory=list)
-    finish_reason: str | None = None
-    usage: dict[str, int] | None = None
 
 
 @dataclass
@@ -35,12 +28,47 @@ class OpenRouterClient:
         self.api_key = config.require_api_key()
         self.base_url = config.openrouter_base_url
 
+    def complete(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        cancel_token: CancelToken | None = None,
+    ) -> str:
+        cancel_token = cancel_token or CancelToken()
+        cancel_token.check()
+
+        payload: dict[str, Any] = {
+            "model": self.config.model,
+            "messages": messages,
+            "stream": False,
+        }
+        headers = self._headers()
+
+        try:
+            with httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+                response = client.post(
+                    f"{self.base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
+                if response.status_code != 200:
+                    self._raise_api_error(response.status_code, response.text)
+                data = response.json()
+                return data["choices"][0]["message"]["content"] or ""
+        except httpx.HTTPError as exc:
+            raise OpenRouterError(f"HTTP error contacting OpenRouter: {exc}") from exc
+
     def stream_completion(
         self,
         messages: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         on_delta: Callable[[str], None] | None = None,
+        *,
+        cancel_token: CancelToken | None = None,
     ) -> CompletionResult:
+        cancel_token = cancel_token or CancelToken()
+        cancel_token.check()
+
         payload: dict[str, Any] = {
             "model": self.config.model,
             "messages": messages,
@@ -50,12 +78,7 @@ class OpenRouterClient:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
 
-        headers = {
-            "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/agent-cli",
-            "X-Title": "agent-cli",
-        }
+        headers = self._headers()
 
         content_parts: list[str] = []
         tool_calls_acc: dict[int, dict[str, Any]] = {}
@@ -75,6 +98,7 @@ class OpenRouterClient:
                         self._raise_api_error(response.status_code, body)
 
                     for line in response.iter_lines():
+                        cancel_token.check()
                         if not line.startswith("data: "):
                             continue
                         data_str = line[6:].strip()
@@ -87,7 +111,7 @@ class OpenRouterClient:
                                 f"OpenRouter error: {chunk['error']}"
                             )
 
-                        if "usage" in chunk and chunk["usage"]:
+                        if chunk.get("usage"):
                             usage = chunk["usage"]
 
                         choices = chunk.get("choices", [])
@@ -97,7 +121,7 @@ class OpenRouterClient:
                         delta = choices[0].get("delta", {})
                         finish_reason = choices[0].get("finish_reason") or finish_reason
 
-                        if "content" in delta and delta["content"]:
+                        if delta.get("content"):
                             content_parts.append(delta["content"])
                             if on_delta:
                                 on_delta(delta["content"])
@@ -129,6 +153,14 @@ class OpenRouterClient:
             finish_reason=finish_reason,
             usage=usage,
         )
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.api_key}",
+            "Content-Type": "application/json",
+            "HTTP-Referer": "https://github.com/agent-cli",
+            "X-Title": "agent-cli",
+        }
 
     def _raise_api_error(self, status: int, body: str) -> None:
         hint = ""

@@ -1,10 +1,43 @@
 from __future__ import annotations
 
+import re
+from dataclasses import dataclass, field
 from typing import Any
 
 from rich.console import Console
 
 console = Console()
+
+READ_COMMANDS = re.compile(
+    r"^\s*(cat|type|head|tail|less|more|Get-Content|Get-ChildItem|ls|dir|findstr|select-string)\b",
+    re.IGNORECASE,
+)
+WRITE_COMMANDS = re.compile(
+    r"^\s*(rm|del|erase|remove-item|mv|move|move-item|copy|copy-item|"
+    r"mkdir|md|new-item|Set-Content|Out-File|echo\s.*>\s|tee)\b",
+    re.IGNORECASE,
+)
+TEST_COMMANDS = re.compile(
+    r"^\s*(pytest|python\s+-m\s+pytest|npm\s+test|cargo\s+test|go\s+test|make\s+test)\b",
+    re.IGNORECASE,
+)
+
+
+@dataclass
+class TurnApprovalState:
+    approve_all: bool = False
+    denied: set[str] = field(default_factory=set)
+
+
+def classify_command(cmd: str) -> str:
+    cmd = cmd.strip()
+    if READ_COMMANDS.search(cmd):
+        return "read"
+    if WRITE_COMMANDS.search(cmd):
+        return "write/destructive"
+    if TEST_COMMANDS.search(cmd):
+        return "test/run"
+    return "run"
 
 
 def prompt_approval(
@@ -12,13 +45,14 @@ def prompt_approval(
     arguments: dict[str, Any],
     *,
     auto_approve: bool = False,
+    turn_state: TurnApprovalState | None = None,
 ) -> bool:
-    if auto_approve:
+    if auto_approve or (turn_state and turn_state.approve_all):
         return True
 
-    summary = _format_tool_summary(tool_name, arguments)
+    summary = format_tool_summary(tool_name, arguments)
     console.print(f"[yellow][approval][/yellow] {summary}")
-    console.print("[dim]Allow? [y/N][/dim]", end=" ")
+    console.print("[dim]Allow? [y/N/a=all for turn][/dim]", end=" ")
 
     try:
         response = input().strip().lower()
@@ -26,22 +60,48 @@ def prompt_approval(
         console.print()
         return False
 
+    if response in ("a", "all"):
+        if turn_state:
+            turn_state.approve_all = True
+        return True
     return response in ("y", "yes")
 
 
-def _format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
+def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
     if tool_name == "run_command":
         cmd = arguments.get("cmd", "")
+        intent = classify_command(cmd)
         workdir = arguments.get("workdir")
+        prefix = f"run_command [{intent}]"
         if workdir:
-            return f"run_command in {workdir}: {cmd}"
-        return f"run_command: {cmd}"
+            return f"{prefix} in {workdir}: {cmd}"
+        return f"{prefix}: {cmd}"
 
     if tool_name == "write_file":
         path = arguments.get("path", "")
         content = arguments.get("content", "")
         lines = len(content.splitlines())
-        return f"write_file: {path} ({lines} lines)"
+        return f"write_file (overwrite): {path} ({lines} lines)"
+
+    if tool_name == "apply_patch":
+        patch = arguments.get("patch", "")
+        files = _extract_patch_files(patch)
+        if files:
+            return f"apply_patch: {', '.join(files)}"
+        return "apply_patch: (see patch content)"
+
+    if tool_name == "read_file":
+        return f"read_file: {arguments.get('path', '')}"
 
     parts = ", ".join(f"{k}={v!r}" for k, v in arguments.items())
     return f"{tool_name}: {parts}"
+
+
+def _extract_patch_files(patch: str) -> list[str]:
+    files: list[str] = []
+    for line in patch.splitlines():
+        line = line.strip()
+        for prefix in ("*** Update File:", "*** Add File:", "*** Delete File:"):
+            if line.startswith(prefix):
+                files.append(line.split(":", 1)[1].strip())
+    return files

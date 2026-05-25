@@ -56,11 +56,14 @@ class FileChangeItem(BaseModel):
     tool_call_id: str | None = None
     tool_arguments: str | None = None
     content: str | None = None
+    change_type: Literal["update", "add", "delete", "overwrite"] | None = None
+    diff_snippet: str | None = None
 
 
 class ContextCompactionItem(BaseModel):
     id: str = Field(default_factory=new_id)
     type: Literal["contextCompaction"] = "contextCompaction"
+    summarized_items: int | None = None
 
 
 Item = Annotated[
@@ -86,6 +89,7 @@ class Thread(BaseModel):
     id: str = Field(default_factory=new_id)
     cwd: str
     model: str
+    repo_root: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     turns: list[Turn] = Field(default_factory=list)

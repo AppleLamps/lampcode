@@ -2,6 +2,7 @@ from pathlib import Path
 
 import pytest
 
+from agent.config import Config, FileConfig
 from agent.paths import is_path_within_cwd, resolve_path_within_cwd
 
 

@@ -17,10 +17,11 @@ def search_repo(
     glob: str | None = None,
     max_results: int = 100,
     max_output: int = 20_000,
+    prefer_ripgrep: bool = True,
 ) -> str:
     search_root = resolve_path_within_cwd(cwd, path) if path else cwd
 
-    if shutil.which("rg"):
+    if prefer_ripgrep and shutil.which("rg"):
         return _search_with_rg(search_root, pattern, glob, max_results, max_output)
     return _search_python(search_root, pattern, glob, max_results, max_output)
 

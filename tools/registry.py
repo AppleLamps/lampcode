@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
-from pathlib import Path
+import re
+from dataclasses import dataclass, field
 from typing import Any, Callable
 
 from agent.config import Config
 from agent.models import CommandExecutionItem, FileChangeItem
 from tools.files import read_file, write_file
+from tools.patch import apply_patch
 from tools.search import search_repo
 from tools.shell import run_command
 
@@ -20,6 +21,13 @@ class ToolSpec:
     requires_approval: bool = False
 
 
+@dataclass
+class DispatchResult:
+    text: str
+    command_item: CommandExecutionItem | None = None
+    file_items: list[FileChangeItem] = field(default_factory=list)
+
+
 def get_tool_schemas() -> list[dict[str, Any]]:
     return [spec.schema for spec in TOOL_REGISTRY.values()]
 
@@ -28,16 +36,9 @@ def dispatch_tool(
     name: str,
     arguments: dict[str, Any],
     config: Config,
-) -> tuple[str, CommandExecutionItem | FileChangeItem | None]:
-    """
-    Dispatch a tool call. Returns (result_text, tracking_item_or_none).
-    Tracking items are returned for tools that need persistence (run_command, write_file).
-    read_file and search_repo execute immediately without tracking items.
-    """
+) -> DispatchResult:
     if name not in TOOL_REGISTRY:
-        return f"Unknown tool: {name}", None
-
-    spec = TOOL_REGISTRY[name]
+        return DispatchResult(text=f"Unknown tool: {name}")
 
     if name == "run_command":
         cmd = arguments.get("cmd", "")
@@ -58,16 +59,36 @@ def dispatch_tool(
         item.exit_code = exit_code
         item.duration_ms = duration_ms
         item.status = "completed" if exit_code == 0 else "failed"
-        return output, item
+        return DispatchResult(text=output, command_item=item)
 
     if name == "write_file":
         path = arguments.get("path", "")
         content = arguments.get("content", "")
-        item = FileChangeItem(path=path, status="pending")
+        item = FileChangeItem(path=path, status="pending", change_type="overwrite")
         result = write_file(config.cwd, path, content)
         item.status = "completed" if result.startswith("Successfully") else "failed"
         item.summary = result
-        return result, item
+        item.content = content
+        return DispatchResult(text=result, file_items=[item])
+
+    if name == "apply_patch":
+        patch_text = arguments.get("patch", "")
+        outcome = apply_patch(config.cwd, patch_text)
+        if not outcome.ok:
+            return DispatchResult(text=f"Patch failed: {outcome.error}")
+        file_items: list[FileChangeItem] = []
+        lines: list[str] = []
+        for pr in outcome.results:
+            item = FileChangeItem(
+                path=pr.path,
+                status="completed",
+                change_type=pr.change_type,  # type: ignore[arg-type]
+                summary=pr.summary,
+                diff_snippet=pr.diff_snippet,
+            )
+            file_items.append(item)
+            lines.append(f"{pr.path}: {pr.summary}")
+        return DispatchResult(text="\n".join(lines), file_items=file_items)
 
     if name == "read_file":
         result = read_file(
@@ -76,7 +97,7 @@ def dispatch_tool(
             offset=arguments.get("offset"),
             limit=arguments.get("limit"),
         )
-        return result, None
+        return DispatchResult(text=result)
 
     if name == "search_repo":
         result = search_repo(
@@ -85,10 +106,11 @@ def dispatch_tool(
             path=arguments.get("path"),
             glob=arguments.get("glob"),
             max_output=config.max_tool_output,
+            prefer_ripgrep=config.prefer_ripgrep,
         )
-        return result, None
+        return DispatchResult(text=result)
 
-    return spec.handler(**arguments), None
+    return DispatchResult(text=TOOL_REGISTRY[name].handler(**arguments))
 
 
 def parse_tool_arguments(raw: str) -> dict[str, Any]:
@@ -112,10 +134,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "cmd": {
-                            "type": "string",
-                            "description": "Shell command to execute.",
-                        },
+                        "cmd": {"type": "string", "description": "Shell command."},
                         "workdir": {
                             "type": "string",
                             "description": "Optional subdirectory relative to project root.",
@@ -138,20 +157,39 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path to the file.",
-                        },
-                        "offset": {
-                            "type": "integer",
-                            "description": "1-based line number to start reading.",
-                        },
-                        "limit": {
-                            "type": "integer",
-                            "description": "Maximum number of lines to read.",
-                        },
+                        "path": {"type": "string"},
+                        "offset": {"type": "integer"},
+                        "limit": {"type": "integer"},
                     },
                     "required": ["path"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "apply_patch": ToolSpec(
+        name="apply_patch",
+        requires_approval=True,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "apply_patch",
+                "description": (
+                    "Apply a structured patch to modify, add, or delete files. "
+                    "Prefer this over write_file for edits to existing files."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "patch": {
+                            "type": "string",
+                            "description": (
+                                "Patch text using *** Begin Patch / *** End Patch format "
+                                "with *** Update File, *** Add File, *** Delete File sections."
+                            ),
+                        },
+                    },
+                    "required": ["patch"],
                 },
             },
         },
@@ -164,18 +202,12 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
             "type": "function",
             "function": {
                 "name": "write_file",
-                "description": "Write or overwrite a file in the project directory.",
+                "description": "Write or overwrite an entire file. Prefer apply_patch for edits.",
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "path": {
-                            "type": "string",
-                            "description": "Relative path to the file.",
-                        },
-                        "content": {
-                            "type": "string",
-                            "description": "Full file content to write.",
-                        },
+                        "path": {"type": "string"},
+                        "content": {"type": "string"},
                     },
                     "required": ["path", "content"],
                 },
@@ -194,18 +226,9 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "pattern": {
-                            "type": "string",
-                            "description": "Regex pattern to search for.",
-                        },
-                        "path": {
-                            "type": "string",
-                            "description": "Optional subdirectory to search in.",
-                        },
-                        "glob": {
-                            "type": "string",
-                            "description": "Optional filename glob, e.g. *.py",
-                        },
+                        "pattern": {"type": "string"},
+                        "path": {"type": "string"},
+                        "glob": {"type": "string"},
                     },
                     "required": ["pattern"],
                 },

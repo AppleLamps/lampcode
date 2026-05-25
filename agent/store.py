@@ -19,6 +19,16 @@ class ThreadStore:
     def thread_path(self, thread_id: str) -> Path:
         return self.base_dir / f"{thread_id}.jsonl"
 
+    def _thread_meta(self, thread: Thread) -> dict[str, Any]:
+        return {
+            "id": thread.id,
+            "cwd": thread.cwd,
+            "model": thread.model,
+            "repo_root": thread.repo_root,
+            "created_at": thread.created_at,
+            "updated_at": thread.updated_at,
+        }
+
     def save_thread(self, thread: Thread) -> None:
         path = self.thread_path(thread.id)
         thread.touch()
@@ -26,21 +36,13 @@ class ThreadStore:
 
         if path.exists():
             records = self._read_records(path)
+            records = [
+                r
+                for r in records
+                if r.get("record_type") not in ("meta",)
+            ]
 
-        meta_records = [r for r in records if r.get("record_type") == "meta"]
-        if meta_records:
-            records = [r for r in records if r.get("record_type") != "meta"]
-
-        meta = {
-            "record_type": "meta",
-            "thread": {
-                "id": thread.id,
-                "cwd": thread.cwd,
-                "model": thread.model,
-                "created_at": thread.created_at,
-                "updated_at": thread.updated_at,
-            },
-        }
+        meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
         with path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(meta) + "\n")
             for record in records:
@@ -71,16 +73,7 @@ class ThreadStore:
 
     def create_thread(self, thread: Thread) -> None:
         path = self.thread_path(thread.id)
-        meta = {
-            "record_type": "meta",
-            "thread": {
-                "id": thread.id,
-                "cwd": thread.cwd,
-                "model": thread.model,
-                "created_at": thread.created_at,
-                "updated_at": thread.updated_at,
-            },
-        }
+        meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
         with path.open("w", encoding="utf-8") as f:
             f.write(json.dumps(meta) + "\n")
 
@@ -99,6 +92,7 @@ class ThreadStore:
             id=thread_data["id"],
             cwd=thread_data["cwd"],
             model=thread_data["model"],
+            repo_root=thread_data.get("repo_root"),
             created_at=thread_data["created_at"],
             updated_at=thread_data["updated_at"],
             turns=[],
@@ -152,12 +146,49 @@ class ThreadStore:
                     records.append(json.loads(line))
         return records
 
+    def delete_thread(self, thread_id: str) -> None:
+        path = self.thread_path(thread_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Thread not found: {thread_id}")
+        path.unlink()
+
+    def rewrite_turns(self, thread: Thread) -> None:
+        """Replace turn/item records while preserving meta (used after compaction)."""
+        path = self.thread_path(thread.id)
+        thread.touch()
+        meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
+        with path.open("w", encoding="utf-8") as f:
+            f.write(json.dumps(meta) + "\n")
+            for turn in thread.turns:
+                f.write(
+                    json.dumps({"record_type": "turn", "turn": turn.model_dump()})
+                    + "\n"
+                )
+                for item in turn.items:
+                    f.write(
+                        json.dumps(
+                            {
+                                "record_type": "item",
+                                "turn_id": turn.id,
+                                "item": item.model_dump(),
+                            }
+                        )
+                        + "\n"
+                    )
+
+    def find_latest_for_cwd(self, cwd: str) -> Thread | None:
+        target = str(Path(cwd).resolve())
+        for thread in self.list_threads():
+            if str(Path(thread.cwd).resolve()) == target:
+                return thread
+        return None
+
     def _update_meta_timestamp(self, thread: Thread) -> None:
         path = self.thread_path(thread.id)
         records = self._read_records(path)
         for record in records:
             if record.get("record_type") == "meta":
-                record["thread"]["updated_at"] = thread.updated_at
+                record["thread"] = self._thread_meta(thread)
         with path.open("w", encoding="utf-8") as f:
             for record in records:
                 f.write(json.dumps(record) + "\n")

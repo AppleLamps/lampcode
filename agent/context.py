@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import platform
 from pathlib import Path
 from typing import Any
@@ -7,6 +8,7 @@ from typing import Any
 from agent.models import (
     AgentMessageItem,
     CommandExecutionItem,
+    ContextCompactionItem,
     FileChangeItem,
     Item,
     Thread,
@@ -32,20 +34,25 @@ def load_project_context(cwd: Path, max_bytes: int = 8192) -> str:
     return "\n\n".join(parts)
 
 
-def build_system_prompt(cwd: Path) -> str:
+def build_system_prompt(cwd: Path, repo_root: str | None = None) -> str:
     project_context = load_project_context(cwd)
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
 
     prompt = f"""You are a local coding agent working in the user's project directory.
 
 Current working directory: {cwd}
-Operating system: {os_info}
+"""
+    if repo_root:
+        prompt += f"Git repository root: {repo_root}\n"
+
+    prompt += f"""Operating system: {os_info}
 
 Your job is to investigate the codebase, run commands, and make focused edits to complete the user's task.
 
 Rules:
 - Inspect files and search the repo before editing. Do not guess file contents.
 - Prefer small, focused changes over large refactors.
+- Use `apply_patch` for modifying existing files; reserve `write_file` for new files or full rewrites.
 - Run relevant tests or commands to verify your work when appropriate.
 - Explain briefly what you are doing as you work.
 - Use the provided tools instead of assuming anything about the codebase.
@@ -91,6 +98,8 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
         content = item.summary or ""
         if item.status == "denied":
             content = "User denied this action."
+        if item.diff_snippet:
+            content = f"{content}\n\nDiff:\n{item.diff_snippet}"
         return [
             {
                 "role": "tool",
@@ -99,7 +108,23 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
             }
         ]
 
+    if isinstance(item, ContextCompactionItem):
+        return []
+
     return []
+
+
+def estimate_tokens(messages: list[dict[str, Any]]) -> int:
+    total_chars = 0
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            total_chars += len(content)
+        elif content is not None:
+            total_chars += len(str(content))
+        for tc in msg.get("tool_calls") or []:
+            total_chars += len(json.dumps(tc))
+    return total_chars // 4
 
 
 def build_assistant_tool_call_message(
@@ -133,6 +158,10 @@ def build_messages_from_turn_items(
 
         if isinstance(item, AgentMessageItem):
             messages.append({"role": "assistant", "content": item.text})
+            idx += 1
+            continue
+
+        if isinstance(item, ContextCompactionItem):
             idx += 1
             continue
 
@@ -184,6 +213,10 @@ def build_messages_from_turn_items(
 def _tool_name_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
     if isinstance(item, CommandExecutionItem):
         return "run_command"
+    if item.tool_arguments and "patch" in item.tool_arguments:
+        return "apply_patch"
+    if item.change_type in ("update", "add", "delete"):
+        return "apply_patch"
     return "write_file"
 
 
@@ -200,7 +233,10 @@ def _tool_args_for_item(item: CommandExecutionItem | FileChangeItem) -> str:
 def build_thread_messages(thread: Thread, current_turn_items: list[Item] | None = None) -> list[dict[str, Any]]:
     """Build full message list: system + all completed turns + current turn."""
     messages: list[dict[str, Any]] = [
-        {"role": "system", "content": build_system_prompt(Path(thread.cwd))}
+        {
+            "role": "system",
+            "content": build_system_prompt(Path(thread.cwd), thread.repo_root),
+        }
     ]
 
     completed_turns = thread.turns[:-1] if thread.turns else []
