@@ -21,9 +21,12 @@ from agent.models import (
     Turn,
     UserMessageItem,
     WebSearchItem,
+    WorkspaceSyncItem,
 )
+from agent.multi_agent.checkpoint import save_checkpoint_from_registry
 from agent.multi_agent.registry import WorkerRegistry
 from agent.execution.factory import backend_display
+from agent.execution.sync.service import maybe_sync_turn_end, maybe_sync_turn_start
 from agent.session import HarnessSession
 from agent.settings import load_mcp_config, load_skills_config
 from agent.skills.discovery import discover_skills
@@ -75,6 +78,9 @@ def run_turn(
     session_auto_approve: bool = False,
     worker_registry: WorkerRegistry | None = None,
     worker_depth: int = 0,
+    force_sync: bool = False,
+    resume_messages: list | None = None,
+    resume_spawn_count: int = 0,
 ) -> Turn:
     emitter = events or EventEmitter()
     cancel = cancel_token or CancelToken()
@@ -135,7 +141,40 @@ def run_turn(
         skills_max_body=skills_cfg.max_body_chars,
         project_rules=rules_text,
         execution_backend=config.execution.backend,
+        sync_enabled=config.execution.ssh.sync_enabled,
     )
+
+    def _approve_sync() -> bool:
+        summary = f"sync push: {config.cwd} -> {config.execution.ssh.remote_workspace}"
+        emitter.approval_requested(thread.id, turn.id, "sync_push", summary)
+        return prompt_approval(
+            "sync_push",
+            {"direction": "push"},
+            auto_approve=config.auto_approve,
+            turn_state=turn_state,
+            session=session,
+        )
+
+    sync_result, sync_item = maybe_sync_turn_start(
+        config,
+        session,
+        force=force_sync,
+        approve_fn=_approve_sync,
+        emitter=emitter,
+        thread_id=thread.id,
+        turn_id=turn.id,
+    )
+    if sync_item:
+        turn.items.append(sync_item)
+        store.append_item(thread, turn.id, sync_item)
+        if sync_result and not sync_result.ok and sync_result.error:
+            turn.status = "failed"
+            fail_item = AgentMessageItem(text=f"Sync push failed: {sync_result.error}")
+            turn.items.append(fail_item)
+            store.append_item(thread, turn.id, fail_item)
+            store.append_turn(thread, turn)
+            emitter.turn_completed(thread.id, turn.id, turn.status)
+            return turn
 
     try:
         registry = worker_registry
@@ -148,7 +187,7 @@ def run_turn(
                 turn_id=turn.id,
                 depth=worker_depth,
             )
-        return _run_loop(
+        completed_turn = _run_loop(
             thread=thread,
             turn=turn,
             config=config,
@@ -168,8 +207,36 @@ def run_turn(
             project_rules=rules_text,
             worker_registry=registry,
             worker_depth=worker_depth,
+            force_sync=force_sync,
+            resume_messages=resume_messages,
+            resume_spawn_count=resume_spawn_count,
+            user_text=user_text,
         )
+        pull_result, pull_item = maybe_sync_turn_end(
+            config,
+            completed_turn.status,
+            emitter=emitter,
+            thread_id=thread.id,
+            turn_id=turn.id,
+        )
+        if pull_item:
+            completed_turn.items.append(pull_item)
+            store.append_item(thread, turn.id, pull_item)
+        return completed_turn
     except CancelledError:
+        if registry and config.multi_agent.checkpoint_enabled:
+            path = save_checkpoint_from_registry(
+                registry,
+                config,
+                thread_id=thread.id,
+                turn_id=turn.id,
+                spawn_count=registry.spawn_count if hasattr(registry, "spawn_count") else 0,
+                messages=messages,
+                status="cancelled",
+                user_text=user_text,
+            )
+            if path and emitter:
+                emitter.collab_checkpoint_saved(thread.id, turn.id, path=str(path))
         _finalize_cancelled(thread, turn, store, emitter)
         raise
     finally:
@@ -200,10 +267,18 @@ def _run_loop(
     project_rules: str,
     worker_registry: WorkerRegistry | None = None,
     worker_depth: int = 0,
+    force_sync: bool = False,
+    resume_messages: list | None = None,
+    resume_spawn_count: int = 0,
+    user_text: str = "",
 ) -> Turn:
-    spawn_count = 0
+    spawn_count = resume_spawn_count
+    if resume_messages:
+        messages = list(resume_messages)
     backend_announced = False
     registry = worker_registry
+    if registry:
+        registry.spawn_count = spawn_count
     for _round in range(config.max_rounds):
         cancel.check()
 
@@ -223,6 +298,7 @@ def _run_loop(
                 skills_max_body=skills_max_body,
                 project_rules=project_rules,
                 execution_backend=config.execution.backend,
+                sync_enabled=config.execution.ssh.sync_enabled,
             )
 
         def delta_handler(text: str) -> None:
@@ -381,8 +457,9 @@ def _run_loop(
                         }
                     )
                     continue
-                else:
-                    spawn_count += 1
+                spawn_count += 1
+                if registry:
+                    registry.spawn_count = spawn_count
                     collab_item_in = (
                         tracking_items[0]
                         if tracking_items

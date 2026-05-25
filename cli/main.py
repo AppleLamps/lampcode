@@ -19,11 +19,15 @@ from agent.loop import brief_args, run_turn
 from agent.mcp.manager import McpManager
 from agent.models import Thread, new_id, utc_now_iso
 from agent.paths import default_config_path
+from agent.export.html import export_thread_html
 from agent.export.markdown import export_run_markdown, export_thread_markdown
 from agent.execution.docker import check_docker_available, check_docker_hello_world
 from agent.execution.factory import backend_display, run_execution_test
 from agent.execution.ssh import check_ssh_available, validate_ssh_config
-from agent.export.html import export_thread_html
+from agent.execution.sync import run_sync_pull, run_sync_push, sync_status
+from agent.execution.sync.planner import detect_sync_tools, estimate_sync_size
+from agent.multi_agent.checkpoint import CheckpointStore
+from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_turn
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.settings import load_mcp_config, load_skills_config
@@ -41,6 +45,8 @@ skills_app = typer.Typer(help="Skill discovery commands")
 exec_policy_app = typer.Typer(help="Exec policy rule testing")
 runs_app = typer.Typer(help="Run recording and replay")
 execution_app = typer.Typer(help="Execution backend commands")
+sync_app = typer.Typer(help="SSH workspace sync commands")
+multi_agent_app = typer.Typer(help="Multi-agent supervisor commands")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -48,6 +54,8 @@ app.add_typer(skills_app, name="skills")
 app.add_typer(exec_policy_app, name="exec-policy")
 app.add_typer(runs_app, name="runs")
 app.add_typer(execution_app, name="execution")
+app.add_typer(sync_app, name="sync")
+app.add_typer(multi_agent_app, name="multi-agent")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -137,6 +145,22 @@ class OutputHandler:
                 f"[dim][docker][/dim] file tool {event.data.get('tool_name')} "
                 f"on {event.data.get('path')}"
             )
+        elif event.type == "execution.sync.started" and not self.quiet_tools:
+            console.print(
+                f"[dim][sync][/dim] {event.data.get('direction')} via "
+                f"{event.data.get('transport')} (~{event.data.get('bytes_estimated')} bytes)"
+            )
+        elif event.type == "execution.sync.completed" and not self.quiet_tools:
+            console.print(
+                f"[dim][sync][/dim] {event.data.get('direction')} done "
+                f"{event.data.get('files')} files in {event.data.get('duration_ms')}ms"
+            )
+        elif event.type == "execution.sync.failed" and not self.quiet_tools:
+            console.print(f"[yellow][sync failed][/yellow] {event.data.get('reason')}")
+        elif event.type == "execution.ssh.pool.acquire" and not self.quiet_tools:
+            console.print(f"[dim][ssh pool][/dim] acquire {event.data.get('host')}")
+        elif event.type == "collab.checkpoint.saved" and not self.quiet_tools:
+            console.print(f"[dim][checkpoint][/dim] saved {event.data.get('path')}")
         elif event.type == "error":
             console.print(f"[red]Error:[/red] {event.data.get('message', '')}")
         elif event.type == "turn.completed" and event.data.get("status") == "cancelled":
@@ -204,6 +228,18 @@ def run(
     multi_agent: bool = typer.Option(
         False, "--multi-agent", help="Enable spawn_worker supervisor tool"
     ),
+    sync_mode: Optional[str] = typer.Option(
+        None, "--sync", help="SSH sync mode: push | push-pull | manual"
+    ),
+    force_sync: bool = typer.Option(
+        False, "--force-sync", help="Bypass sync upload size limit"
+    ),
+    resume_multi_agent: bool = typer.Option(
+        False, "--resume-multi-agent", help="Resume supervisor turn from checkpoint"
+    ),
+    retry_failed: bool = typer.Option(
+        False, "--retry-failed", help="Retry failed workers when resuming checkpoint"
+    ),
     show_system_prompt: bool = typer.Option(
         False,
         "--show-system-prompt",
@@ -225,6 +261,8 @@ def run(
             ssh_user=ssh_user,
             ssh_identity_file=ssh_identity_file,
             multi_agent=multi_agent if multi_agent else None,
+            sync_mode=sync_mode,
+            force_sync=force_sync,
         )
         config.require_api_key()
     except ValueError as exc:
@@ -325,16 +363,34 @@ def run(
     previous = signal.signal(signal.SIGINT, _handle_sigint)
 
     try:
-        turn = run_turn(
-            thread,
-            prompt,
-            config,
-            store,
-            events=emitter,
-            cancel_token=cancel_token,
-            quiet_tools=quiet_tools,
-            session_auto_approve=session_auto_approve,
-        )
+        if resume_multi_agent and thread:
+            cp_store = CheckpointStore(
+                Path(config.multi_agent.checkpoint_dir).expanduser()
+            )
+            cp = cp_store.find_latest(thread.id)
+            if not cp:
+                console.print("[red]Error:[/red] No checkpoint found for resume.")
+                raise typer.Exit(1)
+            turn = resume_supervisor_turn(
+                thread,
+                cp,
+                config,
+                store,
+                retry_failed=retry_failed,
+                events=emitter,
+            )
+        else:
+            turn = run_turn(
+                thread,
+                prompt,
+                config,
+                store,
+                events=emitter,
+                cancel_token=cancel_token,
+                quiet_tools=quiet_tools,
+                session_auto_approve=session_auto_approve,
+                force_sync=force_sync,
+            )
     except CancelledError:
         if not jsonl_events:
             console.print()
@@ -476,6 +532,34 @@ def doctor(
     if cfg.execution.backend == "ssh" or cfg.execution.ssh.host:
         ssh_cfg_ok, ssh_cfg_msg = validate_ssh_config(cfg.execution.ssh)
         table.add_row("ssh config", ssh_cfg_msg if ssh_cfg_ok else f"incomplete: {ssh_cfg_msg}")
+        tools = detect_sync_tools()
+        table.add_row("sync rsync", tools.get("rsync", "n/a"))
+        table.add_row("sync scp", tools.get("scp", "n/a"))
+        table.add_row(
+            "ssh sync",
+            f"enabled={cfg.execution.ssh.sync_enabled}, mode={cfg.execution.ssh.sync_mode}",
+        )
+        if cfg.cwd.is_dir():
+            b, n = estimate_sync_size(
+                cfg.cwd,
+                excludes=list(cfg.execution.ssh.sync.exclude),
+                include_dotfiles=cfg.execution.ssh.sync.include_dotfiles,
+            )
+            table.add_row("sync cwd estimate", f"{n} files, {b / (1024*1024):.1f} MB")
+        table.add_row(
+            "ssh pool",
+            f"enabled={cfg.execution.ssh.pool.enabled}, max={cfg.execution.ssh.pool.max_sessions}",
+        )
+    cp_dir = Path(cfg.multi_agent.checkpoint_dir).expanduser()
+    try:
+        cp_dir.mkdir(parents=True, exist_ok=True)
+        cp_writable = "yes"
+    except OSError:
+        cp_writable = "no"
+    table.add_row(
+        "checkpoints",
+        f"enabled={cfg.multi_agent.checkpoint_enabled}, dir writable={cp_writable}",
+    )
     console.print(table)
 
     if deep:
@@ -744,6 +828,98 @@ def execution_test(
     console.print(f"[dim]Exit code:[/dim] {result['exit_code']}")
     console.print(f"[dim]Duration:[/dim] {result['duration_ms']}ms")
     stdout_console.print(result["output"])
+
+
+def _resolve_ssh_config(
+    cwd: Optional[Path],
+    ssh_host: Optional[str],
+    ssh_user: Optional[str],
+) -> Config:
+    return Config.resolve(cwd=cwd, ssh_host=ssh_host, ssh_user=ssh_user, auto_approve=True)
+
+
+@sync_app.command("push")
+def sync_push_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+    force: bool = typer.Option(False, "--force-sync"),
+) -> None:
+    """Push local workspace to remote SSH host."""
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.backend = "ssh"
+    config.execution.ssh.sync_enabled = True
+    result, item = run_sync_push(config, force=force)
+    if not result.ok:
+        console.print(f"[red]Sync push failed:[/red] {result.error or result.summary}")
+        raise typer.Exit(1)
+    console.print(f"[green]Sync push OK[/green] via {result.transport} ({result.duration_ms}ms)")
+
+
+@sync_app.command("pull")
+def sync_pull_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+) -> None:
+    """Pull remote workspace to local cwd."""
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.backend = "ssh"
+    config.execution.ssh.sync_enabled = True
+    result, item = run_sync_pull(config)
+    if not result.ok:
+        console.print(f"[red]Sync pull failed:[/red] {result.error or result.summary}")
+        raise typer.Exit(1)
+    console.print(f"[green]Sync pull OK[/green] via {result.transport} ({result.duration_ms}ms)")
+
+
+@sync_app.command("status")
+def sync_status_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+    ssh_host: Optional[str] = typer.Option(None, "--ssh-host"),
+    ssh_user: Optional[str] = typer.Option(None, "--ssh-user"),
+) -> None:
+    """Show SSH sync configuration and cwd estimate."""
+    import json
+
+    config = _resolve_ssh_config(cwd, ssh_host, ssh_user)
+    config.execution.ssh.sync_enabled = True
+    stdout_console.print(json.dumps(sync_status(config), indent=2))
+
+
+@multi_agent_app.command("status")
+def multi_agent_status(
+    thread_id: str = typer.Option(..., "--thread-id"),
+) -> None:
+    """Show multi-agent checkpoint status for a thread."""
+    import json
+
+    rows = list_checkpoint_status(thread_id)
+    stdout_console.print(json.dumps(rows, indent=2))
+
+
+@multi_agent_app.command("resume")
+def multi_agent_resume_cmd(
+    thread_id: str = typer.Option(..., "--thread-id"),
+    turn_id: Optional[str] = typer.Option(None, "--turn-id"),
+    retry_failed: bool = typer.Option(False, "--retry-failed"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Resume a supervisor turn from checkpoint."""
+    store = ThreadStore()
+    thread = _load_thread(store, thread_id)
+    config = Config.resolve(cwd=cwd or Path(thread.cwd), multi_agent=True)
+    config.require_api_key()
+    cp_store = CheckpointStore(Path(config.multi_agent.checkpoint_dir).expanduser())
+    cp = cp_store.load(thread.id, turn_id) if turn_id else cp_store.find_latest(thread.id)
+    if not cp:
+        console.print("[red]No checkpoint found.[/red]")
+        raise typer.Exit(1)
+    emitter = build_event_emitter(recording=config.recording.enabled)
+    resume_supervisor_turn(
+        thread, cp, config, store, retry_failed=retry_failed, events=emitter
+    )
+    console.print(f"[green]Resumed[/green] turn {cp.turn_id} on thread {thread.id}")
 
 
 @threads_app.command("show")

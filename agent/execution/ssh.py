@@ -8,14 +8,21 @@ from typing import Callable
 
 from agent.config import Config
 from agent.execution.base import ExecutionResult
-from agent.settings import SshExecutionSettings
+from agent.execution.ssh_pool import SshSessionPool, append_pool_options
+from agent.execution.ssh_util import expand_ssh_path
+
+__all__ = [
+    "SshExecutionBackend",
+    "build_remote_shell_command",
+    "build_ssh_argv",
+    "build_ssh_target",
+    "check_ssh_available",
+    "expand_ssh_path",
+    "validate_ssh_config",
+]
 from tools.files import truncate_output
 
-
-def expand_ssh_path(path: str) -> str:
-    if path.startswith("~"):
-        return str(Path(path).expanduser())
-    return path
+from agent.settings import SshExecutionSettings
 
 
 def validate_ssh_config(settings: SshExecutionSettings) -> tuple[bool, str]:
@@ -93,7 +100,7 @@ def build_ssh_argv(
 
     argv.append(build_ssh_target(settings))
     argv.append(remote_cmd)
-    return argv
+    return append_pool_options(argv, config)
 
 
 def check_ssh_available(binary: str = "ssh") -> tuple[bool, str]:
@@ -150,6 +157,8 @@ class SshExecutionBackend:
         argv = build_ssh_argv(self._config, remote_cmd, binary=self._binary)
         timeout = timeout or settings.command_timeout_sec
 
+        pool = SshSessionPool.global_pool()
+        pooled = pool.acquire(self._config, emitter=None)
         start = time.monotonic()
         try:
             if self._runner:
@@ -177,6 +186,7 @@ class SshExecutionBackend:
                     "remote_user": settings.user,
                     "remote_workspace": settings.remote_workspace,
                     "argv": argv,
+                    "pooled": pooled is not None,
                 },
             )
         except subprocess.TimeoutExpired:
@@ -200,3 +210,5 @@ class SshExecutionBackend:
                 backend="ssh",
                 meta={"remote_host": settings.host},
             )
+        finally:
+            pool.release(self._config)

@@ -183,6 +183,9 @@ def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:
     if tool_name == "web_search":
         return f"web_search: {arguments.get('query', '')}"
 
+    if tool_name == "sync_push":
+        return arguments.get("summary", "sync push to remote workspace")
+
     if tool_name == "spawn_worker":
         return f"spawn_worker: {arguments.get('task', '')[:80]}"
 

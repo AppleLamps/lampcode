@@ -90,6 +90,32 @@ def test_parse_approval_response_turn_all() -> None:
     assert state.approve_all is True
 
 
+def test_apply_event_sync_and_checkpoint() -> None:
+    from agent.tui.view_model import TuiState
+
+    state = TuiState()
+    state = apply_event_to_state(
+        state,
+        AgentEvent(
+            "execution.sync.started",
+            thread_id="t",
+            turn_id="u",
+            data={"direction": "push", "transport": "scp", "bytes_estimated": 1024},
+        ),
+    )
+    assert "[sync push]" in state.transcript[-1].text
+    state = apply_event_to_state(
+        state,
+        AgentEvent(
+            "collab.checkpoint.saved",
+            thread_id="t",
+            turn_id="u",
+            data={"path": "/tmp/cp.json"},
+        ),
+    )
+    assert "[checkpoint]" in state.transcript[-1].text
+
+
 def test_thread_transcript_from_store() -> None:
     thread = Thread(id="t", cwd="/tmp", model="m")
     turn = Turn()

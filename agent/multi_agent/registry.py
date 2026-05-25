@@ -75,6 +75,28 @@ class WorkerRegistry:
         self._running = 0
         self._max_concurrent = config.multi_agent.max_concurrent_workers
         self._wait_timeout = config.multi_agent.wait_timeout_sec
+        self.spawn_count = 0
+
+    def _save_checkpoint(
+        self,
+        parent_thread: Thread,
+        turn_id: str | None,
+        messages: list | None = None,
+    ) -> None:
+        if not self._config.multi_agent.checkpoint_enabled or not turn_id:
+            return
+        from agent.multi_agent.checkpoint import save_checkpoint_from_registry
+
+        path = save_checkpoint_from_registry(
+            self,
+            self._config,
+            thread_id=parent_thread.id,
+            turn_id=turn_id,
+            spawn_count=self.spawn_count,
+            messages=messages,
+        )
+        if path and self._emitter:
+            self._emitter.collab_checkpoint_saved(parent_thread.id, turn_id, path=str(path))
 
     def enqueue(
         self,
@@ -256,6 +278,7 @@ class WorkerRegistry:
             with self._lock:
                 self._running -= 1
             record._done.set()
+            self._save_checkpoint(parent_thread, turn_id)
             self._pump_queue(parent_thread, turn_id)
 
     def wait_workers(

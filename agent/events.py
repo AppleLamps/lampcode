@@ -363,6 +363,92 @@ class EventEmitter:
             )
         )
 
+    def execution_sync_started(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        direction: str,
+        transport: str,
+        bytes_estimated: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.started",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "direction": direction,
+                    "transport": transport,
+                    "bytes_estimated": bytes_estimated,
+                },
+            )
+        )
+
+    def execution_sync_completed(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        direction: str,
+        transport: str,
+        files: int,
+        bytes_transferred: int,
+        duration_ms: int,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.completed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "direction": direction,
+                    "transport": transport,
+                    "files": files,
+                    "bytes": bytes_transferred,
+                    "duration_ms": duration_ms,
+                },
+            )
+        )
+
+    def execution_sync_failed(
+        self,
+        thread_id: str | None,
+        turn_id: str | None,
+        *,
+        reason: str,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.sync.failed",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"reason": reason},
+            )
+        )
+
+    def execution_ssh_pool_acquire(
+        self, thread_id: str | None, *, host: str
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.ssh.pool.acquire",
+                thread_id=thread_id,
+                data={"host": host},
+            )
+        )
+
+    def execution_ssh_pool_release(
+        self, thread_id: str | None, *, host: str
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "execution.ssh.pool.release",
+                thread_id=thread_id,
+                data={"host": host},
+            )
+        )
+
     def execution_docker_file_tool_applied(
         self,
         thread_id: str,
@@ -378,6 +464,18 @@ class EventEmitter:
                 thread_id=thread_id,
                 turn_id=turn_id,
                 data={"tool_name": tool_name, "path": path, "image": image},
+            )
+        )
+
+    def collab_checkpoint_saved(
+        self, thread_id: str, turn_id: str, *, path: str
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "collab.checkpoint.saved",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"path": path},
             )
         )
 

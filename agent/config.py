@@ -122,6 +122,7 @@ class Config:
     openrouter_base_url: str = "https://openrouter.ai/api/v1"
     config_path: Path | None = None
     skip_git_check: bool = False
+    force_sync: bool = False
 
     @property
     def auto_approve(self) -> bool:
@@ -154,6 +155,8 @@ class Config:
         ssh_host: str | None = None,
         ssh_user: str | None = None,
         ssh_identity_file: str | None = None,
+        sync_mode: str | None = None,
+        force_sync: bool = False,
         multi_agent: bool | None = None,
         skip_git_check: bool = False,
         config_path: Path | None = None,
@@ -254,6 +257,9 @@ class Config:
             execution_cfg.ssh.identity_file = (
                 ssh_identity_file or env_ssh_identity or execution_cfg.ssh.identity_file
             )
+        if sync_mode:
+            execution_cfg.ssh.sync_mode = sync_mode
+            execution_cfg.ssh.sync_enabled = True
         if multi_agent is not None:
             multi_agent_cfg.enabled = multi_agent
 
@@ -280,6 +286,7 @@ class Config:
             openrouter_base_url=base_url,
             config_path=resolved_config_path,
             skip_git_check=skip_git_check,
+            force_sync=force_sync,
         )
 
     def require_api_key(self) -> str:
@@ -324,6 +331,9 @@ class Config:
             "multi_agent_max_depth": self.multi_agent.max_worker_depth,
             "multi_agent_max_concurrent": self.multi_agent.max_concurrent_workers,
             "execution_ssh_host": self.execution.ssh.host or None,
+            "execution_ssh_sync_enabled": self.execution.ssh.sync_enabled,
+            "execution_ssh_sync_mode": self.execution.ssh.sync_mode,
+            "multi_agent_checkpoint_enabled": self.multi_agent.checkpoint_enabled,
             "execution_ssh_user": self.execution.ssh.user or None,
             "execution_docker_file_tools": self.execution.docker.file_tools_in_container,
             "openrouter_base_url": self.openrouter_base_url,

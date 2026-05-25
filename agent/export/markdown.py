@@ -43,6 +43,10 @@ def export_thread_markdown(thread: Thread, *, sandbox: str | None = None, backen
                 )
                 if item.output:
                     lines.append(f"```\n{item.output[:2000]}\n```")
+            elif item.type == "workspaceSync":
+                lines.append(
+                    f"**Sync** ({item.status}) {item.direction} via {item.transport}: {item.summary}"
+                )
             elif item.type == "collabWorker":
                 lines.append(
                     f"**Worker** `{item.worker_id}` ({item.status}, depth={item.depth}): {item.task}"

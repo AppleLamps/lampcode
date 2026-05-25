@@ -140,6 +140,18 @@ class CollabWorkerItem(BaseModel):
     tool_arguments: str | None = None
 
 
+class WorkspaceSyncItem(BaseModel):
+    id: str = Field(default_factory=new_id)
+    type: Literal["workspaceSync"] = "workspaceSync"
+    direction: Literal["push", "pull"]
+    transport: Literal["rsync", "scp"]
+    status: Literal["completed", "failed", "skipped"] = "skipped"
+    summary: str = ""
+    files: int | None = None
+    bytes_transferred: int | None = None
+    duration_ms: int | None = None
+
+
 Item = Annotated[
     Union[
         UserMessageItem,
@@ -152,6 +164,7 @@ Item = Annotated[
         WebSearchItem,
         CollabSpawnItem,
         CollabWorkerItem,
+        WorkspaceSyncItem,
     ],
     Field(discriminator="type"),
 ]
@@ -208,6 +221,7 @@ def parse_item(data: dict[str, Any]) -> Item | None:
         "webSearch": WebSearchItem,
         "collabSpawn": CollabSpawnItem,
         "collabWorker": CollabWorkerItem,
+        "workspaceSync": WorkspaceSyncItem,
     }
     cls = mapping.get(item_type)
     if cls is None:

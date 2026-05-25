@@ -114,7 +114,10 @@ agent run "Find why tests fail and fix them" --cwd e:\lampcode\agent-cli\example
 | `--quiet-tools` | Hide tool lines |
 | `--execution-backend` | `local` (default) or `docker` for `run_command` |
 | `--docker-image` | Override Docker image when using docker backend |
-| `--multi-agent` | Enable `spawn_worker` supervisor tool |
+| `--sync` | SSH sync mode override: `push`, `push-pull`, or `manual` |
+| `--force-sync` | Bypass `max_upload_mb` size guard |
+| `--resume-multi-agent` | Resume supervisor turn from latest checkpoint |
+| `--retry-failed` | Retry failed workers when resuming checkpoint |
 
 ### Approval keys
 
@@ -300,23 +303,9 @@ agent doctor --deep   # checks docker binary + hello-world (skip in CI via AGENT
 
 Docker mounts thread `cwd` at `/workspace` (read-only when sandbox is `read-only` and command is read-like). Default network is **none** for safety. `commandExecution` items record `backend`, `container_id`, and `image` when applicable.
 
-### Multi-agent supervisor (v1)
+### Multi-agent supervisor (v1 → v2 in Phase 7)
 
-When enabled, the main agent gets a `spawn_worker` tool — fork a worker thread, run **one** headless turn, return the summary (max **3** spawns per supervisor turn; workers cannot spawn).
-
-```toml
-[multi_agent]
-enabled = true
-max_workers_per_turn = 3
-worker_auto_approve = false
-inherit_execution_backend = true
-```
-
-```powershell
-agent run "Refactor tests and docs in parallel" `
-  --multi-agent `
-  --cwd e:\lampcode\agent-cli\examples\demo-project
-```
+Phase 6 introduced synchronous `spawn_worker`. Phase 7 adds async queueing, `wait_workers`, `list_workers`, and depth limits — see **Phase 7** below.
 
 ### Export & read-only viewer
 
@@ -360,7 +349,7 @@ strict_host_key_checking = true
 
 Env overrides: `AGENT_SSH_HOST`, `AGENT_SSH_USER`, `AGENT_SSH_IDENTITY_FILE`.
 
-**v1 limitation:** no automatic workspace sync — ensure `remote_workspace` already contains your repo (rsync planned for Phase 8).
+**v1 limitation (pre-Phase 8):** no automatic workspace sync — ensure `remote_workspace` already contains your repo. Phase 8 adds rsync/scp sync — see below.
 
 ```powershell
 agent run "pytest -q" `
@@ -424,16 +413,111 @@ agent serve --port 8765
 # http://127.0.0.1:8765/threads/{id}.html
 ```
 
+## Phase 8 — SSH workspace sync, session pooling, supervisor checkpoints
+
+### SSH workspace sync
+
+Push local thread `cwd` to `remote_workspace` before remote turns; optionally pull changes back after a successful turn.
+
+```toml
+[execution]
+backend = "ssh"
+
+[execution.ssh]
+host = "devbox.local"
+user = "ubuntu"
+remote_workspace = "/home/ubuntu/workspace"
+sync_enabled = true
+sync_mode = "push-pull"          # push | push-pull | manual
+sync_on = "turn_start"
+pull_on_turn_end = true
+delete_remote_extra = false      # rsync --delete (dangerous)
+
+[execution.ssh.sync]
+transport = "auto"               # auto | rsync | scp
+exclude = [".git/objects", "__pycache__", ".venv", "node_modules", ".agent-cli"]
+include_dotfiles = false
+max_upload_mb = 200
+checksum = "mtime"
+```
+
+```powershell
+# Manual sync
+agent sync push --cwd . --ssh-host devbox.local --ssh-user ubuntu
+agent sync pull --cwd . --ssh-host devbox.local --ssh-user ubuntu
+agent sync status --ssh-host devbox.local
+
+# Turn with push-pull
+agent run "pytest -q" `
+  --execution-backend ssh `
+  --sync push-pull `
+  --ssh-host devbox.local `
+  --ssh-user ubuntu `
+  --cwd e:\lampcode\agent-cli\examples\demo-project
+
+# Override size guard (default 200 MB)
+agent run "..." --execution-backend ssh --sync push --force-sync
+```
+
+**Safety:** first sync push per thread requires approval (like first SSH command). Uploads over `max_upload_mb` are blocked unless `--force-sync`. Sync never leaves thread `cwd`.
+
+**Windows notes:** uses `ssh.exe` / `scp.exe` from OpenSSH. `rsync` is used when available (`auto` transport) — install via WSL, Git Bash, or Cygwin for faster incremental sync. If only `scp` is available, full-tree copy is used.
+
+**Push-pull warning:** pull may overwrite local uncommitted changes. Commit or stash before `push-pull` turns.
+
+Events: `execution.sync.started`, `execution.sync.completed`, `execution.sync.failed`. Persisted as `workspaceSync` turn items.
+
+### SSH session pooling
+
+Reuse OpenSSH ControlMaster connections to reduce handshake overhead.
+
+```toml
+[execution.ssh.pool]
+enabled = true
+max_sessions = 3
+idle_timeout_sec = 300
+healthcheck_cmd = "echo ok"
+```
+
+Control sockets live under `~/.agent-cli/ssh-sockets/`. Windows OpenSSH support for ControlMaster varies — the pool tries ControlMaster and falls back to one-shot `ssh` with a one-time log if unsupported.
+
+### Supervisor checkpoints
+
+Resume multi-agent supervisor turns after cancel or crash.
+
+```toml
+[multi_agent]
+enabled = true
+checkpoint_enabled = true
+checkpoint_dir = "~/.agent-cli/checkpoints"
+```
+
+Checkpoints: `~/.agent-cli/checkpoints/{thread_id}/{turn_id}.json` (worker registry snapshot + messages).
+
+```powershell
+agent multi-agent status --thread-id abc123
+agent multi-agent resume --thread-id abc123
+agent multi-agent resume --thread-id abc123 --turn-id turn456 --retry-failed
+
+agent run "..." --multi-agent --resume-multi-agent --thread-id abc123
+```
+
+Completed workers are skipped on resume; queued/running/failed workers continue (failed only with `--retry-failed`).
+
+### Doctor (Phase 8)
+
+```powershell
+agent doctor --deep
+```
+
+Reports `rsync`/`scp` availability, sync config + estimated cwd size, SSH pool socket dir, and checkpoint dir writability.
+
 ## Tests
 
 ```powershell
-pytest   # 190+ tests
+pytest   # 230+ tests
 ```
 
-## Phase 5 migration
+## Phase 9 (planned, not implemented)
 
-New optional sections: `[recording]`, `[isolation]`, `[web_search]`. Defaults preserve prior behavior (recording on, isolation auto when sandbox restricted, web search off). New item type `webSearch`, events `isolation.applied`. Install `[tui]` extra for `agent tui`.
-
-## Phase 8 (planned, not implemented)
-
-Automatic rsync/scp workspace sync for SSH, kernel sandbox (AppContainer/bubblewrap/Seatbelt), skill marketplace, full web UI with turn control and auth, autonomous long-running swarms.
+Kernel sandbox (AppContainer/bubblewrap/Seatbelt), skill marketplace, full authenticated web UI with turn control, incremental bidirectional sync with conflict UI, autonomous long-running swarms beyond supervisor checkpoint.

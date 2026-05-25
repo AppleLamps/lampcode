@@ -112,6 +112,31 @@ class SshJumpSettings:
 
 
 @dataclass
+class SshSyncSettings:
+    transport: str = "auto"
+    exclude: list[str] = field(
+        default_factory=lambda: [
+            ".git/objects",
+            "__pycache__",
+            ".venv",
+            "node_modules",
+            ".agent-cli",
+        ]
+    )
+    include_dotfiles: bool = False
+    max_upload_mb: int = 200
+    checksum: str = "mtime"
+
+
+@dataclass
+class SshPoolSettings:
+    enabled: bool = True
+    max_sessions: int = 3
+    idle_timeout_sec: int = 300
+    healthcheck_cmd: str = "echo ok"
+
+
+@dataclass
 class SshExecutionSettings:
     host: str = ""
     user: str = ""
@@ -123,6 +148,13 @@ class SshExecutionSettings:
     command_timeout_sec: int = 120
     strict_host_key_checking: bool = True
     jump: SshJumpSettings = field(default_factory=SshJumpSettings)
+    sync_enabled: bool = False
+    sync_mode: str = "push"
+    sync_on: str = "turn_start"
+    pull_on_turn_end: bool = True
+    delete_remote_extra: bool = False
+    sync: SshSyncSettings = field(default_factory=SshSyncSettings)
+    pool: SshPoolSettings = field(default_factory=SshPoolSettings)
 
 
 @dataclass
@@ -150,6 +182,8 @@ class MultiAgentSettings:
     inherit_execution_backend: bool = True
     wait_timeout_sec: int = 600
     allow_worker_spawn: bool = True
+    checkpoint_enabled: bool = True
+    checkpoint_dir: str = "~/.agent-cli/checkpoints"
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -239,6 +273,17 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
     jump_raw = ssh_raw.get("jump", {})
     if not isinstance(jump_raw, dict):
         jump_raw = {}
+    sync_raw = ssh_raw.get("sync", {})
+    if not isinstance(sync_raw, dict):
+        sync_raw = {}
+    pool_raw = ssh_raw.get("pool", {})
+    if not isinstance(pool_raw, dict):
+        pool_raw = {}
+    exclude = sync_raw.get("exclude", [
+        ".git/objects", "__pycache__", ".venv", "node_modules", ".agent-cli",
+    ])
+    if not isinstance(exclude, list):
+        exclude = list(SshSyncSettings().exclude)
     return ExecutionSettings(
         backend=str(exe.get("backend", "local")),
         default_image=str(exe.get("default_image", "python:3.12-slim")),
@@ -267,6 +312,24 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
                 host=str(jump_raw.get("host", "")),
                 user=str(jump_raw.get("user", "")),
             ),
+            sync_enabled=bool(ssh_raw.get("sync_enabled", False)),
+            sync_mode=str(ssh_raw.get("sync_mode", "push")),
+            sync_on=str(ssh_raw.get("sync_on", "turn_start")),
+            pull_on_turn_end=bool(ssh_raw.get("pull_on_turn_end", True)),
+            delete_remote_extra=bool(ssh_raw.get("delete_remote_extra", False)),
+            sync=SshSyncSettings(
+                transport=str(sync_raw.get("transport", "auto")),
+                exclude=[str(x) for x in exclude],
+                include_dotfiles=bool(sync_raw.get("include_dotfiles", False)),
+                max_upload_mb=int(sync_raw.get("max_upload_mb", 200)),
+                checksum=str(sync_raw.get("checksum", "mtime")),
+            ),
+            pool=SshPoolSettings(
+                enabled=bool(pool_raw.get("enabled", True)),
+                max_sessions=int(pool_raw.get("max_sessions", 3)),
+                idle_timeout_sec=int(pool_raw.get("idle_timeout_sec", 300)),
+                healthcheck_cmd=str(pool_raw.get("healthcheck_cmd", "echo ok")),
+            ),
         ),
     )
 
@@ -285,6 +348,8 @@ def load_multi_agent_settings(path: Path | None = None) -> MultiAgentSettings:
         inherit_execution_backend=bool(ma.get("inherit_execution_backend", True)),
         wait_timeout_sec=int(ma.get("wait_timeout_sec", 600)),
         allow_worker_spawn=bool(ma.get("allow_worker_spawn", True)),
+        checkpoint_enabled=bool(ma.get("checkpoint_enabled", True)),
+        checkpoint_dir=str(ma.get("checkpoint_dir", "~/.agent-cli/checkpoints")),
     )
 
 

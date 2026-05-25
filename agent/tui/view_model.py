@@ -106,6 +106,66 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.transcript.append(
             TranscriptLine(role="system", text=f"Error: {data.get('message', '')}")
         )
+    elif etype == "execution.sync.started":
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=(
+                    f"[sync {data.get('direction', '')}] "
+                    f"{data.get('transport', '')} "
+                    f"~{data.get('bytes_estimated', 0)} bytes"
+                ),
+            )
+        )
+    elif etype == "execution.sync.completed":
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=(
+                    f"[sync done] {data.get('files', 0)} files, "
+                    f"{data.get('bytes', 0)} bytes, {data.get('duration_ms', 0)}ms"
+                ),
+            )
+        )
+    elif etype == "execution.sync.failed":
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=f"[sync failed] {data.get('reason', '')}",
+            )
+        )
+    elif etype in ("execution.ssh.pool.acquire", "execution.ssh.pool.release"):
+        action = "acquired" if etype.endswith("acquire") else "released"
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=f"[ssh pool] {action} session to {data.get('host', '')}",
+            )
+        )
+    elif etype == "collab.checkpoint.saved":
+        state.transcript.append(
+            TranscriptLine(
+                role="system",
+                text=f"[checkpoint] saved {data.get('path', '')}",
+            )
+        )
+    elif etype == "collab.worker.started":
+        state.transcript.append(
+            TranscriptLine(
+                role="tool",
+                text=f"worker {data.get('worker_id', '')} started: {data.get('task', '')[:80]}",
+            )
+        )
+    elif etype == "collab.worker.completed":
+        state.transcript.append(
+            TranscriptLine(
+                role="tool",
+                text=(
+                    f"worker {data.get('worker_id', '')} "
+                    f"{data.get('status', 'completed')}"
+                ),
+            )
+        )
 
     return state
 
@@ -154,11 +214,18 @@ def thread_transcript_from_store(thread: Thread) -> list[TranscriptLine]:
                         text=f"run_command ({item.status}): {item.command}",
                     )
                 )
-            elif item.type == "webSearch":
+            elif item.type == "collabWorker":
                 lines.append(
                     TranscriptLine(
                         role="tool",
-                        text=f"web_search ({item.status}): {item.query}",
+                        text=f"worker {item.worker_id} ({item.status}): {item.task}",
+                    )
+                )
+            elif item.type == "workspaceSync":
+                lines.append(
+                    TranscriptLine(
+                        role="system",
+                        text=f"sync {item.direction} ({item.status}): {item.summary[:120]}",
                     )
                 )
     return lines

@@ -9,6 +9,7 @@ from urllib.parse import unquote, urlparse
 from agent.config import Config
 from agent.export.html import export_thread_html, render_index_html
 from agent.models import Thread
+from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
 from agent.store import ThreadStore
 
@@ -58,11 +59,15 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             wants_html = suffix == ".html" or "text/html" in self.headers.get("Accept", "")
             if wants_html:
                 cfg = Config.resolve(cwd=Path(thread.cwd))
+                checkpoint = CheckpointStore(
+                    Path(cfg.multi_agent.checkpoint_dir).expanduser()
+                ).find_latest(thread.id)
                 self._html_response(
                     export_thread_html(
                         thread,
                         sandbox=cfg.sandbox_mode.value,
                         backend=cfg.execution.backend,
+                        checkpoint=checkpoint,
                     )
                 )
                 return

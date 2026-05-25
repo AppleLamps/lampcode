@@ -81,6 +81,7 @@ def build_system_prompt(
     skills_max_body: int = 4000,
     project_rules: str = "",
     execution_backend: str | None = None,
+    sync_enabled: bool = False,
 ) -> str:
     project_context = load_project_context(cwd)
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
@@ -101,6 +102,11 @@ Shell commands run via `run_command` execute inside the container, not on the ho
 Command execution: **remote SSH host** (configured remote_workspace).
 Ensure the repository is already present on the remote host — there is no automatic sync in v1.
 Shell commands run via `run_command` execute on the remote machine, not locally.
+"""
+        if sync_enabled:
+            prompt += """
+Remote workspace sync is **enabled** — local project files are pushed to the remote host at turn start
+(and pulled back when sync_mode=push-pull and the turn completes successfully).
 """
     else:
         prompt += """
@@ -348,6 +354,7 @@ def build_thread_messages(
     skills_max_body: int = 4000,
     project_rules: str = "",
     execution_backend: str | None = None,
+    sync_enabled: bool = False,
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {
@@ -359,6 +366,7 @@ def build_thread_messages(
                 skills_max_body=skills_max_body,
                 project_rules=project_rules,
                 execution_backend=execution_backend,
+                sync_enabled=sync_enabled,
             ),
         }
     ]
