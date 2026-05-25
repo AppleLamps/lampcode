@@ -164,6 +164,8 @@ class ShellSettings:
     persistent: bool = True
     pty: bool = True
     idle_timeout_sec: int = 600
+    max_output_chars: int = 20_000
+    default_yield_ms: int = 10_000
 
 
 @dataclass
@@ -183,6 +185,11 @@ class PlanModeSettings:
     allowed_tools: list[str] = field(
         default_factory=lambda: ["read_file", "search_repo", "request_user_input"]
     )
+
+
+@dataclass
+class HarnessSettings:
+    max_parallel_read_tools: int = 4
 
 
 @dataclass
@@ -593,6 +600,27 @@ def load_shell_settings(
         persistent=bool(merged.get("persistent", True)),
         pty=bool(merged.get("pty", True)),
         idle_timeout_sec=int(merged.get("idle_timeout_sec", 600)),
+        max_output_chars=int(merged.get("max_output_chars", 20_000)),
+        default_yield_ms=int(merged.get("default_yield_ms", 10_000)),
+    )
+
+
+def load_harness_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> HarnessSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_h = user_data.get("harness", {})
+    project_h = project_data.get("harness", {})
+    if not isinstance(user_h, dict):
+        user_h = {}
+    if not isinstance(project_h, dict):
+        project_h = {}
+    merged = {**user_h, **project_h}
+    return HarnessSettings(
+        max_parallel_read_tools=int(merged.get("max_parallel_read_tools", 4)),
     )
 
 

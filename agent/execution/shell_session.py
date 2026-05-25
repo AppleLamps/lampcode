@@ -9,6 +9,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from agent.sandbox.retry import truncate_shell_output
 from agent.settings import ShellSettings
 
 ShellBackend = Literal["oneshot", "pipes", "pty"]
@@ -77,12 +78,37 @@ class ShellSession:
             bufsize=1,
         )
 
-    def run(self, cmd: str, *, stdin: str | None = None, timeout: int = 120) -> ShellSessionResult:
+    def run(
+        self,
+        cmd: str,
+        *,
+        stdin: str | None = None,
+        timeout: int = 120,
+        max_output_chars: int | None = None,
+        yield_ms: int | None = None,
+    ) -> ShellSessionResult:
         with self._lock:
             self._last_active = time.monotonic()
+            cap = max_output_chars if max_output_chars is not None else self.settings.max_output_chars
+            wait_sec = (yield_ms if yield_ms is not None else self.settings.default_yield_ms) / 1000
+            run_timeout = min(timeout, max(1, int(wait_sec))) if self._backend != "oneshot" else timeout
             if self._backend == "oneshot":
-                return self._run_oneshot(cmd, timeout=timeout, stdin=stdin)
-            return self._run_persistent(cmd, stdin=stdin, timeout=timeout)
+                result = self._run_oneshot(cmd, timeout=timeout, stdin=stdin)
+            else:
+                result = self._run_persistent(cmd, stdin=stdin, timeout=run_timeout)
+            output, truncated = truncate_shell_output(result.output, cap)
+            meta = dict(result.meta)
+            meta["truncated"] = truncated
+            meta["max_output_chars"] = cap
+            if yield_ms is not None:
+                meta["yield_ms"] = yield_ms
+            return ShellSessionResult(
+                output=output,
+                exit_code=result.exit_code,
+                duration_ms=result.duration_ms,
+                session_id=result.session_id,
+                meta=meta,
+            )
 
     def _run_oneshot(
         self,

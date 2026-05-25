@@ -25,6 +25,7 @@ from agent.settings import (
     TurnCheckpointSettings,
     ShellSettings,
     HooksSettings,
+    HarnessSettings,
     MemoriesSettings,
     PlanModeSettings,
     SandboxProfileSettings,
@@ -39,6 +40,7 @@ from agent.settings import (
     load_turn_checkpoint_settings,
     load_shell_settings,
     load_hooks_settings,
+    load_harness_settings,
     load_memories_settings,
     load_plan_mode_settings,
     load_sandbox_profile_settings,
@@ -133,6 +135,7 @@ class Config:
     turn_checkpoint: TurnCheckpointSettings = field(default_factory=TurnCheckpointSettings)
     shell: ShellSettings = field(default_factory=ShellSettings)
     hooks: HooksSettings = field(default_factory=HooksSettings)
+    harness: HarnessSettings = field(default_factory=HarnessSettings)
     memories: MemoriesSettings = field(default_factory=MemoriesSettings)
     plan_mode: PlanModeSettings = field(default_factory=PlanModeSettings)
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
@@ -317,6 +320,7 @@ class Config:
         hooks_cfg = load_hooks_settings(resolved_config_path, project_path=project_path)
         memories_cfg = load_memories_settings(resolved_config_path, project_path=project_path)
         plan_mode_cfg = load_plan_mode_settings(resolved_config_path, project_path=project_path)
+        harness_cfg = load_harness_settings(resolved_config_path, project_path=project_path)
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
         execution_cfg = load_execution_settings(resolved_config_path)
@@ -371,6 +375,7 @@ class Config:
             turn_checkpoint=turn_checkpoint,
             shell=shell_cfg,
             hooks=hooks_cfg,
+            harness=harness_cfg,
             memories=memories_cfg,
             plan_mode=plan_mode_cfg,
             isolation=isolation,

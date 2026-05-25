@@ -152,12 +152,13 @@ def dispatch_tool(
             cmd,
             workdir=workdir,
             timeout=config.command_timeout,
-            max_output=config.max_tool_output,
+            max_output=arguments.get("max_output_chars") or config.max_tool_output,
             config=config,
             thread_id=thread_id,
             session_id=arguments.get("session_id"),
             stdin=arguments.get("stdin"),
             new_session=bool(arguments.get("new_session")),
+            yield_ms=arguments.get("yield_ms"),
         )
         item.output = output
         item.exit_code = exit_code
@@ -288,6 +289,14 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                         "new_session": {
                             "type": "boolean",
                             "description": "Start a new persistent shell session.",
+                        },
+                        "max_output_chars": {
+                            "type": "integer",
+                            "description": "Max characters of command output to return.",
+                        },
+                        "yield_ms": {
+                            "type": "integer",
+                            "description": "Max wait time (ms) before returning partial persistent-shell output.",
                         },
                     },
                     "required": ["cmd"],

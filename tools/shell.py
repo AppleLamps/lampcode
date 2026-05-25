@@ -24,6 +24,7 @@ def run_command(
     session_id: str | None = None,
     stdin: str | None = None,
     new_session: bool = False,
+    yield_ms: int | None = None,
 ) -> tuple[str, int, int, dict | None]:
     """Run a shell command via execution backend. Returns (output, exit_code, duration_ms, meta)."""
     if config is None:
@@ -45,8 +46,14 @@ def run_command(
             new_session=new_session,
             session_id=session_id,
         )
-        result = sess.run(cmd, stdin=stdin, timeout=timeout or config.command_timeout)
-        output = truncate_output(result.output, max_output)
+        result = sess.run(
+            cmd,
+            stdin=stdin,
+            timeout=timeout or config.command_timeout,
+            max_output_chars=max_output,
+            yield_ms=yield_ms,
+        )
+        output = result.output
         meta = dict(result.meta)
         meta["backend"] = "local"
         meta["shell_session"] = result.session_id

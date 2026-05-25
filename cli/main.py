@@ -803,7 +803,13 @@ def doctor(
     pty = pty_support_status()
     table.add_row(
         "persistent shell / PTY",
-        f"enabled={cfg.shell.enabled}, pty={pty.get('available')}, {pty.get('note', '')}",
+        f"enabled={cfg.shell.enabled}, backend={pty.get('backend')}, "
+        f"max_output={cfg.shell.max_output_chars}, yield_ms={cfg.shell.default_yield_ms}, "
+        f"{pty.get('note', '')}",
+    )
+    table.add_row(
+        "harness",
+        f"max_parallel_read_tools={cfg.harness.max_parallel_read_tools}",
     )
     table.add_row(
         "multi-agent",
