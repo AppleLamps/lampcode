@@ -183,9 +183,29 @@ class ReplSession:
             self._print(", ".join(names) or "(none)")
             return True
         if name == "/compact":
-            self._print("Compaction runs automatically when context threshold is reached")
+            thread = self.thread
+            if thread is None:
+                self._print("No active thread to compact")
+                return True
+            cfg = self._resolve_config()
+            from agent.compaction import force_compact_thread
+            from model.openrouter import OpenRouterClient
+
+            client = OpenRouterClient(cfg)
+            result = force_compact_thread(thread, cfg, self.store, client)
+            if result.performed:
+                msg = (
+                    f"Compacted: removed {result.removed_items} items, "
+                    f"tokens {result.estimated_tokens_before}→{result.estimated_tokens_after}"
+                )
+                if result.warning:
+                    msg += f"\n{result.warning}"
+                self._print(msg)
+            else:
+                self._print("Nothing to compact (threshold not met or too few turns)")
             return True
         if name == "/plan":
+            cfg = self._resolve_config()
             if arg.lower() in ("on", "true", "1", "enable"):
                 self.plan_mode = True
                 self._print("Plan mode ON (read-only tools)")
@@ -193,7 +213,24 @@ class ReplSession:
                 self.plan_mode = False
                 self._print("Plan mode OFF")
             else:
+                from agent.plan_mode import plan_summary
+
+                allowed = ", ".join(cfg.plan_mode.allowed_tools)
+                last_plan = None
+                if self.thread:
+                    for turn in reversed(self.thread.turns):
+                        for item in turn.items:
+                            if item.type == "planProposal":
+                                last_plan = item.text
+                                break
+                        if last_plan:
+                            break
                 self._print(f"Plan mode: {'on' if self.plan_mode else 'off'}")
+                self._print(f"Allowed tools: {allowed}")
+                if last_plan:
+                    self._print(f"Last proposed plan: {plan_summary(last_plan)}")
+                else:
+                    self._print("Last proposed plan: (none)")
             return True
         if name == "/resume":
             from agent.threads_picker import pick_thread_or_last

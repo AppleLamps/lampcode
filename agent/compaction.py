@@ -99,10 +99,17 @@ def compact_thread_if_needed(
     *,
     hooks_runner: HooksRunner | None = None,
     project_rules: str = "",
+    mid_turn: bool = True,
+    force: bool = False,
 ) -> CompactionResult:
     messages = build_thread_messages(thread, project_rules=project_rules)
     tokens_before = estimate_tokens(messages)
-    if not should_compact(messages, config):
+    if mid_turn and not force and not config.compaction.auto_mid_turn:
+        return CompactionResult(
+            estimated_tokens_before=tokens_before,
+            compaction_count=count_thread_compactions(thread),
+        )
+    if not force and not should_compact(messages, config):
         return CompactionResult(
             estimated_tokens_before=tokens_before,
             compaction_count=count_thread_compactions(thread),
@@ -115,6 +122,48 @@ def compact_thread_if_needed(
             compaction_count=count_thread_compactions(thread),
         )
 
+    return _perform_compaction(
+        thread,
+        config,
+        store,
+        client,
+        hooks_runner=hooks_runner,
+        project_rules=project_rules,
+        tokens_before=tokens_before,
+    )
+
+
+def force_compact_thread(
+    thread: Thread,
+    config: Config,
+    store: ThreadStore,
+    client: OpenRouterClient,
+    *,
+    hooks_runner: HooksRunner | None = None,
+    project_rules: str = "",
+) -> CompactionResult:
+    return compact_thread_if_needed(
+        thread,
+        config,
+        store,
+        client,
+        hooks_runner=hooks_runner,
+        project_rules=project_rules,
+        mid_turn=False,
+        force=True,
+    )
+
+
+def _perform_compaction(
+    thread: Thread,
+    config: Config,
+    store: ThreadStore,
+    client: OpenRouterClient,
+    *,
+    hooks_runner: HooksRunner | None,
+    project_rules: str,
+    tokens_before: int,
+) -> CompactionResult:
     prior_compactions = count_thread_compactions(thread)
     new_compaction_index = prior_compactions + 1
     if hooks_runner:
@@ -128,6 +177,7 @@ def compact_thread_if_needed(
             thread_id=thread.id,
         )
 
+    preserve_turns = config.compaction.keep_recent_turns
     older_turns = thread.turns[:-preserve_turns]
     recent_turns = thread.turns[-preserve_turns:]
 

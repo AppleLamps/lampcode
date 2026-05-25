@@ -25,6 +25,9 @@ reasoning_effort = "high"
 # enabled = false
 # max_inject = 5
 
+# [compaction]
+# auto_mid_turn = true
+
 # [budget]
 # max_cost_usd_per_turn = 0.50
 
