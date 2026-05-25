@@ -62,6 +62,8 @@ telemetry_app = typer.Typer(help="OpenTelemetry tracing")
 auth_app = typer.Typer(help="Auth helpers")
 serve_app = typer.Typer(help="HTTP dashboard server", invoke_without_command=True)
 serve_users_app = typer.Typer(help="RBAC user management")
+serve_oidc_app = typer.Typer(help="OIDC SSO configuration")
+auth_sessions_app = typer.Typer(help="Session management")
 marketplace_app = typer.Typer(help="Signed skill marketplace")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
@@ -77,6 +79,8 @@ app.add_typer(telemetry_app, name="telemetry")
 app.add_typer(auth_app, name="auth")
 app.add_typer(serve_app, name="serve")
 serve_app.add_typer(serve_users_app, name="users")
+serve_app.add_typer(serve_oidc_app, name="oidc")
+auth_app.add_typer(auth_sessions_app, name="sessions")
 skills_app.add_typer(marketplace_app, name="marketplace")
 
 console = Console(stderr=True)
@@ -586,6 +590,14 @@ def doctor(
         "sandbox profiles",
         f"enabled={sp.enabled}, profile={sp.profile}, selected={prof.name}, {prof_avail}",
     )
+    from agent.sandbox.kernel.doctor import probe_capabilities
+
+    kcap = probe_capabilities(cfg.sandbox_kernel)
+    table.add_row(
+        "kernel sandbox",
+        f"enabled={cfg.sandbox_kernel.enabled}, backend={kcap.get('backend')}, "
+        f"available={kcap.get('available')}, fail_open={cfg.sandbox_kernel.fail_open}",
+    )
     table.add_row(
         "docker file tools",
         "enabled" if cfg.execution.docker.file_tools_in_container else "disabled",
@@ -648,6 +660,19 @@ def doctor(
         f"auth_mode={serve_cfg.auth_mode}, rbac={serve_cfg.rbac.enabled}, tls={serve_cfg.tls.enabled}, "
         f"control={serve_cfg.enable_control}, turn_start={serve_cfg.enable_turn_start}",
     )
+    oidc = serve_cfg.oidc
+    if oidc and oidc.enabled:
+        table.add_row(
+            "OIDC SSO",
+            f"issuer={oidc.issuer_url[:40]}..., tls={'ok' if serve_cfg.tls.enabled else 'REQUIRED'}, "
+            f"rbac={'ok' if serve_cfg.rbac.enabled else 'warn: disabled'}",
+        )
+        if not serve_cfg.tls.enabled:
+            checks.append(("OIDC error", "OIDC requires TLS — enable [serve.tls] or terminate at proxy"))
+        if not serve_cfg.rbac.enabled:
+            checks.append(("OIDC warning", "OIDC enabled without RBAC — roles will not be enforced"))
+    elif "oidc" in (serve_cfg.auth_mode or "").lower():
+        table.add_row("OIDC SSO", "auth_mode includes oidc but issuer not configured")
     table.add_row(
         "telemetry v2",
         f"histograms={cfg.telemetry.export_runtime_metrics}, buckets={len(cfg.telemetry.histogram_buckets_sec)}",
@@ -862,6 +887,86 @@ def serve_users_revoke(name: str = typer.Argument(...)) -> None:
     cfg = load_serve_settings()
     revoke_user(name, cfg.rbac.users)
     console.print(f"[green]Revoked user[/green] {name}")
+
+
+@serve_oidc_app.command("configure")
+def serve_oidc_configure(
+    issuer: str = typer.Option(..., "--issuer", help="OIDC issuer URL"),
+    client_id: str = typer.Option(..., "--client-id"),
+    redirect_uri: str = typer.Option(
+        "https://127.0.0.1:8765/auth/oidc/callback", "--redirect-uri"
+    ),
+) -> None:
+    """Print TOML snippet for OIDC configuration."""
+    snippet = f"""
+[serve]
+auth_mode = "oidc+bearer"
+
+[serve.auth.oidc]
+issuer_url = "{issuer}"
+client_id = "{client_id}"
+redirect_uri = "{redirect_uri}"
+pkce = true
+
+[serve.auth.oidc.role_mapping]
+default_role = "viewer"
+admin_groups = ["agent-admins"]
+operator_groups = ["agent-operators"]
+"""
+    stdout_console.print(snippet.strip())
+
+
+@serve_oidc_app.command("test-login")
+def serve_oidc_test_login() -> None:
+    """Validate OIDC settings and print authorize URL (no network)."""
+    cfg = load_serve_settings()
+    if not cfg.oidc or not cfg.oidc.issuer_url:
+        console.print("[red]OIDC not configured in serve settings[/red]")
+        raise typer.Exit(1)
+    from agent.serve.oidc import OidcClient
+
+    client = OidcClient(cfg.oidc)
+    url, state = client.start_login()
+    console.print(f"[green]Authorize URL (state={state.state[:8]}...):[/green]")
+    stdout_console.print(url)
+
+
+@auth_sessions_app.command("list")
+def auth_sessions_list() -> None:
+    """List active serve sessions."""
+    from agent.serve.sessions import SessionStore
+
+    store = SessionStore.global_store()
+    sessions = store.list_sessions()
+    if not sessions:
+        console.print("No active sessions.")
+        return
+    table = Table(title="Sessions")
+    table.add_column("ID")
+    table.add_column("User")
+    table.add_column("Role")
+    table.add_column("Method")
+    for s in sessions:
+        table.add_row(s.session_id[:12] + "...", s.email or s.principal_name, s.role, s.auth_method)
+    console.print(table)
+
+
+@auth_sessions_app.command("revoke")
+def auth_sessions_revoke(session_id: str = typer.Argument(...)) -> None:
+    """Revoke a session by id prefix or full id."""
+    from agent.serve.sessions import SessionStore
+
+    store = SessionStore.global_store()
+    if store.revoke_session(session_id):
+        console.print(f"[green]Revoked[/green] {session_id}")
+        return
+    for rec in store.list_sessions():
+        if rec.session_id.startswith(session_id):
+            store.revoke_session(rec.session_id)
+            console.print(f"[green]Revoked[/green] {rec.session_id}")
+            return
+    console.print("[red]Session not found[/red]")
+    raise typer.Exit(1)
 
 
 @marketplace_app.command("list")

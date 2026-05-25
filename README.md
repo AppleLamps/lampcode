@@ -658,7 +658,125 @@ Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for
 3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
 4. Run `agent config validate --strict` in CI/deploy scripts.
 5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
-6. Run `pytest` (420+ tests) before release; check `agent doctor --deep` for TLS/RBAC/marketplace.
+6. Run `pytest` (470+ tests) before release; check `agent doctor --deep` for TLS/RBAC/kernel/OIDC.
+
+## Phase 13 — Kernel sandbox + OAuth/OIDC SSO (v1.3.0)
+
+### Kernel sandbox (opt-in)
+
+Real OS-level isolation for **local** `run_command`. Defaults off; Phase 11 profiles and heuristic sandbox unchanged when disabled.
+
+```toml
+[sandbox]
+mode = "workspace-write"
+
+[sandbox.kernel]
+enabled = false
+backend = "auto"                  # auto | bubblewrap | seatbelt | windows_restricted | none
+fail_open = true
+apply_to = ["run_command"]
+
+[sandbox.kernel.linux]
+bwrap_binary = "bwrap"
+unshare_user = false
+ro_bind_paths = ["/usr", "/lib", "/bin"]
+allow_network = false
+
+[sandbox.kernel.macos]
+sandbox_exec = "/usr/bin/sandbox-exec"
+profile_template = "workspace-write"
+
+[sandbox.kernel.windows]
+use_restricted_token = true
+job_object_memory_mb = 1024
+job_object_cpu_rate = 50
+allow_network = false
+```
+
+| `sandbox.mode` | Kernel behavior |
+|----------------|-----------------|
+| `read-only` | Read-only FS view; deny writes/network (best-effort) |
+| `workspace-write` | Writable cwd; read-only system paths |
+| `danger-full-access` | Kernel sandbox disabled even if `kernel.enabled=true` |
+
+Events: `sandbox.kernel.selected`, `sandbox.kernel.applied`, `sandbox.kernel.fallback`.
+
+```powershell
+# Enable kernel sandbox (Windows restricted token + Job Object limits)
+agent config set sandbox.kernel.enabled true
+agent doctor --deep   # kernel capability matrix per OS
+```
+
+**Platform limits (honest):**
+
+- **Linux:** Requires `bubblewrap` installed; strongest option when available.
+- **macOS:** Uses `sandbox-exec` profiles when on Darwin; skipped elsewhere.
+- **Windows:** Restricted token + Job Object CPU/memory caps — stronger than none, **not** a malware-grade boundary (no AppContainer in v1.3.0).
+
+### OAuth/OIDC SSO for serve
+
+Enterprise login alongside bearer/session tokens. Break-glass local admin still works with `oidc+bearer`.
+
+```toml
+[serve]
+auth_mode = "oidc+bearer"
+
+[serve.tls]
+enabled = true
+cert_file = "~/.agent-cli/certs/server.crt"
+key_file = "~/.agent-cli/certs/server.key"
+
+[serve.auth.oidc]
+issuer_url = "https://login.microsoftonline.com/<tenant-id>/v2.0"
+client_id = "<app-client-id>"
+client_secret = ""                # optional for PKCE public clients
+redirect_uri = "https://127.0.0.1:8765/auth/oidc/callback"
+scopes = ["openid", "profile", "email"]
+pkce = true
+session_ttl_sec = 28800
+
+[serve.auth.oidc.role_mapping]
+admin_groups = ["agent-admins"]
+operator_groups = ["agent-operators"]
+default_role = "viewer"
+claim_groups_key = "groups"
+claim_email_key = "email"
+```
+
+Endpoints: `GET /auth/oidc/login`, `GET /auth/oidc/callback`, `POST /auth/logout`. Dashboard shows **Sign in with SSO** when OIDC enabled.
+
+```powershell
+agent serve oidc configure --issuer "https://login.microsoftonline.com/<tenant>/v2.0" --client-id "<id>"
+agent serve oidc test-login
+agent auth sessions list
+agent auth sessions revoke <session_id>
+agent config validate --strict   # OIDC requires TLS
+```
+
+### Enterprise deployment guide
+
+1. **Azure AD app registration:** Web redirect URI → `https://<host>:8765/auth/oidc/callback`. Enable ID tokens; add Microsoft Graph `GroupMember.Read.All` if using group claims (or configure app roles).
+2. **TLS:** OIDC **requires** TLS — use `agent serve --tls --generate-self-signed` for dev, or terminate TLS at nginx/IIS/Caddy in production.
+3. **Reverse proxy:** Forward `https://` to serve; set `redirect_uri` to the public HTTPS URL.
+4. **Break-glass admin:** Keep `auth_mode = "oidc+bearer"` and a hashed local admin token for outages:
+
+```powershell
+agent auth hash-token "break-glass-secret"
+# Add sha256 hash under [[serve.rbac.users]] with role = "admin"
+```
+
+5. **RBAC:** Enable `[serve.rbac]` when using OIDC so group→role mapping is enforced.
+6. **Metrics:** `agent_sandbox_kernel_total{backend,result}`, `agent_auth_oidc_login_total{result}`.
+
+## Tests
+
+```powershell
+pytest   # 470+ tests
+```
+
+## Phase 14 (planned, not implemented)
+
+Full Windows AppContainer, web IDE lite (Monaco), remote marketplace CDN, cross-turn DAG v5, budgeted autonomous swarms, mTLS / OAuth device code flow.
 
 ## Phase 12 — Serve TLS/RBAC, OTEL v2, signed skill marketplace (v1.2.0)
 
@@ -715,78 +833,3 @@ agent skills marketplace list
 ```
 
 `.askill` bundles: `SKILL.md`, `MANIFEST.json`, `SIGNATURE.ed25519`.
-
-## Tests
-
-```powershell
-pytest   # 420+ tests
-```
-
-## Phase 13 (planned, not implemented)
-
-Kernel-grade sandbox (AppContainer/Seatbelt/bubblewrap), web IDE lite (Monaco), remote marketplace CDN, cross-turn DAG v5, OAuth/OIDC SSO.
-
-### Worker DAG v4
-
-Dependency-aware scheduling when `dag_enabled=true`. Default off preserves Phase 10 FIFO queue behavior.
-
-```toml
-[multi_agent]
-dag_enabled = true
-max_workers_per_turn = 10
-max_concurrent_workers = 4
-dag_wall_clock_budget_sec = 3600
-dag_fail_fast = false
-```
-
-Tools: `spawn_worker` (+ `depends_on`), `spawn_worker_batch`, `get_worker_graph`, `wait_workers` (+ `mode=all|any|deps`).
-
-```powershell
-agent run "Map-reduce analysis" --multi-agent
-agent multi-agent graph --thread-id abc123
-agent multi-agent resume --thread-id abc123 --retry-failed
-```
-
-Checkpoint v2 adds `edges` + `dag_status`. Serve: `GET /threads/{id}/workers/graph`.
-
-### OpenTelemetry
-
-```toml
-[telemetry]
-enabled = false
-service_name = "agent-cli"
-otlp_endpoint = "http://127.0.0.1:4318/v1/traces"
-sample_rate = 1.0
-export_console = false
-```
-
-```powershell
-$env:AGENT_OTEL_ENABLED = "1"
-$env:OTEL_EXPORTER_OTLP_ENDPOINT = "http://127.0.0.1:4318/v1/traces"
-agent telemetry status
-pip install -e ".[otel]"
-# Jaeger: docker run -d --name jaeger -p 16686:16686 -p 4318:4318 jaegertracing/all-in-one:latest
-```
-
-Spans: `turn.run`, `tool.execute`, `model.completion`, sync/worker lifecycle. JSON logs include trace context when enabled.
-
-### Experimental sandbox profiles
-
-```toml
-[sandbox_profiles]
-enabled = false
-profile = "auto"          # auto | windows_job | linux_unshare | noop
-fail_open = true
-```
-
-Local `run_command` only; **not a security boundary**. Doctor reports platform capability.
-
-## Tests
-
-```powershell
-pytest   # 378+ tests
-```
-
-## Phase 12 (planned, not implemented)
-
-Signed skill marketplace, web IDE lite (Monaco), serve TLS/RBAC, kernel-grade sandbox (AppContainer/Seatbelt/bubblewrap), autonomous swarms without supervisor budgets.
