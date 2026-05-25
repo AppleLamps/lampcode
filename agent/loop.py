@@ -217,6 +217,14 @@ def run_turn(
         allow_spawn=config.multi_agent.enabled,
         allowed_tools=effective_allowed,
     )
+    if not session.tool_warn_emitted:
+        from agent.providers.openrouter import ModelsCache, tool_support_warning
+
+        models_cache = ModelsCache().load()
+        tool_warn = tool_support_warning(config.model, models_cache or None)
+        if tool_warn:
+            emitter.error(thread.id, tool_warn)
+        session.tool_warn_emitted = True
     budget_tracker = None
     if config.multi_agent.budgets.enabled or (budget_profile and budget_profile.lower() != "off"):
         from agent.multi_agent.budgets import SwarmBudgetTracker, profile_settings
@@ -326,6 +334,7 @@ def run_turn(
                 budget_tracker=budget_tracker,
                 allowed_tools=effective_allowed,
                 read_only_review=read_only_review,
+                plan_mode=plan_mode,
                 hooks_runner=hooks_runner,
                 headless_json=headless_json,
                 output_schema=output_schema,
@@ -445,6 +454,7 @@ def _run_loop(
     budget_tracker: "SwarmBudgetTracker | None" = None,
     allowed_tools: list[str] | None = None,
     read_only_review: bool = False,
+    plan_mode: bool = False,
     hooks_runner: "HooksRunner | None" = None,
     headless_json: bool = False,
     output_schema: dict | None = None,
@@ -530,11 +540,22 @@ def _run_loop(
             fallback_used=result.fallback_used,
             usage=result.usage,
         )
-        turn.usage.input_tokens = enriched.get("input_tokens")
-        turn.usage.output_tokens = enriched.get("output_tokens")
-        turn.usage.estimated_cost_usd = enriched.get("estimated_cost_usd")
+        session.turn_cost_usd += float(enriched.get("estimated_cost_usd") or 0.0)
+        turn.usage.input_tokens = (turn.usage.input_tokens or 0) + int(enriched.get("input_tokens") or 0)
+        turn.usage.output_tokens = (turn.usage.output_tokens or 0) + int(enriched.get("output_tokens") or 0)
+        turn.usage.estimated_cost_usd = round(session.turn_cost_usd, 6)
         turn.usage.model_used = enriched.get("model_used")
         turn.usage.fallback_used = bool(enriched.get("fallback_used"))
+        if config.max_cost_usd_per_turn and session.turn_cost_usd > config.max_cost_usd_per_turn:
+            session.budget_exceeded = True
+            return _cost_cap_kill_turn(
+                thread,
+                turn,
+                store,
+                emitter,
+                config.max_cost_usd_per_turn,
+                session.turn_cost_usd,
+            )
         if budget:
             metric = budget.record_usage(result.usage)
             if metric and budget.should_kill():
@@ -1016,6 +1037,17 @@ def _run_loop(
                     "content": result_text,
                 }
             )
+            if (
+                tool_name == "apply_patch"
+                and tracking_items
+                and tracking_items[0].status == "completed"
+                and config.harness.post_patch_test.strip()
+                and not plan_mode
+                and not read_only_review
+            ):
+                hook_output = _run_post_patch_test(config.harness.post_patch_test, config.cwd)
+                if hook_output:
+                    messages[-1]["content"] = f"{result_text}\n\n[post_patch_test]\n{hook_output}"
 
     turn.status = "failed"
     fail_item = AgentMessageItem(
@@ -1602,6 +1634,48 @@ def brief_args(tool_name: str, arguments: dict) -> str:
     if tool_name.startswith("mcp__"):
         return str(arguments)[:80]
     return str(arguments)
+
+
+def _run_post_patch_test(command: str, cwd: Path) -> str:
+    import subprocess
+
+    try:
+        proc = subprocess.run(
+            command,
+            cwd=cwd,
+            shell=True,
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        output = (proc.stdout or "") + (proc.stderr or "")
+        return output.strip()[:4000] or f"(exit {proc.returncode}, no output)"
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return f"post_patch_test failed: {exc}"
+
+
+def _cost_cap_kill_turn(
+    thread: Thread,
+    turn: Turn,
+    store: ThreadStore,
+    emitter: EventEmitter,
+    limit: float,
+    observed: float,
+) -> Turn:
+    msg = AgentMessageItem(
+        text=(
+            f"Turn stopped: estimated cost ${observed:.4f} exceeded "
+            f"max_cost_usd_per_turn=${limit:.4f}."
+        )
+    )
+    turn.items.append(msg)
+    store.append_item(thread, turn.id, msg)
+    turn.status = "failed"
+    store.append_turn(thread, turn)
+    store.save_thread(thread)
+    emitter.error(thread.id, msg.text)
+    emitter.turn_completed(thread.id, turn.id, turn.status)
+    return turn
 
 
 def _budget_kill_turn(

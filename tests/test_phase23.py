@@ -145,7 +145,7 @@ Subtract bug in add().
     assert '"type": "run.result"' in result.output
     assert '"severity_counts"' in result.output
 
-    report_json = json.loads(result.output[result.output.rfind('{\n  "summary"'):])
+    report_json = json.loads(result.output[result.output.rfind('{\n  "schema_version"'):])
     assert report_json["severity_counts"]["critical"] == 1
     assert report_json["findings"][0]["title"] == "Wrong operator"
     assert report_json["findings"][0]["severity"] == "critical"

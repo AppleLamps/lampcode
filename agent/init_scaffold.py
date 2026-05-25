@@ -25,9 +25,11 @@ reasoning_effort = "high"
 # enabled = false
 # max_inject = 5
 
-# [notify]
-# command = "powershell -Command Write-Host Turn done: $env:AGENT_STATUS"
-# on_approval = false
+# [budget]
+# max_cost_usd_per_turn = 0.50
+
+# [harness]
+# post_patch_test = "pytest -q"
 """
 
 AGENTS_MD_TEMPLATE = """# Project rules

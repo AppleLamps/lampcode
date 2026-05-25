@@ -161,6 +161,9 @@ def run(
     remember: bool = typer.Option(
         False, "--remember", help="Suggest saving a memory after a successful turn"
     ),
+    max_cost: Optional[float] = typer.Option(
+        None, "--max-cost", help="Stop turn when estimated cost exceeds this USD cap"
+    ),
     model: Optional[str] = typer.Option(None, "--model", help="OpenRouter model slug"),
     auto_approve: bool = typer.Option(
         False, "--auto-approve", help="Skip approval prompts for commands and writes"
@@ -274,6 +277,7 @@ def run(
             force_sync=force_sync,
             profile=profile,
             model_profile=effective_model_profile,
+            max_cost_usd=max_cost,
         )
         config.require_api_key()
     except ValueError as exc:
@@ -494,15 +498,28 @@ def run(
         signal.signal(signal.SIGINT, previous)
 
     if not machine_output:
+        from agent.turn_stats import aggregate_turn_stats
+
+        stats = aggregate_turn_stats(turn)
+        budget_exceeded = any(
+            item.type == "agentMessage" and "max_cost_usd_per_turn" in item.text
+            for item in turn.items
+        )
         console.print()
         if turn.status == "completed":
             console.print(f"[green]Done.[/green] Thread: {thread.id}")
-            console.print(format_run_summary(turn), markup=False)
+            console.print(
+                format_run_summary(turn, budget_exceeded=budget_exceeded, stats=stats),
+                markup=False,
+            )
         elif turn.status == "cancelled":
             console.print(f"[yellow]Cancelled.[/yellow] Thread: {thread.id}")
         else:
             console.print(f"[yellow]Turn {turn.status}.[/yellow] Thread: {thread.id}")
-            console.print(format_run_summary(turn), markup=False)
+            console.print(
+                format_run_summary(turn, budget_exceeded=budget_exceeded, stats=stats),
+                markup=False,
+            )
 
     if json_output and output.stream_handler:
         from datetime import datetime, timezone
@@ -515,6 +532,14 @@ def run(
             "input_tokens": turn.usage.input_tokens,
             "output_tokens": turn.usage.output_tokens,
         }
+        from agent.turn_stats import aggregate_turn_stats
+
+        summary["stats"] = aggregate_turn_stats(turn).to_dict()
+        if any(
+            item.type == "agentMessage" and "max_cost_usd_per_turn" in item.text
+            for item in turn.items
+        ):
+            summary["budget_exceeded"] = True
         line = output.stream_handler.emit_run_summary(
             thread_id=thread.id, turn_id=turn.id, summary=summary
         )
@@ -567,6 +592,17 @@ def review_cmd(
     model_profile: Optional[str] = typer.Option(None, "--model-profile", help="Model profile"),
     auto_approve: bool = typer.Option(False, "--auto-approve", help="Auto-approve tool prompts"),
     json_output: bool = typer.Option(False, "--json", help="Emit JSON report + event stream"),
+    fail_on: Optional[str] = typer.Option(
+        None,
+        "--fail-on",
+        help="Exit 1 when findings at/above severities (e.g. critical,major)",
+    ),
+    severity_threshold: Optional[str] = typer.Option(
+        None,
+        "--severity-threshold",
+        help="Alias for --fail-on",
+    ),
+    schema_version: str = typer.Option("v1", "--schema-version", help="Review JSON schema version"),
     fix: bool = typer.Option(False, "--fix", help="Allow write tools (not read-only review)"),
     skip_git_check: bool = typer.Option(False, "--skip-git-check"),
 ) -> None:
@@ -631,6 +667,14 @@ def review_cmd(
             stdout_console.print(result.report_json)
     else:
         stdout_console.print(result.report_markdown)
+
+    from agent.review import parse_fail_on_severities, review_exceeds_fail_threshold
+
+    threshold = fail_on or severity_threshold
+    if threshold and result.report:
+        severities = parse_fail_on_severities(threshold)
+        if review_exceeds_fail_threshold(result.report, severities):
+            raise typer.Exit(1)
 
 
 @hooks_app.command("list")
@@ -754,6 +798,7 @@ def config_show(
 @app.command()
 def doctor(
     deep: bool = typer.Option(False, "--deep", help="Try starting configured MCP servers"),
+    models: bool = typer.Option(False, "--models", help="Show model preflight table for profiles"),
 ) -> None:
     """Check environment: API key, git, ripgrep, node/npx, skills, config."""
     config_path = default_config_path()
@@ -1118,6 +1163,42 @@ def doctor(
 
     console.print(table)
     console.print(solo)
+
+    if models:
+        from agent.profiles import load_model_profiles
+        from agent.providers.openrouter import ModelsCache, build_model_preflight_rows
+
+        cached_models = ModelsCache().load()
+        profiles = {
+            **load_model_profiles(default_config_path()),
+            **load_model_profiles(project_config_path(cfg.cwd)),
+        }
+        model_table = Table(title="Model preflight")
+        model_table.add_column("Profile")
+        model_table.add_column("Model")
+        model_table.add_column("Tools")
+        model_table.add_column("Context")
+        model_table.add_column("In $/1M")
+        model_table.add_column("Out $/1M")
+        model_table.add_column("Vision")
+        model_table.add_column("Reasoning")
+        for row in build_model_preflight_rows(
+            profiles=profiles,
+            default_model=cfg.model,
+            models=cached_models or None,
+            pricing=cfg.openrouter.pricing,
+        ):
+            model_table.add_row(
+                row["profile"],
+                row["model"],
+                row["tools"],
+                row["context"],
+                row["input_$1m"],
+                row["output_$1m"],
+                row["vision"],
+                row["reasoning"],
+            )
+        console.print(model_table)
 
     if deep:
         import os
@@ -2641,6 +2722,7 @@ def multi_agent_resume_cmd(
 def threads_show(
     thread_id: str = typer.Argument(..., help="Thread ID (full or prefix)"),
     usage: bool = typer.Option(False, "--usage", help="Show per-turn token/cost usage"),
+    stats: bool = typer.Option(False, "--stats", help="Show per-turn file/command stats"),
 ) -> None:
     """Show a human-readable transcript."""
     store = ThreadStore()
@@ -2706,6 +2788,10 @@ def threads_show(
             console.print(
                 f"[dim]Usage: in={u.input_tokens} out={u.output_tokens}{cost}{model_used}{fb}[/dim]"
             )
+        if stats:
+            from agent.turn_stats import aggregate_turn_stats, format_turn_stats_brief
+
+            console.print(f"[dim]Stats: {format_turn_stats_brief(aggregate_turn_stats(turn))}[/dim]")
         console.print()
 
 
