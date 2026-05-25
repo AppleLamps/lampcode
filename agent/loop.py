@@ -693,6 +693,7 @@ def _run_loop(
                     auto_approve=config.auto_approve,
                     turn_state=turn_state,
                     session=session,
+                    config=config,
                 )
                 if not approved:
                     _mark_denied(tracking_items, store, thread, turn.id)
@@ -1340,6 +1341,7 @@ def _run_parallel_read_tool_round(
                 auto_approve=config.auto_approve,
                 turn_state=turn_state,
                 session=session,
+                config=config,
             )
             if not approved:
                 _mark_denied(tracking_items, store, thread, turn.id)

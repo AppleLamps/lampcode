@@ -111,7 +111,7 @@ def needs_approval_prompt(
         if session and not session.ssh_command_approved:
             return True
 
-    if tool_name == "run_command" and config.exec_policy.mode == ExecPolicyMode.UNTRUSTED:
+    if tool_name == "run_command":
         cmd = arguments.get("cmd", "")
         result = evaluate_command(cmd, config.exec_policy)
         if result["decision"] == "deny":
@@ -136,6 +136,7 @@ def prompt_approval(
     auto_approve: bool = False,
     turn_state: TurnApprovalState | None = None,
     session: HarnessSession | None = None,
+    config: Config | None = None,
 ) -> bool:
     if auto_approve:
         return True
@@ -184,7 +185,7 @@ def prompt_approval(
             response = _approval_input(summary)
         else:
             console.print(f"[yellow][approval][/yellow] {summary}")
-            console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
+            console.print("[dim]Allow? [y/N/a=turn / A=session / p=prefix][/dim]", end=" ")
 
             try:
                 response = input().strip()
@@ -192,6 +193,19 @@ def prompt_approval(
                 console.print()
                 with trace_span("approval.decision", tool=tool_name, decision="interrupt"):
                     return False
+
+        if response in ("p", "P") and tool_name == "run_command" and config is not None:
+            cmd = str(arguments.get("cmd", ""))
+            from agent.exec_policy import append_allow_prefix, command_prefix_tokens
+
+            prefix = command_prefix_tokens(cmd)
+            append_allow_prefix(config.cwd, prefix)
+            if not _approval_input:
+                console.print(f"[dim][approval] prefix allow saved: {prefix!r}[/dim]")
+            if session:
+                session.approval_cache.record(tool_name, arguments)
+            with trace_span("approval.decision", tool=tool_name, decision="accept_prefix"):
+                return True
 
         if response == "A":
             if session:

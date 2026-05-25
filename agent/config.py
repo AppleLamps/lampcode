@@ -11,7 +11,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - Python 3.11+
     tomllib = None  # type: ignore[assignment]
 
-from agent.exec_policy import ExecPolicyConfig, ExecPolicyMode, load_exec_policy_config
+from agent.exec_policy import ExecPolicyConfig, ExecPolicyMode, load_allow_prefixes, load_exec_policy_config
 from agent.paths import default_config_path
 from agent.profiles import merge_layered_config, apply_merged_to_resolve_kwargs, project_config_path
 from agent.sandbox.policy import SandboxMode
@@ -319,6 +319,7 @@ class Config:
         resolved_sandbox = SandboxMode.from_str(sandbox_value)
 
         exec_policy = load_exec_policy_config(resolved_config_path)
+        exec_policy.allow_prefixes = load_allow_prefixes(resolved_cwd)
         openrouter = load_openrouter_settings(resolved_config_path, project_path=project_path)
         recording = load_recording_settings(resolved_config_path)
         turn_checkpoint = load_turn_checkpoint_settings(
@@ -332,7 +333,7 @@ class Config:
         harness_cfg = load_harness_settings(resolved_config_path, project_path=project_path)
         budget_cfg = load_budget_settings(resolved_config_path, project_path=project_path)
         isolation = load_isolation_settings(resolved_config_path)
-        web_search = load_web_search_settings(resolved_config_path)
+        web_search = load_web_search_settings(resolved_config_path, project_path=project_path)
         execution_cfg = load_execution_settings(resolved_config_path)
         multi_agent_cfg = load_multi_agent_settings(resolved_config_path)
         telemetry_cfg = load_telemetry_settings(resolved_config_path)
