@@ -1,6 +1,40 @@
 # agent-cli
 
-A local coding agent CLI inspired by OpenAI Codex — powered by [OpenRouter](https://openrouter.ai).
+A **Codex-like coding agent harness** in Python, powered by [OpenRouter](https://openrouter.ai) — use one API key, pick any model, fix your repo from the terminal.
+
+## Codex alternative quickstart (solo dev)
+
+| Step | Command |
+|------|---------|
+| Install | `pip install -e ".[dev]"` |
+| API key | `$env:OPENROUTER_API_KEY = "sk-or-v1-..."` |
+| Scaffold repo | `agent init` (inside a git repo) |
+| Run a task | `agent run "fix failing tests"` |
+| Interactive | `agent repl` or `agent tui` |
+
+```powershell
+cd agent-cli
+pip install -e ".[dev]"
+$env:OPENROUTER_API_KEY = "sk-or-v1-..."
+cd ..\your-repo
+agent init --yes
+agent doctor          # solo dev readiness section
+agent run "fix tests" --model-profile deep
+agent threads cost <thread-id>
+```
+
+### agent-cli vs Codex CLI
+
+| Feature | Codex CLI | agent-cli |
+|---------|-----------|-----------|
+| Runtime | Rust binary | Python + OpenRouter |
+| Models | OpenAI-only | Any OpenRouter model + fallbacks |
+| Config | `config.toml` profiles | `.agent-cli/config.toml` + `~/.agent-cli/config.toml` |
+| Tools | Built-in + MCP | Built-in + MCP + optional git_commit |
+| Team serve/OIDC | N/A | Opt-in (`agent serve`) |
+| Cost tracking | Limited | Per-turn USD estimate + `agent threads cost` |
+
+Enterprise features (serve, RBAC, OIDC, program sync, scheduler) remain available but are **opt-in** — see sections below.
 
 ## Install
 
@@ -56,6 +90,24 @@ summary_max_chars = 8000
 max_retries = 3
 retry_base_delay_sec = 1.0
 request_timeout_sec = 120
+primary_model = "anthropic/claude-sonnet-4"
+fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
+fallback_on = ["rate_limit", "provider_error", "timeout"]
+app_name = "agent-cli"
+app_url = "https://github.com/agent-cli"
+
+[openrouter.pricing."anthropic/claude-sonnet-4"]
+input_per_million = 3.0
+output_per_million = 15.0
+
+[model_profiles.fast]
+model = "google/gemini-2.5-flash-preview"
+max_tool_rounds = 15
+
+[model_profiles.deep]
+model = "anthropic/claude-sonnet-4"
+max_tool_rounds = 40
+reasoning_effort = "high"
 
 [recording]
 enabled = true

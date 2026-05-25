@@ -122,6 +122,8 @@ def test_get_trace_context_empty() -> None:
 
 
 def test_model_completion_span_via_openrouter() -> None:
+    from unittest.mock import MagicMock
+
     from model.openrouter import OpenRouterClient
 
     cfg = Config(cwd=Path("."), model="m", openrouter_api_key="test-key")
@@ -129,14 +131,25 @@ def test_model_completion_span_via_openrouter() -> None:
     TracerProvider.global_provider().configure(cfg.telemetry)
     client = OpenRouterClient(cfg)
 
-    class FakeResp:
-        status_code = 200
+    ok_chunks = [
+        'data: {"choices":[{"delta":{"content":"hi"}}]}\n',
+        "data: [DONE]\n",
+    ]
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.iter_lines.return_value = iter(ok_chunks)
+    ctx = MagicMock()
+    ctx.__enter__.return_value = mock_resp
+    ctx.__exit__.return_value = False
 
-        def json(self):
-            return {"choices": [{"message": {"content": "hi"}}]}
-
-    with patch.object(client, "_request_with_retry", return_value=FakeResp()):
-        assert client.complete([{"role": "user", "content": "hi"}]) == "hi"
+    with patch.object(client, "_sleep_backoff"):
+        with patch("httpx.Client") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.__enter__.return_value = mock_client
+            mock_client.__exit__.return_value = False
+            mock_client.stream.return_value = ctx
+            mock_client_cls.return_value = mock_client
+            assert client.complete([{"role": "user", "content": "hi"}]) == "hi"
     names = [s.name for s in memory_exporter().spans]
     assert "model.completion" in names
 
