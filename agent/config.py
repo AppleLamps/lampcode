@@ -13,6 +13,7 @@ except ModuleNotFoundError:  # pragma: no cover - Python 3.11+
 
 from agent.exec_policy import ExecPolicyConfig, ExecPolicyMode, load_exec_policy_config
 from agent.paths import default_config_path
+from agent.profiles import merge_layered_config, apply_merged_to_resolve_kwargs, project_config_path
 from agent.sandbox.policy import SandboxMode
 from agent.settings import (
     CompactionSettings,
@@ -133,6 +134,8 @@ class Config:
     config_path: Path | None = None
     skip_git_check: bool = False
     force_sync: bool = False
+    reasoning_effort: str | None = None
+    model_profile_fallbacks: list[str] = field(default_factory=list)
 
     @property
     def auto_approve(self) -> bool:
@@ -170,14 +173,56 @@ class Config:
         multi_agent: bool | None = None,
         skip_git_check: bool = False,
         config_path: Path | None = None,
+        profile: str | None = None,
+        model_profile: str | None = None,
     ) -> Config:
         resolved_config_path = config_path or default_config_path()
-        file_cfg = FileConfig.load(resolved_config_path)
 
-        resolved_cwd = cwd or file_cfg.default_cwd or Path.cwd()
+        resolved_cwd = cwd
+        if resolved_cwd is None:
+            file_cfg_early = FileConfig.load(resolved_config_path)
+            resolved_cwd = file_cfg_early.default_cwd or Path.cwd()
         resolved_cwd = Path(resolved_cwd).resolve()
         if not resolved_cwd.is_dir():
             raise ValueError(f"Working directory does not exist: {resolved_cwd}")
+
+        layered = merge_layered_config(
+            resolved_cwd,
+            cli_profile=profile,
+            cli_model_profile=model_profile,
+            cli_model=model,
+            user_path=resolved_config_path,
+        )
+        layered_kwargs = apply_merged_to_resolve_kwargs(layered)
+        if model is None and layered.get("model"):
+            model = str(layered["model"])
+        if max_rounds is None and layered_kwargs.get("max_rounds") is not None:
+            max_rounds = int(layered_kwargs["max_rounds"])
+        if auto_approve is None and "auto_approve" in layered_kwargs:
+            auto_approve = bool(layered_kwargs["auto_approve"])
+        if sandbox is None and layered_kwargs.get("sandbox"):
+            sandbox = str(layered_kwargs["sandbox"])
+
+        project_path = project_config_path(resolved_cwd)
+        file_cfg = FileConfig.load(resolved_config_path)
+        if project_path.is_file():
+            project_cfg = FileConfig.load(project_path)
+            if project_cfg.model:
+                file_cfg.model = project_cfg.model
+            if project_cfg.sandbox_mode:
+                file_cfg.sandbox_mode = project_cfg.sandbox_mode
+            if project_cfg.approval_mode != "interactive":
+                file_cfg.approval_mode = project_cfg.approval_mode
+            if project_cfg.max_tool_rounds != DEFAULT_MAX_ROUNDS:
+                file_cfg.max_tool_rounds = project_cfg.max_tool_rounds
+        if layered.get("approval_mode") in ("auto", "interactive"):
+            file_cfg.approval_mode = layered["approval_mode"]  # type: ignore[assignment]
+        if layered.get("sandbox_mode"):
+            file_cfg.sandbox_mode = str(layered["sandbox_mode"])
+        if layered.get("max_tool_rounds") is not None:
+            file_cfg.max_tool_rounds = int(layered["max_tool_rounds"])
+        if layered.get("model"):
+            file_cfg.model = str(layered["model"])
 
         env_model = os.environ.get("OPENROUTER_MODEL")
         env_approval = os.environ.get("AGENT_APPROVAL_MODE")
@@ -248,7 +293,7 @@ class Config:
         resolved_sandbox = SandboxMode.from_str(sandbox_value)
 
         exec_policy = load_exec_policy_config(resolved_config_path)
-        openrouter = load_openrouter_settings(resolved_config_path)
+        openrouter = load_openrouter_settings(resolved_config_path, project_path=project_path)
         recording = load_recording_settings(resolved_config_path)
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
@@ -281,6 +326,11 @@ class Config:
         if multi_agent is not None:
             multi_agent_cfg.enabled = multi_agent
 
+        profile_fallbacks = layered.get("_model_profile_fallbacks", [])
+        reasoning = layered.get("_reasoning_effort") or None
+        if reasoning == "":
+            reasoning = None
+
         return cls(
             cwd=resolved_cwd,
             model=resolved_model,
@@ -308,6 +358,8 @@ class Config:
             config_path=resolved_config_path,
             skip_git_check=skip_git_check,
             force_sync=force_sync,
+            reasoning_effort=str(reasoning) if reasoning else None,
+            model_profile_fallbacks=[str(x) for x in profile_fallbacks] if isinstance(profile_fallbacks, list) else [],
         )
 
     def require_api_key(self) -> str:

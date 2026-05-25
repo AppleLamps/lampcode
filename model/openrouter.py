@@ -11,6 +11,11 @@ import httpx
 
 from agent.cancel import CancelToken
 from agent.config import Config
+from agent.providers.openrouter import (
+    classify_http_status,
+    model_chain,
+    should_fallback,
+)
 from agent.telemetry import trace_span
 
 RETRYABLE_STATUS = {429, 502, 503, 504}
@@ -22,6 +27,8 @@ class CompletionResult:
     tool_calls: list[dict[str, Any]]
     finish_reason: str | None
     usage: dict[str, int] | None
+    model_used: str = ""
+    fallback_used: bool = False
 
 
 class OpenRouterError(Exception):
@@ -41,24 +48,8 @@ class OpenRouterClient:
         *,
         cancel_token: CancelToken | None = None,
     ) -> str:
-        cancel_token = cancel_token or CancelToken()
-        payload: dict[str, Any] = {
-            "model": self.config.model,
-            "messages": messages,
-            "stream": False,
-        }
-
-        def do_post(client: httpx.Client) -> httpx.Response:
-            return client.post(
-                f"{self.base_url}/chat/completions",
-                headers=self._headers(),
-                json=payload,
-            )
-
-        with trace_span("model.completion", model=self.config.model):
-            response = self._request_with_retry(do_post, cancel_token=cancel_token)
-        data = response.json()
-        return data["choices"][0]["message"]["content"] or ""
+        result = self.stream_completion(messages, cancel_token=cancel_token)
+        return result.content
 
     def stream_completion(
         self,
@@ -69,21 +60,65 @@ class OpenRouterClient:
         cancel_token: CancelToken | None = None,
     ) -> CompletionResult:
         cancel_token = cancel_token or CancelToken()
+        chain = model_chain(self.config)
+        last_error: OpenRouterError | None = None
+
+        for model_index, model_name in enumerate(chain.models):
+            cancel_token.check()
+            try:
+                return self._stream_one_model(
+                    messages,
+                    model_name,
+                    tools=tools,
+                    on_delta=on_delta,
+                    cancel_token=cancel_token,
+                    model_index=model_index,
+                    total_models=len(chain.models),
+                )
+            except OpenRouterError as exc:
+                last_error = exc
+                error_kind = getattr(exc, "error_kind", "client_error")
+                if should_fallback(
+                    settings=self._settings,
+                    error_kind=error_kind,
+                    model_index=model_index,
+                    total_models=len(chain.models),
+                ):
+                    continue
+                raise
+
+        if last_error:
+            raise last_error
+        raise OpenRouterError("No models available in fallback chain")
+
+    def _stream_one_model(
+        self,
+        messages: list[dict[str, Any]],
+        model_name: str,
+        *,
+        tools: list[dict[str, Any]] | None,
+        on_delta: Callable[[str], None] | None,
+        cancel_token: CancelToken,
+        model_index: int,
+        total_models: int,
+    ) -> CompletionResult:
         payload: dict[str, Any] = {
-            "model": self.config.model,
+            "model": model_name,
             "messages": messages,
             "stream": True,
         }
         if tools:
             payload["tools"] = tools
             payload["tool_choice"] = "auto"
+        if self.config.reasoning_effort:
+            payload["reasoning"] = {"effort": self.config.reasoning_effort}
 
         content_parts: list[str] = []
         tool_calls_acc: dict[int, dict[str, Any]] = {}
         finish_reason: str | None = None
         usage: dict[str, int] | None = None
 
-        with trace_span("model.completion", model=self.config.model):
+        with trace_span("model.completion", model=model_name):
             attempt = 0
             while True:
                 cancel_token.check()
@@ -100,6 +135,7 @@ class OpenRouterClient:
                         ) as response:
                             if response.status_code != 200:
                                 body = response.read().decode("utf-8", errors="replace")
+                                error_kind = classify_http_status(response.status_code)
                                 if (
                                     response.status_code in RETRYABLE_STATUS
                                     and attempt < self._settings.max_retries
@@ -109,7 +145,18 @@ class OpenRouterClient:
                                     )
                                     attempt += 1
                                     continue
-                                self._raise_api_error(response.status_code, body)
+                                err = self._make_api_error(
+                                    response.status_code, body, model_name
+                                )
+                                err.error_kind = error_kind  # type: ignore[attr-defined]
+                                if should_fallback(
+                                    settings=self._settings,
+                                    error_kind=error_kind,
+                                    model_index=model_index,
+                                    total_models=total_models,
+                                ):
+                                    raise err
+                                raise err
 
                             for line in response.iter_lines():
                                 cancel_token.check()
@@ -159,14 +206,40 @@ class OpenRouterClient:
                                     if fn.get("arguments"):
                                         acc["function"]["arguments"] += fn["arguments"]
                     break
-                except httpx.HTTPError as exc:
+                except httpx.TimeoutException as exc:
+                    err = OpenRouterError(
+                        f"OpenRouter request timed out for model '{model_name}'"
+                    )
+                    err.error_kind = "timeout"  # type: ignore[attr-defined]
+                    if should_fallback(
+                        settings=self._settings,
+                        error_kind="timeout",
+                        model_index=model_index,
+                        total_models=total_models,
+                    ):
+                        raise err from exc
                     if attempt < self._settings.max_retries:
                         self._sleep_backoff(attempt)
                         attempt += 1
                         continue
-                    raise OpenRouterError(
+                    raise err from exc
+                except httpx.HTTPError as exc:
+                    err = OpenRouterError(
                         f"HTTP error contacting OpenRouter after retries: {exc}"
-                    ) from exc
+                    )
+                    err.error_kind = "provider_error"  # type: ignore[attr-defined]
+                    if should_fallback(
+                        settings=self._settings,
+                        error_kind="provider_error",
+                        model_index=model_index,
+                        total_models=total_models,
+                    ):
+                        raise err from exc
+                    if attempt < self._settings.max_retries:
+                        self._sleep_backoff(attempt)
+                        attempt += 1
+                        continue
+                    raise err from exc
 
         tool_calls = [tool_calls_acc[i] for i in sorted(tool_calls_acc)]
         return CompletionResult(
@@ -174,6 +247,8 @@ class OpenRouterClient:
             tool_calls=tool_calls,
             finish_reason=finish_reason,
             usage=usage,
+            model_used=model_name,
+            fallback_used=model_index > 0,
         )
 
     def _request_with_retry(
@@ -197,7 +272,7 @@ class OpenRouterClient:
                     continue
                 if response.status_code != 200:
                     self._raise_api_error(
-                        response.status_code, response.text
+                        response.status_code, response.text, self.config.model
                     )
                 return response
             except httpx.HTTPError as exc:
@@ -227,23 +302,29 @@ class OpenRouterClient:
         return {
             "Authorization": f"Bearer {self.api_key}",
             "Content-Type": "application/json",
-            "HTTP-Referer": "https://github.com/agent-cli",
-            "X-Title": "agent-cli",
+            "HTTP-Referer": self._settings.app_url or "https://github.com/agent-cli",
+            "X-Title": self._settings.app_name or "agent-cli",
         }
 
-    def _raise_api_error(self, status: int, body: str) -> None:
+    def _make_api_error(self, status: int, body: str, model_name: str) -> OpenRouterError:
         hint = ""
         if status in (401, 403):
             hint = " Check your OPENROUTER_API_KEY."
         elif status == 404:
-            hint = f" Model '{self.config.model}' may not exist on OpenRouter."
+            hint = (
+                f" Model '{model_name}' may not exist on OpenRouter."
+                " Run `agent models list` to see available models."
+            )
         elif status == 429:
             hint = " Rate limited by OpenRouter. Wait and retry or reduce request frequency."
         elif status in (502, 503, 504):
             hint = " OpenRouter upstream temporarily unavailable."
         elif status == 400 and "tool" in body.lower():
             hint = (
-                f" Tool calling may not be supported by model '{self.config.model}'."
+                f" Tool calling may not be supported by model '{model_name}'."
                 " Try another model with --model, e.g. anthropic/claude-sonnet-4."
             )
-        raise OpenRouterError(f"OpenRouter API error ({status}): {body}{hint}")
+        return OpenRouterError(f"OpenRouter API error ({status}): {body}{hint}")
+
+    def _raise_api_error(self, status: int, body: str, model_name: str) -> None:
+        raise self._make_api_error(status, body, model_name)

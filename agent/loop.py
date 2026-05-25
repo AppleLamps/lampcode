@@ -373,6 +373,19 @@ def _run_loop(
         if result.usage:
             turn.usage.input_tokens = result.usage.get("prompt_tokens")
             turn.usage.output_tokens = result.usage.get("completion_tokens")
+        from agent.providers.openrouter import enrich_usage
+
+        enriched = enrich_usage(
+            config,
+            model_used=result.model_used or config.model,
+            fallback_used=result.fallback_used,
+            usage=result.usage,
+        )
+        turn.usage.input_tokens = enriched.get("input_tokens")
+        turn.usage.output_tokens = enriched.get("output_tokens")
+        turn.usage.estimated_cost_usd = enriched.get("estimated_cost_usd")
+        turn.usage.model_used = enriched.get("model_used")
+        turn.usage.fallback_used = bool(enriched.get("fallback_used"))
         if budget:
             metric = budget.record_usage(result.usage)
             if metric and budget.should_kill():

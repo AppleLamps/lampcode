@@ -72,6 +72,8 @@ class SkillsConfig:
     enable_user_skills: bool = True
     enable_project_skills: bool = True
     project_rules_max_chars: int = 8000
+    auto_activate: bool = True
+    show_active_in_prompt_footer: bool = True
     marketplace: MarketplaceSettings = field(default_factory=MarketplaceSettings)
 
 
@@ -111,6 +113,12 @@ class OpenRouterSettings:
     max_retries: int = 3
     retry_base_delay_sec: float = 1.0
     request_timeout_sec: int = 120
+    primary_model: str = ""
+    fallback_models: list[str] = field(default_factory=list)
+    fallback_on: list[str] = field(default_factory=lambda: ["rate_limit", "provider_error", "timeout"])
+    app_name: str = "agent-cli"
+    app_url: str = "https://github.com/agent-cli"
+    pricing: dict[str, SwarmBudgetPricing] = field(default_factory=dict)
 
 
 DEFAULT_ALLOWED_ENV = [
@@ -431,16 +439,61 @@ def load_compaction_settings(path: Path | None = None) -> CompactionSettings:
     )
 
 
-def load_openrouter_settings(path: Path | None = None) -> OpenRouterSettings:
-    data = _load_toml(path or default_config_path())
-    or_cfg = data.get("openrouter", {})
-    if not isinstance(or_cfg, dict):
-        or_cfg = {}
+def _parse_openrouter_pricing(raw: Any) -> dict[str, SwarmBudgetPricing]:
+    pricing: dict[str, SwarmBudgetPricing] = {}
+    if not isinstance(raw, dict):
+        return pricing
+    for model, p in raw.items():
+        if isinstance(p, dict):
+            pricing[str(model)] = SwarmBudgetPricing(
+                input_per_million=float(p.get("input", p.get("input_per_million", 0))),
+                output_per_million=float(p.get("output", p.get("output_per_million", 0))),
+            )
+    return pricing
+
+
+def _parse_openrouter_section(or_cfg: dict[str, Any]) -> OpenRouterSettings:
+    fb = or_cfg.get("fallback_models", [])
+    fo = or_cfg.get("fallback_on", ["rate_limit", "provider_error", "timeout"])
     return OpenRouterSettings(
         max_retries=int(or_cfg.get("max_retries", 3)),
         retry_base_delay_sec=float(or_cfg.get("retry_base_delay_sec", 1.0)),
         request_timeout_sec=int(or_cfg.get("request_timeout_sec", 120)),
+        primary_model=str(or_cfg.get("primary_model", "")),
+        fallback_models=[str(x) for x in fb] if isinstance(fb, list) else [],
+        fallback_on=[str(x) for x in fo] if isinstance(fo, list) else ["rate_limit", "provider_error", "timeout"],
+        app_name=str(or_cfg.get("app_name", "agent-cli")),
+        app_url=str(or_cfg.get("app_url", "https://github.com/agent-cli")),
+        pricing=_parse_openrouter_pricing(or_cfg.get("pricing", {})),
     )
+
+
+def load_openrouter_settings(path: Path | None = None, *, project_path: Path | None = None) -> OpenRouterSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_or = user_data.get("openrouter", {})
+    project_or = project_data.get("openrouter", {})
+    if not isinstance(user_or, dict):
+        user_or = {}
+    if not isinstance(project_or, dict):
+        project_or = {}
+    merged = {**user_or, **project_or}
+    fb_user = user_or.get("fallback_models", [])
+    fb_project = project_or.get("fallback_models", [])
+    if isinstance(fb_user, list) or isinstance(fb_project, list):
+        combined: list[str] = []
+        seen: set[str] = set()
+        for src in (fb_user if isinstance(fb_user, list) else [], fb_project if isinstance(fb_project, list) else []):
+            for m in src:
+                s = str(m)
+                if s not in seen:
+                    seen.add(s)
+                    combined.append(s)
+        merged["fallback_models"] = combined
+    pricing = {**_parse_openrouter_pricing(user_or.get("pricing", {})), **_parse_openrouter_pricing(project_or.get("pricing", {}))}
+    if pricing:
+        merged["pricing"] = {k: {"input_per_million": v.input_per_million, "output_per_million": v.output_per_million} for k, v in pricing.items()}
+    return _parse_openrouter_section(merged)
 
 
 def load_recording_settings(path: Path | None = None) -> RecordingSettings:
@@ -966,6 +1019,8 @@ def _parse_skills_config(data: dict[str, Any]) -> SkillsConfig:
         enable_user_skills=bool(skills.get("enable_user_skills", True)),
         enable_project_skills=bool(skills.get("enable_project_skills", True)),
         project_rules_max_chars=int(skills.get("project_rules_max_chars", 8000)),
+        auto_activate=bool(skills.get("auto_activate", True)),
+        show_active_in_prompt_footer=bool(skills.get("show_active_in_prompt_footer", True)),
         marketplace=MarketplaceSettings(
             enabled=bool(mp_raw.get("enabled", False)),
             allow_unsigned_local=bool(mp_raw.get("allow_unsigned_local", True)),
