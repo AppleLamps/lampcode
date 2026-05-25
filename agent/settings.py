@@ -159,6 +159,33 @@ class TurnCheckpointSettings:
 
 
 @dataclass
+class ShellSettings:
+    enabled: bool = False
+    persistent: bool = True
+    pty: bool = True
+    idle_timeout_sec: int = 600
+
+
+@dataclass
+class HooksSettings:
+    fail_on_error: bool = False
+
+
+@dataclass
+class MemoriesSettings:
+    enabled: bool = False
+    max_inject: int = 5
+    path: str = "~/.agent-cli/memories.json"
+
+
+@dataclass
+class PlanModeSettings:
+    allowed_tools: list[str] = field(
+        default_factory=lambda: ["read_file", "search_repo", "request_user_input"]
+    )
+
+
+@dataclass
 class IsolationSettings:
     enabled: bool = True
     strip_env: bool = True
@@ -545,6 +572,87 @@ def load_turn_checkpoint_settings(
         enabled=bool(merged.get("enabled", True)),
         dir=str(merged.get("dir", "~/.agent-cli/turn-checkpoints")),
     )
+
+
+def load_shell_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> ShellSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_sh = user_data.get("shell", {})
+    project_sh = project_data.get("shell", {})
+    if not isinstance(user_sh, dict):
+        user_sh = {}
+    if not isinstance(project_sh, dict):
+        project_sh = {}
+    merged = {**user_sh, **project_sh}
+    return ShellSettings(
+        enabled=bool(merged.get("enabled", False)),
+        persistent=bool(merged.get("persistent", True)),
+        pty=bool(merged.get("pty", True)),
+        idle_timeout_sec=int(merged.get("idle_timeout_sec", 600)),
+    )
+
+
+def load_hooks_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> HooksSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_h = user_data.get("hooks", {})
+    project_h = project_data.get("hooks", {})
+    if not isinstance(user_h, dict):
+        user_h = {}
+    if not isinstance(project_h, dict):
+        project_h = {}
+    merged = {**user_h, **project_h}
+    return HooksSettings(fail_on_error=bool(merged.get("fail_on_error", False)))
+
+
+def load_memories_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> MemoriesSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_m = user_data.get("memories", {})
+    project_m = project_data.get("memories", {})
+    if not isinstance(user_m, dict):
+        user_m = {}
+    if not isinstance(project_m, dict):
+        project_m = {}
+    merged = {**user_m, **project_m}
+    return MemoriesSettings(
+        enabled=bool(merged.get("enabled", False)),
+        max_inject=int(merged.get("max_inject", 5)),
+        path=str(merged.get("path", "~/.agent-cli/memories.json")),
+    )
+
+
+def load_plan_mode_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> PlanModeSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_p = user_data.get("plan_mode", {})
+    project_p = project_data.get("plan_mode", {})
+    if not isinstance(user_p, dict):
+        user_p = {}
+    if not isinstance(project_p, dict):
+        project_p = {}
+    merged = {**user_p, **project_p}
+    default_tools = ["read_file", "search_repo", "request_user_input"]
+    allowed = merged.get("allowed_tools", default_tools)
+    if not isinstance(allowed, list):
+        allowed = default_tools
+    return PlanModeSettings(allowed_tools=[str(t) for t in allowed])
 
 
 def load_isolation_settings(path: Path | None = None) -> IsolationSettings:

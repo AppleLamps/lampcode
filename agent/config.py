@@ -23,6 +23,10 @@ from agent.settings import (
     OpenRouterSettings,
     RecordingSettings,
     TurnCheckpointSettings,
+    ShellSettings,
+    HooksSettings,
+    MemoriesSettings,
+    PlanModeSettings,
     SandboxProfileSettings,
     TelemetrySettings,
     WebSearchSettings,
@@ -33,6 +37,10 @@ from agent.settings import (
     load_openrouter_settings,
     load_recording_settings,
     load_turn_checkpoint_settings,
+    load_shell_settings,
+    load_hooks_settings,
+    load_memories_settings,
+    load_plan_mode_settings,
     load_sandbox_profile_settings,
     load_kernel_sandbox_settings,
     load_telemetry_settings,
@@ -123,6 +131,10 @@ class Config:
     openrouter: OpenRouterSettings = field(default_factory=OpenRouterSettings)
     recording: RecordingSettings = field(default_factory=RecordingSettings)
     turn_checkpoint: TurnCheckpointSettings = field(default_factory=TurnCheckpointSettings)
+    shell: ShellSettings = field(default_factory=ShellSettings)
+    hooks: HooksSettings = field(default_factory=HooksSettings)
+    memories: MemoriesSettings = field(default_factory=MemoriesSettings)
+    plan_mode: PlanModeSettings = field(default_factory=PlanModeSettings)
     isolation: IsolationSettings = field(default_factory=IsolationSettings)
     web_search: WebSearchSettings = field(default_factory=WebSearchSettings)
     execution: ExecutionSettings = field(default_factory=ExecutionSettings)
@@ -301,6 +313,10 @@ class Config:
         turn_checkpoint = load_turn_checkpoint_settings(
             resolved_config_path, project_path=project_path
         )
+        shell_cfg = load_shell_settings(resolved_config_path, project_path=project_path)
+        hooks_cfg = load_hooks_settings(resolved_config_path, project_path=project_path)
+        memories_cfg = load_memories_settings(resolved_config_path, project_path=project_path)
+        plan_mode_cfg = load_plan_mode_settings(resolved_config_path, project_path=project_path)
         isolation = load_isolation_settings(resolved_config_path)
         web_search = load_web_search_settings(resolved_config_path)
         execution_cfg = load_execution_settings(resolved_config_path)
@@ -353,6 +369,10 @@ class Config:
             openrouter=openrouter,
             recording=recording,
             turn_checkpoint=turn_checkpoint,
+            shell=shell_cfg,
+            hooks=hooks_cfg,
+            memories=memories_cfg,
+            plan_mode=plan_mode_cfg,
             isolation=isolation,
             web_search=web_search,
             execution=execution_cfg,

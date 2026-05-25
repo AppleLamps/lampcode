@@ -47,6 +47,7 @@ class ReplSession:
         self.model_profile_override = model_profile
         self.resume_turn = resume_turn
         self._pending_resume_turn = resume_turn
+        self.plan_mode = False
         self.output = OutputHandler(quiet_tools=False)
         self._completer_installed = install_repl_completer(config.cwd)
 
@@ -100,6 +101,7 @@ class ReplSession:
             harness_session=self.session,
             session_auto_approve=cfg.auto_approve,
             resume_checkpoint=resume_cp,
+            plan_mode=self.plan_mode,
         )
         for item in reversed(turn.items):
             if item.type == "agentMessage":
@@ -163,9 +165,19 @@ class ReplSession:
         if name == "/compact":
             self._print("Compaction runs automatically when context threshold is reached")
             return True
+        if name == "/plan":
+            if arg.lower() in ("on", "true", "1", "enable"):
+                self.plan_mode = True
+                self._print("Plan mode ON (read-only tools)")
+            elif arg.lower() in ("off", "false", "0", "disable"):
+                self.plan_mode = False
+                self._print("Plan mode OFF")
+            else:
+                self._print(f"Plan mode: {'on' if self.plan_mode else 'off'}")
+            return True
         self._print(
             "Unknown command. Try /quit, /thread, /cost, /model, /profile, "
-            "/model-profile, /skills, /usage"
+            "/model-profile, /skills, /usage, /plan"
         )
         return True
 
