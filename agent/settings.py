@@ -163,6 +163,7 @@ class ShellSettings:
     enabled: bool = False
     persistent: bool = True
     pty: bool = True
+    backend: str = "auto"
     idle_timeout_sec: int = 600
     max_output_chars: int = 20_000
     default_yield_ms: int = 10_000
@@ -222,6 +223,14 @@ class WebSearchSettings:
     provider: str = "duckduckgo"
     max_results: int = 5
     timeout_sec: int = 15
+    api_key_env: str = ""
+    api_key: str = ""
+
+
+DEFAULT_WEB_SEARCH_API_KEY_ENV = {
+    "exa": "EXA_API_KEY",
+    "tavily": "TAVILY_API_KEY",
+}
 
 
 @dataclass
@@ -614,6 +623,7 @@ def load_shell_settings(
         enabled=bool(merged.get("enabled", False)),
         persistent=bool(merged.get("persistent", True)),
         pty=bool(merged.get("pty", True)),
+        backend=str(merged.get("backend", "auto")),
         idle_timeout_sec=int(merged.get("idle_timeout_sec", 600)),
         max_output_chars=int(merged.get("max_output_chars", 20_000)),
         default_yield_ms=int(merged.get("default_yield_ms", 10_000)),
@@ -759,16 +769,31 @@ def load_isolation_settings(path: Path | None = None) -> IsolationSettings:
     )
 
 
-def load_web_search_settings(path: Path | None = None) -> WebSearchSettings:
-    data = _load_toml(path or default_config_path())
-    ws = data.get("web_search", {})
-    if not isinstance(ws, dict):
-        ws = {}
+def load_web_search_settings(
+    path: Path | None = None,
+    *,
+    project_path: Path | None = None,
+) -> WebSearchSettings:
+    user_data = _load_toml(path or default_config_path())
+    project_data = _load_toml(project_path) if project_path else {}
+    user_ws = user_data.get("web_search", {})
+    project_ws = project_data.get("web_search", {})
+    if not isinstance(user_ws, dict):
+        user_ws = {}
+    if not isinstance(project_ws, dict):
+        project_ws = {}
+    merged = {**user_ws, **project_ws}
+    provider = str(merged.get("provider", "duckduckgo"))
+    api_key_env = str(merged.get("api_key_env", ""))
+    if not api_key_env:
+        api_key_env = DEFAULT_WEB_SEARCH_API_KEY_ENV.get(provider, "")
     return WebSearchSettings(
-        enabled=bool(ws.get("enabled", False)),
-        provider=str(ws.get("provider", "duckduckgo")),
-        max_results=int(ws.get("max_results", 5)),
-        timeout_sec=int(ws.get("timeout_sec", 15)),
+        enabled=bool(merged.get("enabled", False)),
+        provider=provider,
+        max_results=int(merged.get("max_results", 5)),
+        timeout_sec=int(merged.get("timeout_sec", 15)),
+        api_key_env=api_key_env,
+        api_key=str(merged.get("api_key", "")),
     )
 
 

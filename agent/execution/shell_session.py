@@ -9,10 +9,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Literal
 
+from agent.execution.conpty import ConPtySession, conpty_available
 from agent.sandbox.retry import truncate_shell_output
 from agent.settings import ShellSettings
 
-ShellBackend = Literal["oneshot", "pipes", "pty"]
+ShellBackend = Literal["oneshot", "pipes", "pty", "conpty"]
 
 
 @dataclass
@@ -25,7 +26,7 @@ class ShellSessionResult:
 
 
 class ShellSession:
-    """Persistent shell session (pipe-based; Unix PTY when available)."""
+    """Persistent shell session (pipe-based; Unix PTY label; Windows ConPTY when available)."""
 
     def __init__(
         self,
@@ -37,6 +38,7 @@ class ShellSession:
         self.cwd = cwd
         self.settings = settings
         self._proc: subprocess.Popen[str] | None = None
+        self._conpty: ConPtySession | None = None
         self._lock = threading.Lock()
         self._last_active = time.monotonic()
         self._backend = self._resolve_backend(settings)
@@ -56,7 +58,18 @@ class ShellSession:
     def _resolve_backend(settings: ShellSettings) -> ShellBackend:
         if not settings.enabled or not settings.persistent:
             return "oneshot"
-        if platform.system() != "Windows" and settings.pty and ShellSession._probe_pty():
+        pref = (settings.backend or "auto").strip().lower()
+        if pref == "conpty":
+            return "conpty" if conpty_available() else "pipes"
+        if pref == "pipes":
+            return "pipes"
+        if pref == "pty":
+            if platform.system() != "Windows" and settings.pty and ShellSession._probe_pty():
+                return "pty"
+            return "pipes"
+        if platform.system() == "Windows":
+            return "conpty" if conpty_available() else "pipes"
+        if settings.pty and ShellSession._probe_pty():
             return "pty"
         return "pipes"
 
@@ -78,6 +91,21 @@ class ShellSession:
             bufsize=1,
         )
 
+    def _ensure_conpty(self) -> ConPtySession:
+        if self._conpty is None:
+            self._conpty = ConPtySession(self.cwd)
+        return self._conpty
+
+    def write_stdin(self, data: str) -> None:
+        with self._lock:
+            if self._backend == "conpty":
+                self._ensure_conpty().write_stdin(data)
+            elif self._backend in ("pipes", "pty") and self._proc and self._proc.stdin:
+                eol = "\r\n" if platform.system() == "Windows" else "\n"
+                payload = data if data.endswith(eol) else f"{data}{eol}"
+                self._proc.stdin.write(payload)
+                self._proc.stdin.flush()
+
     def run(
         self,
         cmd: str,
@@ -94,6 +122,8 @@ class ShellSession:
             run_timeout = min(timeout, max(1, int(wait_sec))) if self._backend != "oneshot" else timeout
             if self._backend == "oneshot":
                 result = self._run_oneshot(cmd, timeout=timeout, stdin=stdin)
+            elif self._backend == "conpty":
+                result = self._run_conpty(cmd, stdin=stdin, timeout=run_timeout)
             else:
                 result = self._run_persistent(cmd, stdin=stdin, timeout=run_timeout)
             output, truncated = truncate_shell_output(result.output, cap)
@@ -109,6 +139,25 @@ class ShellSession:
                 session_id=result.session_id,
                 meta=meta,
             )
+
+    def _run_conpty(
+        self,
+        cmd: str,
+        *,
+        stdin: str | None,
+        timeout: int,
+    ) -> ShellSessionResult:
+        if not conpty_available():
+            return self._run_persistent(cmd, stdin=stdin, timeout=timeout)
+        conpty = self._ensure_conpty()
+        raw = conpty.run(cmd, stdin=stdin, timeout=timeout)
+        return ShellSessionResult(
+            output=raw.output,
+            exit_code=raw.exit_code,
+            duration_ms=raw.duration_ms,
+            session_id=self.session_id,
+            meta=raw.meta,
+        )
 
     def _run_oneshot(
         self,
@@ -209,6 +258,9 @@ class ShellSession:
         )
 
     def close(self) -> None:
+        if self._conpty is not None:
+            self._conpty.close()
+            self._conpty = None
         if self._proc and self._proc.poll() is None:
             self._proc.terminate()
         self._proc = None
@@ -260,23 +312,33 @@ class ShellSessionManager:
 
 def pty_support_status() -> dict[str, Any]:
     system = platform.system()
+    conpty_ok = conpty_available()
     if system == "Windows":
+        backend = "conpty" if conpty_ok else "pipes"
+        note = (
+            "ConPTY persistent shell available"
+            if conpty_ok
+            else "Pipe-based persistent shell (install pywinpty for ConPTY)"
+        )
         return {
             "available": True,
-            "backend": "persistent-pipes",
-            "pty": False,
-            "note": "Pipe-based persistent shell on Windows (cmd.exe); ConPTY not enabled",
+            "backend": backend,
+            "conpty_available": conpty_ok,
+            "pty": conpty_ok,
+            "note": note,
         }
     if ShellSession._probe_pty():
         return {
             "available": True,
             "backend": "pty",
+            "conpty_available": False,
             "pty": True,
             "note": "Unix PTY available",
         }
     return {
         "available": True,
-        "backend": "persistent-pipes",
+        "backend": "pipes",
+        "conpty_available": False,
         "pty": False,
         "note": "Pipe-based persistent shell; pty module unavailable",
     }

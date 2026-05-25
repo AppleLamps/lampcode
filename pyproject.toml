@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "agent-cli"
-version = "2.7.0"
+version = "2.8.0"
 description = "Codex-inspired local coding agent CLI powered by OpenRouter"
 readme = "README.md"
 requires-python = ">=3.11"
@@ -31,6 +31,9 @@ marketplace = [
 ]
 tui = [
     "textual>=0.47.0",
+]
+windows = [
+    "pywinpty>=2.0.0",
 ]
 
 [project.scripts]

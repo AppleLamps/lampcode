@@ -45,8 +45,8 @@ def test_pty_status_reports_persistent_pipes_on_windows() -> None:
     status = pty_support_status()
     assert status["available"] is True
     if platform.system() == "Windows":
-        assert status["backend"] == "persistent-pipes"
-        assert status["pty"] is False
+        assert status["backend"] in ("pipes", "conpty")
+        assert status["conpty_available"] == (status["backend"] == "conpty")
 
 
 def test_compaction_preserves_task_in_rebuilt_messages(tmp_path: Path) -> None:

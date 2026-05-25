@@ -30,6 +30,14 @@ reasoning_effort = "high"
 
 # [harness]
 # post_patch_test = "pytest -q"
+
+# [shell]
+# enabled = false
+# backend = "auto"  # auto | pipes | conpty | pty
+
+# [.agent-cli/exec-policy.toml]
+# [allow_prefixes]
+# prefixes = ["pytest -q", "git status"]
 """
 
 AGENTS_MD_TEMPLATE = """# Project rules
