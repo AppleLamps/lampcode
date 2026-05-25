@@ -1335,10 +1335,17 @@ def version_cmd() -> None:
     """Print semver and git commit (if available)."""
     from importlib.metadata import version as pkg_version
 
+    ver = "unknown"
     try:
         ver = pkg_version("agent-cli")
     except Exception:
-        ver = "unknown"
+        pass
+    pyproject = Path(__file__).resolve().parent.parent / "pyproject.toml"
+    if pyproject.is_file():
+        for line in pyproject.read_text(encoding="utf-8").splitlines():
+            if line.strip().startswith("version ="):
+                ver = line.split("=", 1)[1].strip().strip('"')
+                break
     commit = _git_commit_short()
     if commit:
         stdout_console.print(f"agent-cli {ver} (commit {commit})")
