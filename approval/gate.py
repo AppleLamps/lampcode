@@ -101,6 +101,8 @@ def needs_approval_prompt(
         return False
     if turn_state and turn_state.approve_all:
         return False
+    if session and session.approval_cache.is_approved(tool_name, arguments):
+        return False
 
     if config.exec_policy.mode == ExecPolicyMode.NEVER:
         return False
@@ -199,9 +201,13 @@ def prompt_approval(
                         console.print("[dim][approval] session auto-approve enabled[/dim]")
                     session.session_banner_shown = True
             with trace_span("approval.decision", tool=tool_name, decision="accept_session"):
+                if session:
+                    session.approval_cache.record(tool_name, arguments)
                 return True
 
         result = parse_approval_response(response, turn_state=turn_state, session=session)
+        if result and session:
+            session.approval_cache.record(tool_name, arguments)
         with trace_span("approval.decision", tool=tool_name, decision="accept" if result else "deny"):
             return result
 

@@ -80,6 +80,7 @@ def mcp_tool_is_mutating(tool_name: str) -> bool:
 class SandboxDecision:
     allowed: bool
     reason: str = ""
+    retryable: bool = False
 
     @property
     def blocked(self) -> bool:

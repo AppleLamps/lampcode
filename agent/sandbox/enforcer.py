@@ -32,9 +32,11 @@ def check_run_command(
         if risk == CommandRisk.NETWORK and session and session.has_network_escalation():
             return SandboxDecision(allowed=True)
         if risk in (CommandRisk.WRITE, CommandRisk.NETWORK):
+            retryable = risk == CommandRisk.NETWORK and session is not None
             return SandboxDecision(
                 allowed=False,
                 reason=f"{risk.value}-like command denied in read-only sandbox",
+                retryable=retryable,
             )
         return SandboxDecision(allowed=True)
 
@@ -45,6 +47,7 @@ def check_run_command(
         return SandboxDecision(
             allowed=False,
             reason="network-like command denied in workspace-write sandbox",
+            retryable=True,
         )
     if risk == CommandRisk.WRITE:
         for target in extract_write_targets(cmd):
@@ -61,6 +64,7 @@ def check_run_command(
                 return SandboxDecision(
                     allowed=False,
                     reason=f"write target outside workspace: {target!r}",
+                    retryable=True,
                 )
     return SandboxDecision(allowed=True)
 

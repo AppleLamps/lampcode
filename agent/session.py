@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from approval.cache import ApprovalCache
+
 
 @dataclass
 class HarnessSession:
@@ -19,6 +21,7 @@ class HarnessSession:
     turn_allow_network: bool = False
     turn_allow_write_outside_cwd: bool = False
     turn_allow_full_access: bool = False
+    approval_cache: ApprovalCache = field(default_factory=ApprovalCache)
 
     def enable_session_auto_approve(self) -> None:
         self.session_auto_approve = True
