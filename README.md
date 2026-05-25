@@ -219,14 +219,15 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 870+ tests
+pytest   # 920+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.1.0.
+See [CHANGELOG.md](CHANGELOG.md) for v2.3.0 (Phase 22).
 
 ## Further reading
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
+- [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)
 - [Enterprise features](docs/enterprise.md) — serve, OIDC, RBAC, DAG, scheduler (Phases 6–18)
