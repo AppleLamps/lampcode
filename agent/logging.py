@@ -17,6 +17,7 @@ def log_event(
     *,
     thread_id: str | None = None,
     turn_id: str | None = None,
+    worker_id: str | None = None,
     tool: str | None = None,
     backend: str | None = None,
     message: str | None = None,
@@ -32,6 +33,8 @@ def log_event(
             payload["thread_id"] = thread_id
         if turn_id:
             payload["turn_id"] = turn_id
+        if worker_id:
+            payload["worker_id"] = worker_id
         if tool:
             payload["tool"] = tool
         if backend:

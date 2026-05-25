@@ -658,9 +658,73 @@ Supervisor polish: checkpoint JSON includes `worker_dependencies` (structure for
 3. Enable `enable_turn_start` only when needed; cap `max_concurrent_turns`.
 4. Run `agent config validate --strict` in CI/deploy scripts.
 5. Back up `~/.agent-cli/sync-state/` before aggressive `push-pull` sync on shared remotes.
-6. Run `pytest` (378+ tests) before release; check `agent doctor` for SSH/sync/tooling.
+6. Run `pytest` (420+ tests) before release; check `agent doctor --deep` for TLS/RBAC/marketplace.
 
-## Phase 11 — Worker DAG v4, OpenTelemetry, sandbox profiles (v1.1.0)
+## Phase 12 — Serve TLS/RBAC, OTEL v2, signed skill marketplace (v1.2.0)
+
+### Serve hardening
+
+```toml
+[serve]
+auth_mode = "both"              # bearer | session | both
+enable_turn_start = true
+
+[serve.tls]
+enabled = false
+cert_file = "~/.agent-cli/certs/server.crt"
+key_file = "~/.agent-cli/certs/server.key"
+
+[serve.rbac]
+enabled = false
+default_role = "viewer"
+
+[[serve.rbac.users]]
+name = "alice"
+token_hash = "sha256:..."
+role = "admin"
+```
+
+Roles: **viewer** (read/SSE), **operator** (+ run/approve/cancel/sync), **admin** (+ user management).
+
+```powershell
+agent auth hash-token "my-secret"
+agent serve users add bob "bob-secret" --role operator
+agent serve --tls --generate-self-signed --enable-turn-start
+```
+
+Session login: `POST /auth/login` → `Authorization: Session <id>` or cookie.
+
+### OTEL v2
+
+Full spans: `sync.*`, `execution.*.run`, `approval.*`, `serve.http.request`. JSON logs include `trace_id`, `service.name`, `service.version`. RED histograms: `agent_turn_duration_seconds`, `agent_tool_duration_seconds`, `agent_http_request_duration_seconds`.
+
+```powershell
+agent telemetry status --verbose
+agent metrics show --format prometheus
+pip install -e ".[otel]"
+```
+
+### Signed skill marketplace
+
+```powershell
+pip install -e ".[marketplace]"
+agent skills trust-key add publisher1 ~\.agent-cli\marketplace\keys\publisher1.ed25519.pub
+agent skills install .\bundle.askill
+agent skills verify docs-helper
+agent skills marketplace list
+```
+
+`.askill` bundles: `SKILL.md`, `MANIFEST.json`, `SIGNATURE.ed25519`.
+
+## Tests
+
+```powershell
+pytest   # 420+ tests
+```
+
+## Phase 13 (planned, not implemented)
+
+Kernel-grade sandbox (AppContainer/Seatbelt/bubblewrap), web IDE lite (Monaco), remote marketplace CDN, cross-turn DAG v5, OAuth/OIDC SSO.
 
 ### Worker DAG v4
 

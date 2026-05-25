@@ -14,12 +14,36 @@ from agent.paths import default_config_path
 
 
 @dataclass
+class TelemetrySettings:
+    enabled: bool = False
+    service_name: str = "agent-cli"
+    otlp_endpoint: str = "http://127.0.0.1:4318/v1/traces"
+    sample_rate: float = 1.0
+    export_console: bool = False
+    export_runtime_metrics: bool = True
+    histogram_buckets_sec: list[float] = field(
+        default_factory=lambda: [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120]
+    )
+
+
+@dataclass
+class MarketplaceSettings:
+    enabled: bool = False
+    allow_unsigned_local: bool = True
+    allow_unsigned_cache: bool = False
+    require_signature: bool = True
+    trusted_publishers: list[str] = field(default_factory=list)
+    registry_dir: str = "~/.agent-cli/marketplace"
+
+
+@dataclass
 class SkillsConfig:
     max_active: int = 3
     max_body_chars: int = 4000
     enable_user_skills: bool = True
     enable_project_skills: bool = True
     project_rules_max_chars: int = 8000
+    marketplace: MarketplaceSettings = field(default_factory=MarketplaceSettings)
 
 
 @dataclass
@@ -205,15 +229,6 @@ class MultiAgentSettings:
 
 
 @dataclass
-class TelemetrySettings:
-    enabled: bool = False
-    service_name: str = "agent-cli"
-    otlp_endpoint: str = "http://127.0.0.1:4318/v1/traces"
-    sample_rate: float = 1.0
-    export_console: bool = False
-
-
-@dataclass
 class SandboxProfileSettings:
     enabled: bool = False
     profile: str = "auto"
@@ -224,10 +239,33 @@ class SandboxProfileSettings:
 
 
 @dataclass
+class ServeTlsSettings:
+    enabled: bool = False
+    cert_file: str = "~/.agent-cli/certs/server.crt"
+    key_file: str = "~/.agent-cli/certs/server.key"
+    auto_generate_self_signed: bool = False
+
+
+@dataclass
+class RbacUser:
+    name: str
+    token_hash: str
+    role: str = "viewer"
+
+
+@dataclass
+class ServeRbacSettings:
+    enabled: bool = False
+    default_role: str = "viewer"
+    users: list[RbacUser] = field(default_factory=list)
+
+
+@dataclass
 class ServeSettings:
     host: str = "127.0.0.1"
     port: int = 8765
     auth_token: str = ""
+    auth_mode: str = "bearer"
     allow_remote_bind: bool = False
     enable_control: bool = True
     enable_turn_start: bool = False
@@ -235,6 +273,10 @@ class ServeSettings:
     approval_timeout_sec: int = 300
     stream_buffer_size: int = 256
     cors: bool = False
+    session_ttl_sec: int = 28800
+    session_persist: bool = True
+    tls: ServeTlsSettings = field(default_factory=ServeTlsSettings)
+    rbac: ServeRbacSettings = field(default_factory=ServeRbacSettings)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -433,6 +475,10 @@ def load_telemetry_settings(path: Path | None = None) -> TelemetrySettings:
         otlp_endpoint=str(tel.get("otlp_endpoint", "http://127.0.0.1:4318/v1/traces")),
         sample_rate=float(tel.get("sample_rate", 1.0)),
         export_console=bool(tel.get("export_console", False)),
+        export_runtime_metrics=bool(tel.get("export_runtime_metrics", True)),
+        histogram_buckets_sec=[
+            float(x) for x in tel.get("histogram_buckets_sec", [0.1, 0.5, 1, 2, 5, 10, 30, 60, 120])
+        ],
     )
 
 
@@ -456,10 +502,30 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
     serve = data.get("serve", {})
     if not isinstance(serve, dict):
         serve = {}
+    tls_raw = serve.get("tls", {})
+    if not isinstance(tls_raw, dict):
+        tls_raw = {}
+    rbac_raw = serve.get("rbac", {})
+    if not isinstance(rbac_raw, dict):
+        rbac_raw = {}
+    users_raw = rbac_raw.get("users", serve.get("rbac_users", []))
+    if not isinstance(users_raw, list):
+        users_raw = []
+    users: list[RbacUser] = []
+    for u in users_raw:
+        if isinstance(u, dict) and u.get("name"):
+            users.append(
+                RbacUser(
+                    name=str(u["name"]),
+                    token_hash=str(u.get("token_hash", "")),
+                    role=str(u.get("role", "viewer")),
+                )
+            )
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
         auth_token=str(serve.get("auth_token", "")),
+        auth_mode=str(serve.get("auth_mode", "bearer")),
         allow_remote_bind=bool(serve.get("allow_remote_bind", False)),
         enable_control=bool(serve.get("enable_control", True)),
         enable_turn_start=bool(serve.get("enable_turn_start", False)),
@@ -467,6 +533,19 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
         approval_timeout_sec=int(serve.get("approval_timeout_sec", 300)),
         stream_buffer_size=int(serve.get("stream_buffer_size", 256)),
         cors=bool(serve.get("cors", False)),
+        session_ttl_sec=int(serve.get("session_ttl_sec", 28800)),
+        session_persist=bool(serve.get("session_persist", True)),
+        tls=ServeTlsSettings(
+            enabled=bool(tls_raw.get("enabled", False)),
+            cert_file=str(tls_raw.get("cert_file", "~/.agent-cli/certs/server.crt")),
+            key_file=str(tls_raw.get("key_file", "~/.agent-cli/certs/server.key")),
+            auto_generate_self_signed=bool(tls_raw.get("auto_generate_self_signed", False)),
+        ),
+        rbac=ServeRbacSettings(
+            enabled=bool(rbac_raw.get("enabled", False)),
+            default_role=str(rbac_raw.get("default_role", "viewer")),
+            users=users,
+        ),
     )
 
 
@@ -504,12 +583,26 @@ def _parse_skills_config(data: dict[str, Any]) -> SkillsConfig:
     skills = data.get("skills", {})
     if not isinstance(skills, dict):
         return SkillsConfig()
+    mp_raw = skills.get("marketplace", {})
+    if not isinstance(mp_raw, dict):
+        mp_raw = {}
+    trusted = mp_raw.get("trusted_publishers", [])
+    if not isinstance(trusted, list):
+        trusted = []
     return SkillsConfig(
         max_active=int(skills.get("max_active", 3)),
         max_body_chars=int(skills.get("max_body_chars", 4000)),
         enable_user_skills=bool(skills.get("enable_user_skills", True)),
         enable_project_skills=bool(skills.get("enable_project_skills", True)),
         project_rules_max_chars=int(skills.get("project_rules_max_chars", 8000)),
+        marketplace=MarketplaceSettings(
+            enabled=bool(mp_raw.get("enabled", False)),
+            allow_unsigned_local=bool(mp_raw.get("allow_unsigned_local", True)),
+            allow_unsigned_cache=bool(mp_raw.get("allow_unsigned_cache", False)),
+            require_signature=bool(mp_raw.get("require_signature", True)),
+            trusted_publishers=[str(x) for x in trusted],
+            registry_dir=str(mp_raw.get("registry_dir", "~/.agent-cli/marketplace")),
+        ),
     )
 
 

@@ -143,55 +143,67 @@ def prompt_approval(
         return True
 
     summary = format_tool_summary(tool_name, arguments)
-    if _http_bridge and _http_bridge.emit:
-        from agent.serve.approvals import ApprovalRegistry, map_api_decision
+    from agent.telemetry import trace_span
 
-        pending = ApprovalRegistry.global_registry().create(
-            thread_id=_http_bridge.thread_id,
-            turn_id=_http_bridge.turn_id,
-            summary=summary,
-            tool_name=tool_name,
-        )
-        _http_bridge.emit(pending.approval_id, tool_name, summary)
-        decision = ApprovalRegistry.global_registry().wait(
-            pending.approval_id, timeout=_http_bridge.timeout_sec
-        )
-        ApprovalRegistry.global_registry().pop(pending.approval_id)
-        if decision is None:
-            return False
-        mapped = map_api_decision(decision)
-        if mapped == "A":
+    with trace_span("approval.wait", tool=tool_name):
+        if _http_bridge and _http_bridge.emit:
+            from agent.serve.approvals import ApprovalRegistry, map_api_decision
+
+            pending = ApprovalRegistry.global_registry().create(
+                thread_id=_http_bridge.thread_id,
+                turn_id=_http_bridge.turn_id,
+                summary=summary,
+                tool_name=tool_name,
+            )
+            _http_bridge.emit(pending.approval_id, tool_name, summary)
+            decision = ApprovalRegistry.global_registry().wait(
+                pending.approval_id, timeout=_http_bridge.timeout_sec
+            )
+            ApprovalRegistry.global_registry().pop(pending.approval_id)
+            if decision is None:
+                with trace_span("approval.decision", tool=tool_name, decision="timeout"):
+                    return False
+            mapped = map_api_decision(decision)
+            if mapped == "A":
+                if session:
+                    session.enable_session_auto_approve()
+                with trace_span("approval.decision", tool=tool_name, decision="accept_session"):
+                    return True
+            if mapped == "a":
+                if turn_state:
+                    turn_state.approve_all = True
+                with trace_span("approval.decision", tool=tool_name, decision="accept_turn"):
+                    return True
+            approved = mapped == "y"
+            with trace_span("approval.decision", tool=tool_name, decision=mapped or "deny"):
+                return approved
+
+        if _approval_input:
+            response = _approval_input(summary)
+        else:
+            console.print(f"[yellow][approval][/yellow] {summary}")
+            console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
+
+            try:
+                response = input().strip()
+            except (EOFError, KeyboardInterrupt):
+                console.print()
+                with trace_span("approval.decision", tool=tool_name, decision="interrupt"):
+                    return False
+
+        if response == "A":
             if session:
                 session.enable_session_auto_approve()
-            return True
-        if mapped == "a":
-            if turn_state:
-                turn_state.approve_all = True
-            return True
-        return mapped == "y"
+                if not session.session_banner_shown:
+                    if not _approval_input:
+                        console.print("[dim][approval] session auto-approve enabled[/dim]")
+                    session.session_banner_shown = True
+            with trace_span("approval.decision", tool=tool_name, decision="accept_session"):
+                return True
 
-    if _approval_input:
-        response = _approval_input(summary)
-    else:
-        console.print(f"[yellow][approval][/yellow] {summary}")
-        console.print("[dim]Allow? [y/N/a=turn / A=session][/dim]", end=" ")
-
-        try:
-            response = input().strip()
-        except (EOFError, KeyboardInterrupt):
-            console.print()
-            return False
-
-    if response == "A":
-        if session:
-            session.enable_session_auto_approve()
-            if not session.session_banner_shown:
-                if not _approval_input:
-                    console.print("[dim][approval] session auto-approve enabled[/dim]")
-                session.session_banner_shown = True
-        return True
-
-    return parse_approval_response(response, turn_state=turn_state, session=session)
+        result = parse_approval_response(response, turn_state=turn_state, session=session)
+        with trace_span("approval.decision", tool=tool_name, decision="accept" if result else "deny"):
+            return result
 
 
 def format_tool_summary(tool_name: str, arguments: dict[str, Any]) -> str:

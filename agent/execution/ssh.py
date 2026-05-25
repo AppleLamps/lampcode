@@ -142,6 +142,22 @@ class SshExecutionBackend:
         timeout: int = 120,
         max_output: int = 20_000,
     ) -> ExecutionResult:
+        from agent.telemetry import trace_span
+
+        with trace_span("execution.ssh.run", backend="ssh"):
+            return self._execute_run(
+                cwd, cmd, workdir=workdir, timeout=timeout, max_output=max_output
+            )
+
+    def _execute_run(
+        self,
+        cwd: Path,
+        cmd: str,
+        *,
+        workdir: str | None = None,
+        timeout: int = 120,
+        max_output: int = 20_000,
+    ) -> ExecutionResult:
         settings = self._config.execution.ssh
         ok, reason = validate_ssh_config(settings)
         if not ok:

@@ -84,6 +84,22 @@ class DockerExecutionBackend:
         timeout: int = 120,
         max_output: int = 20_000,
     ) -> ExecutionResult:
+        from agent.telemetry import trace_span
+
+        with trace_span("execution.docker.run", backend="docker"):
+            return self._execute_run(
+                cwd, cmd, workdir=workdir, timeout=timeout, max_output=max_output
+            )
+
+    def _execute_run(
+        self,
+        cwd: Path,
+        cmd: str,
+        *,
+        workdir: str | None = None,
+        timeout: int = 120,
+        max_output: int = 20_000,
+    ) -> ExecutionResult:
         allowed, reason = docker_backend_allowed(self._config, cmd)
         if not allowed:
             return ExecutionResult(

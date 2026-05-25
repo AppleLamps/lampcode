@@ -3,6 +3,7 @@ from agent.telemetry.tracer import (
     get_trace_context,
     init_telemetry,
     memory_exporter,
+    trace_function,
     trace_span,
 )
 
@@ -12,4 +13,5 @@ __all__ = [
     "init_telemetry",
     "memory_exporter",
     "trace_span",
+    "trace_function",
 ]

@@ -40,7 +40,7 @@ from agent.multi_agent.resume import list_checkpoint_status, resume_supervisor_t
 from agent.recording.replay import format_run_human
 from agent.recording.store import RunStore
 from agent.metrics import MetricsCollector
-from agent.settings import load_serve_settings
+from agent.settings import load_serve_settings, load_skills_config
 from agent.skills.discovery import discover_skills
 from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
@@ -59,6 +59,10 @@ sync_app = typer.Typer(help="SSH workspace sync commands")
 multi_agent_app = typer.Typer(help="Multi-agent supervisor commands")
 metrics_app = typer.Typer(help="Runtime metrics")
 telemetry_app = typer.Typer(help="OpenTelemetry tracing")
+auth_app = typer.Typer(help="Auth helpers")
+serve_app = typer.Typer(help="HTTP dashboard server", invoke_without_command=True)
+serve_users_app = typer.Typer(help="RBAC user management")
+marketplace_app = typer.Typer(help="Signed skill marketplace")
 app.add_typer(threads_app, name="threads")
 app.add_typer(config_app, name="config")
 app.add_typer(mcp_app, name="mcp")
@@ -70,6 +74,10 @@ app.add_typer(sync_app, name="sync")
 app.add_typer(multi_agent_app, name="multi-agent")
 app.add_typer(metrics_app, name="metrics")
 app.add_typer(telemetry_app, name="telemetry")
+app.add_typer(auth_app, name="auth")
+app.add_typer(serve_app, name="serve")
+serve_app.add_typer(serve_users_app, name="users")
+skills_app.add_typer(marketplace_app, name="marketplace")
 
 console = Console(stderr=True)
 stdout_console = Console()
@@ -587,6 +595,7 @@ def doctor(
     table.add_row(f"docker ({docker_bin})", docker_msg if docker_ok else f"unavailable: {docker_msg}")
     ssh_ok, ssh_msg = check_ssh_available()
     table.add_row("ssh", ssh_msg if ssh_ok else f"unavailable: {ssh_msg}")
+    serve_cfg = load_serve_settings(cfg.config_path)
     if cfg.execution.backend == "ssh" or cfg.execution.ssh.host:
         ssh_cfg_ok, ssh_cfg_msg = validate_ssh_config(cfg.execution.ssh)
         table.add_row("ssh config", ssh_cfg_msg if ssh_cfg_ok else f"incomplete: {ssh_cfg_msg}")
@@ -605,26 +614,6 @@ def doctor(
         except OSError:
             sync_state_writable = "no"
         table.add_row("sync-state dir", f"writable={sync_state_writable}")
-        serve_cfg = load_serve_settings(cfg.config_path)
-        table.add_row(
-            "serve",
-            f"control={serve_cfg.enable_control}, turn_start={serve_cfg.enable_turn_start}, "
-            f"token={'set' if serve_cfg.auth_token else 'auto'}",
-        )
-        if serve_cfg.allow_remote_bind and not serve_cfg.auth_token:
-            checks.append(
-                (
-                    "serve warning",
-                    "allow_remote_bind without auth_token — set serve.auth_token in config",
-                )
-            )
-        if serve_cfg.enable_turn_start and serve_cfg.host not in ("127.0.0.1", "localhost"):
-            checks.append(
-                (
-                    "serve warning",
-                    "enable_turn_start with non-localhost bind — use token and firewall",
-                )
-            )
         table.add_row(
             "metrics",
             f"enabled={cfg.multi_agent.metrics_enabled}",
@@ -640,6 +629,38 @@ def doctor(
             "ssh pool",
             f"enabled={cfg.execution.ssh.pool.enabled}, max={cfg.execution.ssh.pool.max_sessions}",
         )
+    if serve_cfg.allow_remote_bind and not serve_cfg.auth_token and not serve_cfg.rbac.enabled:
+        checks.append(
+            (
+                "serve warning",
+                "allow_remote_bind without auth_token — set serve.auth_token or enable RBAC",
+            )
+        )
+    if serve_cfg.enable_turn_start and serve_cfg.host not in ("127.0.0.1", "localhost"):
+        checks.append(
+            (
+                "serve warning",
+                "enable_turn_start with non-localhost bind — use token and firewall",
+            )
+        )
+    table.add_row(
+        "serve",
+        f"auth_mode={serve_cfg.auth_mode}, rbac={serve_cfg.rbac.enabled}, tls={serve_cfg.tls.enabled}, "
+        f"control={serve_cfg.enable_control}, turn_start={serve_cfg.enable_turn_start}",
+    )
+    table.add_row(
+        "telemetry v2",
+        f"histograms={cfg.telemetry.export_runtime_metrics}, buckets={len(cfg.telemetry.histogram_buckets_sec)}",
+    )
+    skills_cfg = load_skills_config(config_path)
+    mp = skills_cfg.marketplace
+    from agent.skills.marketplace import marketplace_dir
+
+    key_count = len(list((marketplace_dir(mp.registry_dir) / "keys").glob("*.pub")))
+    table.add_row(
+        "skill marketplace",
+        f"enabled={mp.enabled}, trusted_keys={key_count}, require_signature={mp.require_signature}",
+    )
     cp_dir = Path(cfg.multi_agent.checkpoint_dir).expanduser()
     try:
         cp_dir.mkdir(parents=True, exist_ok=True)
@@ -665,6 +686,26 @@ def doctor(
             )
         elif skip_docker:
             console.print("[dim]Docker integration check skipped (AGENT_SKIP_DOCKER_INTEGRATION=1)[/dim]")
+
+        if serve_cfg.tls.enabled:
+            from agent.serve.tls import cert_expiry, expand_path
+
+            cert = expand_path(serve_cfg.tls.cert_file)
+            if cert.is_file():
+                expiry = cert_expiry(cert)
+                if expiry:
+                    console.print(f"[dim]TLS cert expires:[/dim] {expiry.isoformat()}")
+            else:
+                console.print("[yellow]TLS enabled but cert file missing[/yellow]")
+
+        if mp.enabled and key_count == 0:
+            console.print("[yellow]Marketplace enabled but no trusted publisher keys found[/yellow]")
+
+        if cfg.telemetry.enabled:
+            console.print(
+                f"[dim]Telemetry histogram export:[/dim] "
+                f"{'on' if cfg.telemetry.export_runtime_metrics else 'off'}"
+            )
 
     if deep and enabled_mcp:
         console.print("[dim]Deep check: connecting MCP servers...[/dim]")
@@ -777,6 +818,158 @@ def skills_show(
     stdout_console.print(f"# {match.name}\n")
     stdout_console.print(f"*{match.description}*\n")
     stdout_console.print(match.body)
+
+
+@auth_app.command("hash-token")
+def auth_hash_token(
+    token: str = typer.Argument(..., help="Plain token to hash for RBAC config"),
+) -> None:
+    """Print sha256 token hash for serve.rbac.users config."""
+    from agent.serve.rbac import hash_token
+
+    stdout_console.print(hash_token(token))
+
+
+@serve_users_app.command("list")
+def serve_users_list() -> None:
+    """List configured RBAC users."""
+    from agent.serve.users import list_users
+
+    cfg = load_serve_settings()
+    for row in list_users(cfg.rbac.users):
+        stdout_console.print(f"{row['name']}\t{row['role']}\t{row['token_hash']}")
+
+
+@serve_users_app.command("add")
+def serve_users_add(
+    name: str = typer.Argument(...),
+    token: str = typer.Argument(..., help="Plain token (stored as hash only)"),
+    role: str = typer.Option("viewer", "--role", help="viewer|operator|admin"),
+) -> None:
+    """Add or update an RBAC user."""
+    from agent.serve.users import add_user
+
+    cfg = load_serve_settings()
+    result = add_user(name, token, role, cfg.rbac.users)
+    console.print(f"[green]User added:[/green] {result['name']} ({result['role']})")
+
+
+@serve_users_app.command("revoke")
+def serve_users_revoke(name: str = typer.Argument(...)) -> None:
+    """Revoke a dynamic RBAC user."""
+    from agent.serve.users import revoke_user
+
+    cfg = load_serve_settings()
+    revoke_user(name, cfg.rbac.users)
+    console.print(f"[green]Revoked user[/green] {name}")
+
+
+@marketplace_app.command("list")
+def marketplace_list() -> None:
+    """List curated marketplace registry entries."""
+    from agent.skills.marketplace import list_marketplace
+
+    cfg = Config.resolve()
+    skills_cfg = load_skills_config(cfg.config_path)
+    entries = list_marketplace(skills_cfg.marketplace)
+    if not entries:
+        console.print("Marketplace registry empty.")
+        return
+    table = Table(title="Marketplace")
+    table.add_column("Name")
+    table.add_column("Version")
+    table.add_column("Publisher")
+    for e in entries:
+        table.add_row(str(e.get("name", "")), str(e.get("version", "")), str(e.get("publisher", "")))
+    console.print(table)
+
+
+@marketplace_app.command("install")
+def marketplace_install(
+    target: str = typer.Argument(..., help="name@version or path/to/bundle.askill"),
+    scope: str = typer.Option("user", "--scope", help="user|project"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Install a signed skill bundle."""
+    from agent.events import EventEmitter
+    from agent.skills.marketplace import install_bundle, marketplace_dir
+
+    cfg = Config.resolve(cwd=cwd)
+    skills_cfg = load_skills_config(cfg.config_path)
+    mp = skills_cfg.marketplace
+    bundle_path: Path
+    if "@" in target and not target.endswith(".askill"):
+        name, version = target.split("@", 1)
+        bundle_path = marketplace_dir(mp.registry_dir) / "cache" / f"{name}-{version}.tar.gz"
+    else:
+        bundle_path = Path(target)
+    emitter = EventEmitter(lambda e: None)
+    result = install_bundle(
+        bundle_path,
+        settings=mp,
+        scope=scope,
+        cwd=cfg.cwd,
+        emitter=emitter,
+    )
+    if not result.get("ok"):
+        console.print(f"[red]Install failed:[/red] {result.get('error')}")
+        raise typer.Exit(1)
+    console.print(f"[green]Installed[/green] {result['name']}@{result.get('version')} → {result['path']}")
+
+
+@marketplace_app.command("verify")
+def marketplace_verify(
+    name: str = typer.Argument(...),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    """Verify installed or cached marketplace bundle."""
+    from agent.skills.marketplace import marketplace_dir, verify_bundle
+
+    cfg = Config.resolve(cwd=cwd)
+    mp = load_skills_config(cfg.config_path).marketplace
+    cache = marketplace_dir(mp.registry_dir) / "cache"
+    matches = list(cache.glob(f"{name}-*.tar.gz"))
+    if not matches:
+        console.print(f"[red]No cached bundle for[/red] {name}")
+        raise typer.Exit(1)
+    result = verify_bundle(matches[-1], settings=mp)
+    if result.ok:
+        console.print(f"[green]Valid[/green] {name} ({result.reason or 'ok'})")
+    else:
+        console.print(f"[red]Invalid:[/red] {result.reason}")
+        raise typer.Exit(1)
+
+
+@marketplace_app.command("uninstall")
+def marketplace_uninstall(
+    name: str = typer.Argument(...),
+    scope: str = typer.Option("user", "--scope"),
+    cwd: Optional[Path] = typer.Option(None, "--cwd"),
+) -> None:
+    from agent.skills.marketplace import uninstall_skill
+
+    cfg = Config.resolve(cwd=cwd)
+    result = uninstall_skill(name, scope=scope, cwd=cfg.cwd)
+    if not result.get("ok"):
+        console.print(f"[red]{result.get('error')}[/red]")
+        raise typer.Exit(1)
+    console.print(f"[green]Uninstalled[/green] {name}")
+
+
+@marketplace_app.command("trust-key")
+def marketplace_trust_key(
+    publisher: str = typer.Argument(...),
+    key_path: Path = typer.Argument(..., help="Path to .ed25519.pub"),
+) -> None:
+    """Add a trusted publisher public key."""
+    from agent.skills.marketplace import marketplace_dir
+
+    cfg = Config.resolve()
+    mp = load_skills_config(cfg.config_path).marketplace
+    dest = marketplace_dir(mp.registry_dir) / "keys" / f"{publisher}.ed25519.pub"
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(key_path.read_bytes())
+    console.print(f"[green]Trusted key installed:[/green] {dest}")
 
 
 @threads_app.command("list")
@@ -1234,8 +1427,9 @@ def runs_export(
         stdout_console.print(md)
 
 
-@app.command()
+@serve_app.callback()
 def serve(
+    ctx: typer.Context,
     host: str = typer.Option("127.0.0.1", "--host", help="Bind host"),
     port: int = typer.Option(8765, "--port", help="Bind port"),
     token: Optional[str] = typer.Option(None, "--token", help="Auth bearer token"),
@@ -1247,8 +1441,14 @@ def serve(
     allow_remote_bind: bool = typer.Option(
         False, "--allow-remote-bind", help="Allow binding to 0.0.0.0"
     ),
+    tls: bool = typer.Option(False, "--tls", help="Enable TLS (requires cert/key in config)"),
+    generate_self_signed: bool = typer.Option(
+        False, "--generate-self-signed", help="Generate dev self-signed cert before start"
+    ),
 ) -> None:
     """HTTP dashboard for threads, runs, SSE events, turn cancel, and optional turn start."""
+    if ctx.invoked_subcommand is not None:
+        return
     from agent.serve.server import serve as run_serve
 
     cfg = load_serve_settings()
@@ -1260,6 +1460,9 @@ def serve(
     cfg.allow_remote_bind = allow_remote_bind
     if token:
         cfg.auth_token = token
+    if tls or generate_self_signed:
+        cfg.tls.enabled = True
+        cfg.tls.auto_generate_self_signed = generate_self_signed
     if host == "0.0.0.0" and not allow_remote_bind:
         console.print(
             "[red]Error:[/red] Refusing 0.0.0.0 without --allow-remote-bind"
@@ -1270,13 +1473,21 @@ def serve(
             "[yellow]Warning:[/yellow] Binding to 0.0.0.0 exposes the dashboard on all interfaces."
         )
     try:
-        run_serve(host=host, port=port, settings=cfg, auth_token=token or cfg.auth_token or None)
+        run_serve(
+            host=host,
+            port=port,
+            settings=cfg,
+            auth_token=token or cfg.auth_token or None,
+            generate_self_signed=generate_self_signed,
+        )
     except KeyboardInterrupt:
         raise typer.Exit(0) from None
 
 
 @telemetry_app.command("status")
-def telemetry_status_cmd() -> None:
+def telemetry_status_cmd(
+    verbose: bool = typer.Option(False, "--verbose", help="Include histogram buckets and span stats"),
+) -> None:
     """Show telemetry configuration and exporter availability."""
     import json
 
@@ -1290,20 +1501,21 @@ def telemetry_status_cmd() -> None:
         otel_installed = True
     except ImportError:
         pass
-    stdout_console.print(
-        json.dumps(
-            {
-                "enabled": cfg.telemetry.enabled,
-                "service_name": cfg.telemetry.service_name,
-                "otlp_endpoint": cfg.telemetry.otlp_endpoint,
-                "sample_rate": cfg.telemetry.sample_rate,
-                "export_console": cfg.telemetry.export_console,
-                "otel_packages_installed": otel_installed,
-                "otel_runtime_available": provider._otel_available,
-            },
-            indent=2,
-        )
-    )
+    payload = {
+        "enabled": cfg.telemetry.enabled,
+        "service_name": cfg.telemetry.service_name,
+        "otlp_endpoint": cfg.telemetry.otlp_endpoint,
+        "sample_rate": cfg.telemetry.sample_rate,
+        "export_console": cfg.telemetry.export_console,
+        "export_runtime_metrics": cfg.telemetry.export_runtime_metrics,
+        "otel_packages_installed": otel_installed,
+        "otel_runtime_available": provider._otel_available,
+    }
+    if verbose:
+        payload["histogram_buckets_sec"] = cfg.telemetry.histogram_buckets_sec
+        payload["memory_spans"] = len(provider._memory.spans)
+        payload["trace_context_sample"] = provider.trace_context()
+    stdout_console.print(json.dumps(payload, indent=2))
 
 
 @metrics_app.command("show")

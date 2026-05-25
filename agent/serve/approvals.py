@@ -15,6 +15,8 @@ class PendingApproval:
     tool_name: str
     event: threading.Event = field(default_factory=threading.Event)
     decision: str | None = None
+    approved_by: str | None = None
+    approved_by_role: str | None = None
 
 
 class ApprovalRegistry:
@@ -57,12 +59,21 @@ class ApprovalRegistry:
             self._pending[approval_id] = pending
         return pending
 
-    def resolve(self, approval_id: str, decision: str) -> bool:
+    def resolve(
+        self,
+        approval_id: str,
+        decision: str,
+        *,
+        approved_by: str | None = None,
+        approved_by_role: str | None = None,
+    ) -> bool:
         with self._lock:
             pending = self._pending.get(approval_id)
         if pending is None:
             return False
         pending.decision = decision
+        pending.approved_by = approved_by
+        pending.approved_by_role = approved_by_role
         pending.event.set()
         return True
 

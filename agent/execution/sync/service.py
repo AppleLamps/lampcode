@@ -33,6 +33,7 @@ from agent.execution.sync.state import SyncStateStore
 from agent.metrics import MetricsCollector
 from agent.models import WorkspaceSyncItem
 from agent.session import HarnessSession
+from agent.telemetry.tracer import trace_function
 
 
 def _get_transport(config: Config, name: str, runner=None):
@@ -61,6 +62,7 @@ def _prepare_remote_manifest(
     )
 
 
+@trace_function("sync.fetch_remote")
 def run_sync_fetch_remote(
     config: Config,
     *,
@@ -127,6 +129,7 @@ def sync_status(config: Config) -> dict:
     }
 
 
+@trace_function("sync.plan")
 def run_sync_plan(
     config: Config,
     *,
@@ -251,6 +254,7 @@ def _finalize_incremental(
         replicate_remote_state_if_enabled(config, thread_id, plan.remote_manifest)
 
 
+@trace_function("sync.push")
 def run_sync_push(
     config: Config,
     *,
@@ -549,6 +553,7 @@ def _run_incremental_push(
     return result, item
 
 
+@trace_function("sync.pull")
 def run_sync_pull(
     config: Config,
     *,

@@ -26,6 +26,22 @@ class LocalExecutionBackend:
         timeout: int = 120,
         max_output: int = 20_000,
     ) -> ExecutionResult:
+        from agent.telemetry import trace_span
+
+        with trace_span("execution.local.run", backend="local"):
+            return self._execute_run(
+                cwd, cmd, workdir=workdir, timeout=timeout, max_output=max_output
+            )
+
+    def _execute_run(
+        self,
+        cwd: Path,
+        cmd: str,
+        *,
+        workdir: str | None = None,
+        timeout: int = 120,
+        max_output: int = 20_000,
+    ) -> ExecutionResult:
         if self._config.use_isolation:
             from agent.isolation.runner import run_isolated_command
 

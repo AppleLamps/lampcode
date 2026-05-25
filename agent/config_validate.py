@@ -79,13 +79,54 @@ def validate_config(config: Config | None = None, *, config_path: Path | None = 
             )
         )
 
-    if serve.enable_turn_start and not serve.auth_token:
+    if serve.enable_turn_start and not serve.auth_token and not serve.rbac.enabled:
         result.issues.append(
             ValidationIssue(
                 "warning",
                 "serve.enable_turn_start=true without auth_token — token will be auto-generated at startup",
             )
         )
+
+    if (
+        serve.host in ("0.0.0.0", "::")
+        and not serve.tls.enabled
+        and not serve.rbac.enabled
+    ):
+        result.issues.append(
+            ValidationIssue(
+                "error",
+                "Refusing 0.0.0.0 bind without TLS and RBAC — enable serve.tls or serve.rbac",
+            )
+        )
+
+    if serve.rbac.enabled and not serve.rbac.users and not serve.auth_token:
+        from agent.serve.users import load_dynamic_users
+
+        if not load_dynamic_users():
+            result.issues.append(
+                ValidationIssue(
+                    "error",
+                    "serve.rbac.enabled=true but no users configured — add [[serve.rbac.users]] or agent serve users add",
+                )
+            )
+
+    if serve.tls.auto_generate_self_signed:
+        result.issues.append(
+            ValidationIssue(
+                "warning",
+                "serve.tls.auto_generate_self_signed=true — dev only; use proper certs in production",
+            )
+        )
+
+    if serve.tls.enabled:
+        from agent.serve.tls import expand_path
+
+        cert = expand_path(serve.tls.cert_file)
+        key = expand_path(serve.tls.key_file)
+        if not cert.is_file():
+            result.issues.append(ValidationIssue("error", f"TLS cert missing: {cert}"))
+        if not key.is_file():
+            result.issues.append(ValidationIssue("error", f"TLS key missing: {key}"))
 
     import os
 

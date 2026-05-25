@@ -666,6 +666,16 @@ class EventEmitter:
             )
         )
 
+    def skills_marketplace_installed(
+        self, name: str, *, version: str, publisher: str, scope: str
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "skills.marketplace.installed",
+                data={"name": name, "version": version, "publisher": publisher, "scope": scope},
+            )
+        )
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

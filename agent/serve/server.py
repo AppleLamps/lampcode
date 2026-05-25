@@ -16,12 +16,16 @@ from agent.models import Thread
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
 from agent.serve.approvals import ApprovalRegistry, map_api_decision
-from agent.serve.auth import authorize_request
-from agent.serve.dashboard import render_dashboard_html
+from agent.serve.auth import authorize_request_v2, extract_bearer_token
+from agent.serve.dashboard import render_dashboard_html, render_login_html
 from agent.serve.turn_runner import TurnRunner
+from agent.serve.sessions import SessionStore
+from agent.serve.users import merge_rbac_users
 from agent.execution.sync.service import resolve_sync_path
 from agent.settings import ServeSettings
 from agent.store import ThreadStore
+from agent.telemetry import trace_span
+from agent.metrics import MetricsCollector
 
 
 class ServeContext:
@@ -32,17 +36,22 @@ class ServeContext:
         run_store: RunStore,
         settings: ServeSettings,
         auth_token: str,
+        session_store: SessionStore | None = None,
+        rbac_users: list | None = None,
     ) -> None:
         self.store = store
         self.run_store = run_store
         self.settings = settings
         self.auth_token = auth_token
+        self.session_store = session_store
+        self.rbac_users = rbac_users or []
 
 
 class AgentHttpHandler(BaseHTTPRequestHandler):
     ctx: ServeContext | None = None
     store: ThreadStore | None = None
     run_store: RunStore | None = None
+    principal = None
 
     def _get_ctx(self) -> ServeContext:
         if self.ctx is not None:
@@ -57,11 +66,47 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
     def log_message(self, format: str, *args: Any) -> None:
         return
 
+    def _dispatch(self, method: str) -> None:
+        start = time.monotonic()
+        path_clean = unquote(urlparse(self.path).path.rstrip("/")) or "/"
+        status_code = 200
+        try:
+            if method == "GET":
+                self.do_GET_inner()
+            else:
+                self.do_POST_inner()
+        except Exception:
+            status_code = 500
+            MetricsCollector.global_collector().inc_error("serve")
+            raise
+        finally:
+            duration = time.monotonic() - start
+            MetricsCollector.global_collector().observe(
+                "agent_http_request_duration_seconds", duration, label=path_clean
+            )
+
     def do_GET(self) -> None:
+        self._dispatch("GET")
+
+    def do_POST(self) -> None:
+        self._dispatch("POST")
+
+    def do_GET_inner(self) -> None:
         if not self._authorize():
             return
         parsed = urlparse(self.path)
         path = unquote(parsed.path.rstrip("/")) or "/"
+
+        if path == "/login":
+            self._html_response(render_login_html())
+            return
+
+        if path == "/auth/me":
+            p = self.principal
+            self._json_response(
+                {"name": p.name if p else "anonymous", "role": p.role if p else "admin"}
+            )
+            return
 
         if path == "/metrics":
             self._metrics_response()
@@ -74,8 +119,16 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         if path == "/":
             ctx = self._get_ctx()
             if ctx.settings.enable_turn_start:
+                role = self.principal.role if self.principal else "admin"
+                name = self.principal.name if self.principal else "legacy"
+                session_mode = ctx.settings.auth_mode in ("session", "both")
                 self._html_response(
-                    render_dashboard_html(token=ctx.auth_token if ctx.auth_token else "")
+                    render_dashboard_html(
+                        token=ctx.auth_token if ctx.auth_token and not session_mode else "",
+                        role=role,
+                        user_name=name,
+                        session_mode=session_mode,
+                    )
                 )
                 return
             threads = ctx.store.list_threads()
@@ -155,11 +208,16 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         self._error(404, "Not found")
 
-    def do_POST(self) -> None:
-        if not self._authorize():
-            return
+    def do_POST_inner(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path.rstrip("/")) or "/"
+
+        if path == "/auth/login":
+            self._auth_login()
+            return
+
+        if not self._authorize():
+            return
 
         if path.startswith("/threads/") and path.endswith("/cancel"):
             thread_id = path[len("/threads/") : -len("/cancel")]
@@ -182,17 +240,70 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         self._error(404, "Not found")
 
+    def _auth_login(self) -> None:
+        ctx = self._get_ctx()
+        if ctx.settings.auth_mode not in ("session", "both"):
+            self._error(404, "Session auth disabled")
+            return
+        length = int(self.headers.get("Content-Length", 0))
+        body = self.rfile.read(length).decode("utf-8") if length else "{}"
+        try:
+            data = json.loads(body)
+        except json.JSONDecodeError:
+            self._error(400, "Invalid JSON")
+            return
+        token = (data.get("token") or extract_bearer_token(dict(self.headers)) or "").strip()
+        if not token:
+            self._error(400, "token required")
+            return
+        client_key = self.client_address[0] if self.client_address else "unknown"
+        session_store = ctx.session_store or SessionStore.global_store()
+        rec, err = session_store.login(
+            token,
+            client_key=client_key,
+            rbac_enabled=ctx.settings.rbac.enabled,
+            rbac_users=ctx.rbac_users,
+            legacy_auth_token=ctx.auth_token,
+            default_role=ctx.settings.rbac.default_role,
+        )
+        if rec is None:
+            self._error(401, err or "Invalid token")
+            return
+        self._json_response(
+            {
+                "session_id": rec.session_id,
+                "expires_at": rec.expires_at,
+                "name": rec.principal_name,
+                "role": rec.role,
+            }
+        )
+
     def _authorize(self) -> bool:
         ctx = self._get_ctx()
-        ok, err = authorize_request(
-            self.path,
-            dict(self.headers),
-            auth_token=ctx.auth_token,
-        )
-        if not ok:
-            self._error(401, err or "Unauthorized")
-            return False
-        return True
+        with trace_span(
+            "serve.http.request",
+            method=getattr(self, "command", "GET"),
+            path=self.path.split("?")[0],
+        ):
+            public = {"/auth/login", "/login"}
+            result = authorize_request_v2(
+                self.path,
+                dict(self.headers),
+                auth_token=ctx.auth_token,
+                public_paths=public if ctx.settings.auth_mode in ("session", "both") else None,
+                auth_mode=ctx.settings.auth_mode,
+                rbac_enabled=ctx.settings.rbac.enabled,
+                rbac_users=ctx.rbac_users,
+                default_role=ctx.settings.rbac.default_role,
+                session_store=ctx.session_store,
+                method=getattr(self, "command", "GET"),
+            )
+            self.principal = result.principal
+            if not result.authorized:
+                status = 403 if result.principal else 401
+                self._error(status, result.error or "Unauthorized")
+                return False
+            return True
 
     def _cancel_thread(self, thread_id: str) -> None:
         if not self._get_ctx().settings.enable_control:
@@ -286,10 +397,23 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         if map_api_decision(decision) is None:
             self._error(400, "decision must be accept, deny, accept_turn, or accept_session")
             return
-        if not ApprovalRegistry.global_registry().resolve(approval_id, decision):
+        if not ApprovalRegistry.global_registry().resolve(
+            approval_id,
+            decision,
+            approved_by=self.principal.name if self.principal else None,
+            approved_by_role=self.principal.role if self.principal else None,
+        ):
             self._error(404, "Approval not found or already resolved")
             return
-        self._json_response({"ok": True, "approval_id": approval_id, "decision": decision})
+        self._json_response(
+            {
+                "ok": True,
+                "approval_id": approval_id,
+                "decision": decision,
+                "approved_by": self.principal.name if self.principal else None,
+                "approved_by_role": self.principal.role if self.principal else None,
+            }
+        )
 
     def _worker_graph(self, thread_id: str) -> None:
         try:
@@ -379,6 +503,8 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 "counters": snap.counters,
                 "labeled_counters": snap.labeled_counters,
                 "gauges": snap.gauges,
+                "histograms": snap.histograms,
+                "labeled_histograms": snap.labeled_histograms,
             }
         )
 
@@ -451,16 +577,30 @@ def serve(
     *,
     settings: ServeSettings | None = None,
     auth_token: str | None = None,
+    generate_self_signed: bool = False,
 ) -> None:
     store = ThreadStore()
     run_store = RunStore()
     cfg = settings or ServeSettings(host=host, port=port)
     token = auth_token if auth_token is not None else cfg.auth_token
-    if not token:
+    rbac_users = merge_rbac_users(cfg.rbac.users)
+    session_store = None
+    if cfg.auth_mode in ("session", "both"):
+        persist = Path.home() / ".agent-cli" / "sessions.json" if cfg.session_persist else None
+        session_store = SessionStore.global_store(ttl_sec=cfg.session_ttl_sec, persist_path=persist)
+
+    if not token and not cfg.rbac.enabled and cfg.auth_mode == "bearer":
         token = secrets.token_urlsafe(24)
         print(f"[agent serve] generated auth token: {token}")
 
-    ctx = ServeContext(store=store, run_store=run_store, settings=cfg, auth_token=token)
+    ctx = ServeContext(
+        store=store,
+        run_store=run_store,
+        settings=cfg,
+        auth_token=token or "",
+        session_store=session_store,
+        rbac_users=rbac_users,
+    )
 
     class Handler(AgentHttpHandler):
         pass
@@ -472,8 +612,32 @@ def serve(
     bind_host = host or cfg.host
     bind_port = port or cfg.port
     server = ThreadingHTTPServer((bind_host, bind_port), Handler)
-    print(f"agent serve listening on http://{bind_host}:{bind_port}")
-    print(f"  Auth: Bearer token required" if token else "  Auth: disabled")
+
+    scheme = "http"
+    if cfg.tls.enabled or generate_self_signed:
+        from agent.serve.tls import expand_path, generate_self_signed_cert, load_ssl_context
+
+        cert_file = expand_path(cfg.tls.cert_file)
+        key_file = expand_path(cfg.tls.key_file)
+        if generate_self_signed or cfg.tls.auto_generate_self_signed:
+            info = generate_self_signed_cert(cert_file, key_file, host=bind_host)
+            print(
+                f"[agent serve] self-signed cert fingerprint (sha256 prefix): "
+                f"{info.get('fingerprint_sha256_prefix')}"
+            )
+        ssl_ctx = load_ssl_context(cert_file, key_file)
+        server.socket = ssl_ctx.wrap_socket(server.socket, server_side=True)
+        scheme = "https"
+
+    print(f"agent serve listening on {scheme}://{bind_host}:{bind_port}")
+    if cfg.rbac.enabled:
+        print(f"  RBAC: enabled ({len(rbac_users)} users, default_role={cfg.rbac.default_role})")
+    if cfg.auth_mode in ("session", "both"):
+        print("  Auth: session + bearer" if cfg.auth_mode == "both" else "  Auth: session")
+    elif token:
+        print("  Auth: Bearer token required")
+    else:
+        print("  Auth: disabled")
     print("  GET /              HTML thread list")
     print("  GET /threads       JSON thread list")
     print("  GET /threads/{id}/events  SSE event stream")
