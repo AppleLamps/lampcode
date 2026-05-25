@@ -4,11 +4,14 @@ import platform
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from agent.settings import ShellSettings
+
+ShellBackend = Literal["oneshot", "pipes", "pty"]
 
 
 @dataclass
@@ -21,7 +24,7 @@ class ShellSessionResult:
 
 
 class ShellSession:
-    """Persistent shell session (best-effort; falls back to one-shot when PTY unavailable)."""
+    """Persistent shell session (pipe-based; Unix PTY when available)."""
 
     def __init__(
         self,
@@ -35,7 +38,7 @@ class ShellSession:
         self._proc: subprocess.Popen[str] | None = None
         self._lock = threading.Lock()
         self._last_active = time.monotonic()
-        self._pty_available = self._probe_pty()
+        self._backend = self._resolve_backend(settings)
 
     @staticmethod
     def _probe_pty() -> bool:
@@ -48,12 +51,24 @@ class ShellSession:
         except ImportError:
             return False
 
+    @staticmethod
+    def _resolve_backend(settings: ShellSettings) -> ShellBackend:
+        if not settings.enabled or not settings.persistent:
+            return "oneshot"
+        if platform.system() != "Windows" and settings.pty and ShellSession._probe_pty():
+            return "pty"
+        return "pipes"
+
+    def _shell_argv(self) -> list[str]:
+        if platform.system() == "Windows":
+            return ["cmd.exe", "/Q"]
+        return ["/bin/sh"]
+
     def _ensure_process(self) -> None:
         if self._proc and self._proc.poll() is None:
             return
-        shell = "powershell.exe" if platform.system() == "Windows" else "/bin/sh"
         self._proc = subprocess.Popen(
-            [shell],
+            self._shell_argv(),
             cwd=self.cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
@@ -65,9 +80,7 @@ class ShellSession:
     def run(self, cmd: str, *, stdin: str | None = None, timeout: int = 120) -> ShellSessionResult:
         with self._lock:
             self._last_active = time.monotonic()
-            if not self.settings.persistent or not self.settings.enabled:
-                return self._run_oneshot(cmd, timeout=timeout)
-            if not self._pty_available:
+            if self._backend == "oneshot":
                 return self._run_oneshot(cmd, timeout=timeout, stdin=stdin)
             return self._run_persistent(cmd, stdin=stdin, timeout=timeout)
 
@@ -97,10 +110,10 @@ class ShellSession:
         duration = int((time.monotonic() - start) * 1000)
         return ShellSessionResult(
             output=output,
-            exit_code=code,
+            exit_code=code if code is not None else 1,
             duration_ms=duration,
             session_id=self.session_id,
-            meta={"persistent": False, "pty": False},
+            meta={"persistent": False, "backend": "oneshot", "pty": False},
         )
 
     def _run_persistent(
@@ -113,25 +126,60 @@ class ShellSession:
         start = time.monotonic()
         self._ensure_process()
         assert self._proc and self._proc.stdin and self._proc.stdout
-        payload = cmd if not stdin else f"{stdin}\n{cmd}"
-        self._proc.stdin.write(payload + "\n")
+        marker = f"__AGENT_DONE_{uuid.uuid4().hex}__"
+        windows = platform.system() == "Windows"
+        eol = "\r\n" if windows else "\n"
+        script = cmd if not stdin else f"{stdin}{eol}{cmd}"
+        if windows:
+            payload = f"{script}{eol}echo {marker} %ERRORLEVEL%{eol}"
+        else:
+            payload = f"{script}{eol}echo {marker}:$?{eol}"
+        self._proc.stdin.write(payload)
         self._proc.stdin.flush()
+
         lines: list[str] = []
+        exit_code = 0
         deadline = time.monotonic() + timeout
+        timed_out = True
         while time.monotonic() < deadline:
             line = self._proc.stdout.readline()
             if not line:
+                if self._proc.poll() is not None:
+                    break
+                continue
+            stripped = line.rstrip("\r\n")
+            if marker in stripped:
+                timed_out = False
+                if windows:
+                    tail = stripped.split(marker, 1)[-1].strip()
+                    if tail.isdigit():
+                        exit_code = int(tail)
+                elif f"{marker}:" in stripped:
+                    tail = stripped.split(f"{marker}:", 1)[-1].strip()
+                    if tail.isdigit():
+                        exit_code = int(tail)
                 break
-            lines.append(line.rstrip("\n"))
+            lines.append(stripped)
             if len(lines) > 500:
+                timed_out = False
+                exit_code = 124
                 break
+
+        if timed_out:
+            exit_code = 124
+            lines.append(f"Command timed out after {timeout}s")
+
         duration = int((time.monotonic() - start) * 1000)
         return ShellSessionResult(
             output="\n".join(lines),
-            exit_code=0,
+            exit_code=exit_code,
             duration_ms=duration,
             session_id=self.session_id,
-            meta={"persistent": True, "pty": self._pty_available},
+            meta={
+                "persistent": True,
+                "backend": self._backend,
+                "pty": self._backend == "pty",
+            },
         )
 
     def close(self) -> None:
@@ -188,13 +236,21 @@ def pty_support_status() -> dict[str, Any]:
     system = platform.system()
     if system == "Windows":
         return {
-            "available": False,
-            "backend": "oneshot",
-            "note": "ConPTY persistent shell not enabled; one-shot subprocess fallback",
+            "available": True,
+            "backend": "persistent-pipes",
+            "pty": False,
+            "note": "Pipe-based persistent shell on Windows (cmd.exe); ConPTY not enabled",
         }
-    try:
-        import pty  # noqa: F401
-
-        return {"available": True, "backend": "pty", "note": "Unix PTY available"}
-    except ImportError:
-        return {"available": False, "backend": "oneshot", "note": "pty module unavailable"}
+    if ShellSession._probe_pty():
+        return {
+            "available": True,
+            "backend": "pty",
+            "pty": True,
+            "note": "Unix PTY available",
+        }
+    return {
+        "available": True,
+        "backend": "persistent-pipes",
+        "pty": False,
+        "note": "Pipe-based persistent shell; pty module unavailable",
+    }
