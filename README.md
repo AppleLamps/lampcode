@@ -89,9 +89,16 @@ Task routing applies when you omit `--model-profile` (REPL/TUI/run print `Auto-r
 ```powershell
 agent run "Find why tests fail and fix them" --cwd examples/demo-project
 agent run "fix failing tests" --model-profile deep
+agent review --uncommitted --cwd examples/demo-project
+agent run "design refactor" --plan
+agent run "extract deps" --output-schema schema.json --json
 agent repl --cwd examples/demo-project
 agent tui --resume-last
+agent hooks list
+agent memories list
 ```
+
+See [docs/codex-comparison.md](docs/codex-comparison.md) for Codex parity details.
 
 ### Key flags
 
@@ -103,7 +110,10 @@ agent tui --resume-last
 | `--sandbox` | `danger-full-access`, `read-only`, or `workspace-write` |
 | `--title` | Thread title on new thread |
 | `--resume-last` | Resume latest thread for cwd |
-| `--jsonl-events` | Machine-readable event stream |
+| `--jsonl-events` | Legacy machine-readable event stream |
+| `--json` | Normalized Codex-like JSONL events + run summary |
+| `--plan` | Plan mode (read-only tool subset) |
+| `--output-schema` | Validate final assistant JSON against schema |
 | `--quiet-tools` | Hide tool lines on stderr |
 | `--skip-git-check` | Allow run outside git (CI/fixtures) |
 

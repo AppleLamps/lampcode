@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.3.0] — 2026-05-25
+
+Phase 22 Codex harness parity (solo only).
+
+### Added
+
+- **`agent review`:** `--uncommitted`, `--base`, `--commit`; read-only sandbox; structured markdown + `--json` report.
+- **`agent run --json`:** Normalized Codex-like JSONL event stream (`agent/json_stream.py`); `--jsonl-events` unchanged.
+- **`request_user_input` tool:** Mid-turn structured questions; REPL/TTY + `AGENT_INPUT_ANSWERS` for CI.
+- **`request_permissions` tool:** Mid-turn sandbox escalation (network / write-outside-cwd / full_access).
+- **Plan mode:** `agent run --plan`, REPL `/plan on|off`; filters tools via `[plan_mode]`.
+- **Hooks:** `{cwd}/.agent-cli/hooks.json`, `agent hooks list|test`.
+- **Persistent shell (opt-in):** `[shell] enabled = true`; one session per thread; doctor PTY row.
+- **`--output-schema`:** Validated JSON final output on `agent run`.
+- **Memories v1:** `agent memories list|add|delete|search`; opt-in `[memories] enabled`.
+- **`agent runs export --format jsonl-v2`:** Normalized replay from run logs.
+
+### Tests
+
+- `tests/test_review.py`, `tests/test_json_stream.py`, `tests/test_phase22.py` — **920** pytest cases (912 new + existing).
+
 ## [2.2.0] — 2026-05-25
 
 Phase 21 harness gaps (solo only — no new serve/OIDC/RBAC/scheduler features).

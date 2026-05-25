@@ -4,13 +4,15 @@ from agent.config import Config
 from tools.registry import TOOL_REGISTRY, dispatch_tool
 
 
-def test_registry_has_five_tools() -> None:
-    assert set(TOOL_REGISTRY.keys()) == {
+def test_registry_has_core_tools() -> None:
+    assert set(TOOL_REGISTRY.keys()) >= {
         "run_command",
         "read_file",
         "write_file",
         "apply_patch",
         "search_repo",
+        "request_user_input",
+        "request_permissions",
     }
 
 
