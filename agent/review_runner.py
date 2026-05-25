@@ -117,11 +117,20 @@ def run_review(
         "model": turn.usage.model_used or review_config.model,
         "cost": cost,
     }
+    if ctx.merge_base_sha is not None:
+        structured["merge_base_sha"] = ctx.merge_base_sha
+    if ctx.review_scope:
+        structured["review_scope"] = ctx.review_scope
+    if ctx.custom_prompt:
+        structured["custom_prompt"] = ctx.custom_prompt
     report_json = review_report_to_json(
         report,
         thread_id=thread.id,
         model=structured["model"],
         cost=cost,
+        merge_base_sha=ctx.merge_base_sha,
+        review_scope=ctx.review_scope,
+        custom_prompt=ctx.custom_prompt,
     )
     return ReviewRunResult(
         turn_id=turn.id,

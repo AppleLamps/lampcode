@@ -48,7 +48,10 @@
     },
     "thread_id": { "type": "string" },
     "model": { "type": "string" },
-    "cost": { "type": ["number", "null"] }
+    "cost": { "type": ["number", "null"] },
+    "merge_base_sha": { "type": ["string", "null"] },
+    "review_scope": { "type": "string" },
+    "custom_prompt": { "type": "string" }
   },
   "additionalProperties": false
 }

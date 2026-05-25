@@ -30,6 +30,7 @@ def test_collect_review_uncommitted(tmp_path: Path) -> None:
 def test_collect_review_base(tmp_path: Path) -> None:
     with patch("agent.review._run_git") as mock_git:
         mock_git.side_effect = [
+            (0, "abc123", ""),
             (0, "stat", ""),
             (0, "patch", ""),
             (0, "", ""),
@@ -37,6 +38,7 @@ def test_collect_review_base(tmp_path: Path) -> None:
         ctx = collect_review_context(tmp_path, mode="base", base="main")
     assert ctx.label == "changes vs main"
     assert ctx.title == "review: vs main"
+    assert ctx.merge_base_sha == "abc123"
 
 
 def test_collect_review_commit(tmp_path: Path) -> None:

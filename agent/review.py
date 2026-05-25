@@ -20,6 +20,9 @@ class ReviewContext:
     diff_patch: str
     status: str
     title: str
+    custom_prompt: str = ""
+    merge_base_sha: str | None = None
+    review_scope: str = ""
 
 
 @dataclass
@@ -61,27 +64,42 @@ def _run_git(cwd: Path, *args: str) -> tuple[int, str, str]:
         return 1, "", str(exc)
 
 
+def _git_merge_base(cwd: Path, base_ref: str) -> str | None:
+    code, out, _ = _run_git(cwd, "merge-base", "HEAD", base_ref)
+    if code != 0:
+        return None
+    sha = out.strip()
+    return sha or None
+
+
 def collect_review_context(
     cwd: Path,
     *,
     mode: ReviewMode,
     base: str | None = None,
     commit: str | None = None,
+    custom_prompt: str = "",
 ) -> ReviewContext:
     cwd = cwd.resolve()
+    merge_base_sha: str | None = None
+    review_scope = ""
     if mode == "uncommitted":
         _, stat, _ = _run_git(cwd, "diff", "--stat")
         _, patch, _ = _run_git(cwd, "diff")
         _, status, _ = _run_git(cwd, "status", "--porcelain")
         label = "uncommitted changes"
         title = "review: uncommitted"
+        review_scope = "uncommitted"
     elif mode == "base":
         ref = base or "main"
-        _, stat, _ = _run_git(cwd, "diff", f"{ref}...HEAD", "--stat")
-        _, patch, _ = _run_git(cwd, "diff", f"{ref}...HEAD")
+        merge_base_sha = _git_merge_base(cwd, ref)
+        diff_ref = merge_base_sha or ref
+        _, stat, _ = _run_git(cwd, "diff", diff_ref, "--stat")
+        _, patch, _ = _run_git(cwd, "diff", diff_ref)
         _, status, _ = _run_git(cwd, "status", "--porcelain")
         label = f"changes vs {ref}"
         title = f"review: vs {ref}"
+        review_scope = f"base:{ref}"
     else:
         sha = commit or "HEAD"
         _, stat, _ = _run_git(cwd, "show", sha, "--stat")
@@ -89,6 +107,7 @@ def collect_review_context(
         status = ""
         label = f"commit {sha[:8]}"
         title = f"review: commit {sha[:8]}"
+        review_scope = f"commit:{sha}"
 
     if len(patch.encode("utf-8", errors="replace")) > MAX_PATCH_BYTES:
         patch = patch.encode("utf-8")[:MAX_PATCH_BYTES].decode("utf-8", errors="ignore")
@@ -101,6 +120,9 @@ def collect_review_context(
         diff_patch=patch.strip(),
         status=status.strip(),
         title=title,
+        custom_prompt=custom_prompt.strip(),
+        merge_base_sha=merge_base_sha,
+        review_scope=review_scope,
     )
 
 
@@ -125,6 +147,8 @@ def build_review_user_prompt(ctx: ReviewContext) -> str:
         "You may run read-only or test commands (pytest, git diff, etc.) — no writes.",
         "",
     ]
+    if ctx.custom_prompt:
+        parts.extend(["### Additional review focus", ctx.custom_prompt, ""])
     if ctx.status:
         parts.extend(["### git status", "```", ctx.status, "```", ""])
     if ctx.diff_stat:
@@ -214,27 +238,34 @@ def review_report_to_json(
     model: str,
     cost: float | None,
     schema_version: str = REVIEW_SCHEMA_VERSION,
+    merge_base_sha: str | None = None,
+    review_scope: str = "",
+    custom_prompt: str = "",
 ) -> str:
-    return json.dumps(
-        {
-            "schema_version": schema_version,
-            "summary": report.summary,
-            "findings": [
-                {
-                    "severity": f.severity,
-                    "title": f.title,
-                    "detail": f.detail,
-                    "file": f.file,
-                    "line": f.line,
-                }
-                for f in report.findings
-            ],
-            "severity_counts": report.severity_counts,
-            "suggested_fixes": report.suggested_fixes,
-            "test_gaps": report.test_gaps,
-            "thread_id": thread_id,
-            "model": model,
-            "cost": cost,
-        },
-        indent=2,
-    )
+    payload: dict = {
+        "schema_version": schema_version,
+        "summary": report.summary,
+        "findings": [
+            {
+                "severity": f.severity,
+                "title": f.title,
+                "detail": f.detail,
+                "file": f.file,
+                "line": f.line,
+            }
+            for f in report.findings
+        ],
+        "severity_counts": report.severity_counts,
+        "suggested_fixes": report.suggested_fixes,
+        "test_gaps": report.test_gaps,
+        "thread_id": thread_id,
+        "model": model,
+        "cost": cost,
+    }
+    if merge_base_sha is not None:
+        payload["merge_base_sha"] = merge_base_sha
+    if review_scope:
+        payload["review_scope"] = review_scope
+    if custom_prompt:
+        payload["custom_prompt"] = custom_prompt
+    return json.dumps(payload, indent=2)
