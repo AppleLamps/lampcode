@@ -14,6 +14,7 @@ from agent.models import (
     McpToolCallItem,
     SkillActivationItem,
     Thread,
+    UserInputItem,
     UserMessageItem,
     WebSearchItem,
 )
@@ -82,6 +83,8 @@ def build_system_prompt(
     project_rules: str = "",
     execution_backend: str | None = None,
     sync_enabled: bool = False,
+    memories_text: str = "",
+    append: str = "",
 ) -> str:
     project_context = load_project_context(cwd)
     os_info = f"{platform.system()} {platform.release()} ({platform.machine()})"
@@ -142,10 +145,14 @@ When you have completed the task, provide a clear final summary of what you foun
 """
     if project_rules:
         prompt += f"\n\n{project_rules}\n"
+    if memories_text:
+        prompt += f"\n\n{memories_text}\n"
     if active_skills:
         prompt += "\n" + build_skills_prompt(active_skills, max_body_chars=skills_max_body)
     if project_context:
         prompt += f"\n\n# Project context\n\n{project_context}\n"
+    if append:
+        prompt += f"\n\n{append}\n"
 
     return prompt
 
@@ -154,6 +161,9 @@ def item_to_messages(item: Item) -> list[dict[str, Any]]:
     """Convert a persisted item to OpenAI-style chat messages."""
     if isinstance(item, UserMessageItem):
         return [{"role": "user", "content": item.text}]
+
+    if isinstance(item, UserInputItem):
+        return [{"role": "user", "content": f"[user input] Q: {item.question}\nA: {item.answer}"}]
 
     if isinstance(item, AgentMessageItem):
         return [{"role": "assistant", "content": item.text}]
@@ -360,6 +370,8 @@ def build_thread_messages(
     project_rules: str = "",
     execution_backend: str | None = None,
     sync_enabled: bool = False,
+    memories_text: str = "",
+    system_prompt_append: str = "",
 ) -> list[dict[str, Any]]:
     messages: list[dict[str, Any]] = [
         {
@@ -372,6 +384,8 @@ def build_thread_messages(
                 project_rules=project_rules,
                 execution_backend=execution_backend,
                 sync_enabled=sync_enabled,
+                memories_text=memories_text,
+                append=system_prompt_append,
             ),
         }
     ]
