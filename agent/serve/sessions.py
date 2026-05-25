@@ -23,6 +23,8 @@ class SessionRecord:
     subject: str | None = None
     email: str | None = None
     groups: list[str] = field(default_factory=list)
+    claims: dict[str, Any] = field(default_factory=dict)
+    last_activity_at: float = 0.0
 
 
 class SessionStore:
@@ -64,6 +66,8 @@ class SessionStore:
                         subject=item.get("subject"),
                         email=item.get("email"),
                         groups=list(item.get("groups", [])),
+                        claims=dict(item.get("claims", {})),
+                        last_activity_at=float(item.get("last_activity_at", item.get("created_at", 0))),
                     )
                     self._sessions[rec.session_id] = rec
         except (OSError, json.JSONDecodeError, TypeError):
@@ -86,6 +90,8 @@ class SessionStore:
                         "subject": s.subject,
                         "email": s.email,
                         "groups": s.groups,
+                        "claims": s.claims,
+                        "last_activity_at": s.last_activity_at,
                     }
                     for s in self._sessions.values()
                     if s.expires_at > time.time()
@@ -120,6 +126,7 @@ class SessionStore:
         subject: str | None = None,
         email: str | None = None,
         groups: list[str] | None = None,
+        claims: dict[str, Any] | None = None,
     ) -> SessionRecord:
         now = time.time()
         raw = secrets.token_urlsafe(32)
@@ -135,12 +142,21 @@ class SessionStore:
             subject=subject,
             email=email,
             groups=list(groups or []),
+            claims=dict(claims or {}),
+            last_activity_at=now,
         )
         with self._lock:
             self._purge_expired()
             self._sessions[session_id] = rec
             self._persist()
         return rec
+
+    def touch_session(self, session_id: str) -> None:
+        with self._lock:
+            rec = self._sessions.get(session_id)
+            if rec:
+                rec.last_activity_at = time.time()
+                self._persist()
 
     def get_session(self, session_id: str) -> SessionRecord | None:
         with self._lock:

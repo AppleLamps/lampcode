@@ -15,6 +15,8 @@ from agent.metrics import MetricsCollector
 from agent.models import Thread
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.recording.store import RunStore
+from agent.auth.policy.sessions import SessionRevocationRegistry
+from agent.events import EventEmitter
 from agent.serve.approvals import ApprovalRegistry, map_api_decision
 from agent.serve.auth import authorize_request_v2, extract_bearer_token, extract_query_token, extract_session_token
 from agent.serve.dashboard import render_dashboard_html, render_login_html
@@ -30,11 +32,11 @@ from agent.serve.turn_runner import TurnRunner
 from agent.serve.sessions import SessionStore
 from agent.serve.users import merge_rbac_users
 from agent.serve.oidc import OidcClient, oidc_mode_active
+from agent.serve.policy_gate import enforce_login_policy, enforce_request_policy
 from agent.execution.sync.service import resolve_sync_path
 from agent.settings import ServeSettings
 from agent.store import ThreadStore
 from agent.telemetry import trace_span
-from agent.metrics import MetricsCollector
 
 
 class ServeContext:
@@ -48,6 +50,8 @@ class ServeContext:
         session_store: SessionStore | None = None,
         rbac_users: list | None = None,
         oidc_client: OidcClient | None = None,
+        revocation_registry: SessionRevocationRegistry | None = None,
+        emitter: EventEmitter | None = None,
     ) -> None:
         self.store = store
         self.run_store = run_store
@@ -56,6 +60,8 @@ class ServeContext:
         self.session_store = session_store
         self.rbac_users = rbac_users or []
         self.oidc_client = oidc_client
+        self.revocation_registry = revocation_registry or SessionRevocationRegistry()
+        self.emitter = emitter or EventEmitter()
 
 
 class AgentHttpHandler(BaseHTTPRequestHandler):
@@ -152,6 +158,21 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
 
         if path == "/metrics/prometheus":
             self._prometheus_metrics_response()
+            return
+
+        if path == "/serve/policy/status":
+            ctx = self._get_ctx()
+            pol = ctx.settings.policy
+            self._json_response(
+                {
+                    "enabled": pol.enabled,
+                    "require_https": pol.require_https,
+                    "introspection_configured": bool(pol.introspection_url),
+                    "rules": len(pol.rules),
+                    "revoked_sessions": len(ctx.revocation_registry.list_revoked()),
+                    "step_up_for_control_actions": pol.step_up_for_control_actions,
+                }
+            )
             return
 
         ctx = self._get_ctx()
@@ -389,6 +410,21 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                         "trimmed": was_trimmed,
                     }
                 )
+            elif path == "/ide/diagnostics":
+                from agent.serve.ide import safe_resolve
+                from agent.serve.ide_diagnostics import run_diagnostics
+
+                if not ide.diagnostics.enabled:
+                    self._json_response({"items": []})
+                    return
+                try:
+                    file_path = safe_resolve(cwd, rel_path)
+                except IdeError as exc:
+                    self._error(exc.status, str(exc))
+                    return
+                items = run_diagnostics(file_path, settings=ide.diagnostics)
+                self._ide_metric("diagnostics", "ok")
+                self._json_response({"items": items, "path": rel_path})
             else:
                 self._error(404, "Not found")
         except IdeError as exc:
@@ -496,6 +532,16 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             return
         claims = ctx.oidc_client.claims_from_token_response(token_data)
         principal = ctx.oidc_client.principal_from_claims(claims)
+        ok, policy_err = enforce_login_policy(
+            role=principal.role,
+            claims=claims,
+            settings=ctx.settings.policy,
+            tls_enabled=ctx.settings.tls.enabled,
+            emitter=ctx.emitter,
+        )
+        if not ok:
+            self._error(403, policy_err or "Login denied by policy")
+            return
         oidc = ctx.settings.oidc
         email_key = oidc.role_mapping.claim_email_key if oidc else "email"
         groups_key = oidc.role_mapping.claim_groups_key if oidc else "groups"
@@ -508,6 +554,7 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
             subject=str(claims.get("sub", "")),
             email=str(claims.get(email_key, "")),
             groups=[str(g) for g in groups_raw] if isinstance(groups_raw, list) else [],
+            claims=claims,
         )
         MetricsCollector.global_collector().inc_labeled("agent_auth_device_code_total", "success")
         self._json_response(
@@ -596,6 +643,17 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
         try:
             claims = ctx.oidc_client.exchange_code(code, oidc_state)
             principal = ctx.oidc_client.principal_from_claims(claims)
+            ok, policy_err = enforce_login_policy(
+                role=principal.role,
+                claims=claims,
+                settings=ctx.settings.policy,
+                tls_enabled=ctx.settings.tls.enabled,
+                emitter=ctx.emitter,
+            )
+            if not ok:
+                MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "policy_denied")
+                self._error(403, policy_err or "Login denied by policy")
+                return
             oidc = ctx.settings.oidc
             email_key = oidc.role_mapping.claim_email_key if oidc else "email"
             groups_key = oidc.role_mapping.claim_groups_key if oidc else "groups"
@@ -608,6 +666,7 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 subject=str(claims.get("sub", "")),
                 email=str(claims.get(email_key, "")),
                 groups=[str(g) for g in groups_raw] if isinstance(groups_raw, list) else [],
+                claims=claims,
             )
             MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "success")
             self.send_response(302)
@@ -659,6 +718,22 @@ class AgentHttpHandler(BaseHTTPRequestHandler):
                 return False
             if ctx.settings.tls.require_client_cert and not self._client_cert_present():
                 self._error(401, "Client certificate required")
+                return False
+            role = result.principal.role if result.principal else "viewer"
+            allowed, policy_err, _decision = enforce_request_policy(
+                method=getattr(self, "command", "GET"),
+                path=self.path,
+                headers=dict(self.headers),
+                role=role,
+                settings=ctx.settings.policy,
+                session_store=ctx.session_store,
+                revocation_registry=ctx.revocation_registry,
+                tls_enabled=ctx.settings.tls.enabled,
+                emitter=ctx.emitter,
+            )
+            if not allowed:
+                status = 401 if policy_err and "revoked" in (policy_err or "").lower() else 403
+                self._error(status, policy_err or "Policy denied")
                 return False
             return True
 
@@ -970,6 +1045,8 @@ def serve(
         session_store=session_store,
         rbac_users=rbac_users,
         oidc_client=oidc_client,
+        revocation_registry=SessionRevocationRegistry(),
+        emitter=EventEmitter(),
     )
 
     class Handler(AgentHttpHandler):

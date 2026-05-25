@@ -836,6 +836,43 @@ class EventEmitter:
             )
         )
 
+    def auth_policy_denied(
+        self,
+        *,
+        role: str,
+        action: str,
+        rule: str = "",
+        message: str = "",
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "auth.policy.denied",
+                data={"role": role, "action": action, "rule": rule, "message": message},
+            )
+        )
+
+    def auth_session_revoked(
+        self,
+        *,
+        session_id: str = "",
+        reason: str = "",
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "auth.session.revoked",
+                data={"session_id": session_id, "reason": reason},
+            )
+        )
+
+    def schedule_job_started(self, job_id: str, **extra) -> None:
+        self.emit(AgentEvent("schedule.job.started", data={"job_id": job_id, **extra}))
+
+    def schedule_job_completed(self, job_id: str, **extra) -> None:
+        self.emit(AgentEvent("schedule.job.completed", data={"job_id": job_id, **extra}))
+
+    def schedule_job_failed(self, job_id: str, **extra) -> None:
+        self.emit(AgentEvent("schedule.job.failed", data={"job_id": job_id, **extra}))
+
     def error(self, thread_id: str | None, message: str) -> None:
         self.emit(
             AgentEvent(

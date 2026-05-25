@@ -12,6 +12,8 @@ except ModuleNotFoundError:
 
 from agent.paths import default_config_path
 
+from agent.auth.policy.rules import ServePolicySettings
+
 
 @dataclass
 class TelemetrySettings:
@@ -289,6 +291,16 @@ class ServeTlsSettings:
 
 
 @dataclass
+class ServeIdeDiagnosticsSettings:
+    enabled: bool = True
+    timeout_sec: int = 10
+    python_tool: str = "auto"
+    js_tool: str = "none"
+    max_diagnostics: int = 200
+    run_on_open: bool = True
+
+
+@dataclass
 class ServeIdeSettings:
     enabled: bool = False
     max_file_bytes: int = 1_048_576
@@ -298,6 +310,7 @@ class ServeIdeSettings:
     max_open_tabs: int = 10
     show_diff_gutter: bool = True
     autosave: bool = False
+    diagnostics: ServeIdeDiagnosticsSettings = field(default_factory=ServeIdeDiagnosticsSettings)
 
 
 @dataclass
@@ -312,6 +325,16 @@ class ServeRbacSettings:
     enabled: bool = False
     default_role: str = "viewer"
     users: list[RbacUser] = field(default_factory=list)
+
+
+@dataclass
+class ScheduleSettings:
+    enabled: bool = False
+    require_budgets: bool = True
+    require_multi_agent: bool = True
+    default_approval_mode: str = "interactive"
+    allow_unattended_auto: bool = False
+    state_file: str = "~/.agent-cli/schedules.json"
 
 
 @dataclass
@@ -333,6 +356,7 @@ class ServeSettings:
     rbac: ServeRbacSettings = field(default_factory=ServeRbacSettings)
     oidc: "ServeOidcSettings | None" = None
     ide: ServeIdeSettings = field(default_factory=ServeIdeSettings)
+    policy: ServePolicySettings = field(default_factory=ServePolicySettings)
 
 
 def _load_toml(path: Path) -> dict[str, Any]:
@@ -714,6 +738,12 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
     ide_raw = serve.get("ide", {})
     if not isinstance(ide_raw, dict):
         ide_raw = {}
+    diag_raw = ide_raw.get("diagnostics", {})
+    if not isinstance(diag_raw, dict):
+        diag_raw = {}
+    from agent.auth.policy.rules import load_policy_settings
+
+    policy = load_policy_settings(auth_raw if isinstance(auth_raw, dict) else {})
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
@@ -756,7 +786,31 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
             max_open_tabs=int(ide_raw.get("max_open_tabs", 10)),
             show_diff_gutter=bool(ide_raw.get("show_diff_gutter", True)),
             autosave=bool(ide_raw.get("autosave", False)),
+            diagnostics=ServeIdeDiagnosticsSettings(
+                enabled=bool(diag_raw.get("enabled", True)),
+                timeout_sec=int(diag_raw.get("timeout_sec", 10)),
+                python_tool=str(diag_raw.get("python_tool", "auto")),
+                js_tool=str(diag_raw.get("js_tool", "none")),
+                max_diagnostics=int(diag_raw.get("max_diagnostics", 200)),
+                run_on_open=bool(diag_raw.get("run_on_open", True)),
+            ),
         ),
+        policy=policy,
+    )
+
+
+def load_schedule_settings(path: Path | None = None) -> ScheduleSettings:
+    data = _load_toml(path or default_config_path())
+    sched = data.get("schedule", {})
+    if not isinstance(sched, dict):
+        sched = {}
+    return ScheduleSettings(
+        enabled=bool(sched.get("enabled", False)),
+        require_budgets=bool(sched.get("require_budgets", True)),
+        require_multi_agent=bool(sched.get("require_multi_agent", True)),
+        default_approval_mode=str(sched.get("default_approval_mode", "interactive")),
+        allow_unattended_auto=bool(sched.get("allow_unattended_auto", False)),
+        state_file=str(sched.get("state_file", "~/.agent-cli/schedules.json")),
     )
 
 
