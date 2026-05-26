@@ -115,6 +115,12 @@ Remote workspace sync is **enabled** — local project files are pushed to the r
         prompt += """
 Command execution: **local host** — shell commands run on your machine in the project directory.
 """
+        if platform.system() == "Windows":
+            prompt += """
+Shell on Windows: commands run via `cmd.exe` (not bash). Do **not** use Unix-only tools (`find`, `ls`, `grep`, `head`, `/dev/null`, `2>/dev/null`).
+Use Windows equivalents first, e.g. `dir`, `dir /s /b *.html`, PowerShell `Get-ChildItem -Recurse -Filter *.html`, `type` or `Get-Content` for files.
+Prefer `read_file` / `search_files` over shell when exploring the repo.
+"""
     if repo_root:
         prompt += f"Git repository root: {repo_root}\n"
 

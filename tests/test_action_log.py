@@ -7,6 +7,16 @@ from agent.events import AgentEvent
 from agent.settings import ActionLogSettings
 
 
+def test_format_tool_executing() -> None:
+    line = format_action_log_line(
+        AgentEvent(
+            "tool.executing",
+            data={"tool_name": "read_file", "arguments": {"path": "index.html"}},
+        )
+    )
+    assert line == "tool executing: read_file index.html"
+
+
 def test_format_tool_pending() -> None:
     line = format_action_log_line(
         AgentEvent(

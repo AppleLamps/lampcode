@@ -197,6 +197,18 @@ class EventEmitter:
             )
         )
 
+    def tool_executing(
+        self, thread_id: str, turn_id: str, tool_name: str, arguments: dict[str, Any], *, source: str = "builtin"
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "tool.executing",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"tool_name": tool_name, "arguments": arguments, "source": source},
+            )
+        )
+
     def approval_requested(
         self,
         thread_id: str,

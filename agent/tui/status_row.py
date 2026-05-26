@@ -59,6 +59,8 @@ class StatusRow:
         """Start spinner ticks when the first turn runs (not at app mount)."""
         if self._interval is None:
             self._interval = app.set_interval(0.1, self.tick)
+            if hasattr(app, "_watch_turn_worker"):
+                app.set_interval(1.0, app._watch_turn_worker)
 
     @property
     def interval_active(self) -> bool:

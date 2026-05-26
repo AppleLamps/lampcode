@@ -82,6 +82,11 @@ def format_action_log_line(event: AgentEvent) -> str | None:
         src = f" ({source})" if source and source != "builtin" else ""
         return f"tool pending: {name}{src} {brief}".rstrip()
 
+    if etype == "tool.executing":
+        name = data.get("tool_name", "")
+        brief = _brief_args(data.get("arguments") or {})
+        return f"tool executing: {name} {brief}".rstrip()
+
     if etype == "tool.completed":
         name = data.get("tool_name", "")
         status = data.get("status", "")

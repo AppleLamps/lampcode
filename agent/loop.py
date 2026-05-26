@@ -1157,6 +1157,10 @@ def _run_loop(
 
             cancel.check()
 
+            emitter.tool_executing(
+                thread.id, turn.id, tool_name, arguments, source=source
+            )
+
             with trace_span("tool.execute", tool=tool_name, backend=config.execution.backend):
                 dispatch_result = dispatch_tool(
                     tool_name, arguments, config, mcp_manager=mcp_manager, thread_id=thread.id
@@ -1752,6 +1756,13 @@ def _run_parallel_read_tool_round(
         return
 
     def _dispatch_entry(entry: dict) -> str:
+        emitter.tool_executing(
+            thread.id,
+            turn.id,
+            entry["tool_name"],
+            entry["arguments"],
+            source=entry["source"],
+        )
         dispatch_result = dispatch_tool(
             entry["tool_name"],
             entry["arguments"],

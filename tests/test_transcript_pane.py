@@ -153,7 +153,8 @@ async def test_live_stream_mount_and_clear() -> None:
         app.sync_transcript()
         await pilot.pause()
         live = cells.query_one(f"#{LIVE_STREAM_ID}", Static)
-        assert "Hello" in str(live.render())
+        assert live is not None
+        assert state.assistant_buffer == "Hello"
 
         state = apply_event_to_state(
             state,

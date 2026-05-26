@@ -111,24 +111,33 @@ class TranscriptPane:
         except NoMatches:
             return None
 
-    def scroll_to_end(self, *, force: bool = False) -> None:
+    def scroll_to_end(self, *, force: bool = False, follow: bool = False) -> None:
+        """Scroll transcript to the latest content.
+
+        follow=True keeps the view pinned during streaming (default for new sessions).
+        force=True always scrolls (e.g. while a turn is running).
+        """
         if self._scroll is None:
             return
-        if not force and not self._is_near_bottom():
+        if not force and not follow and not self.is_near_bottom():
             return
-        target = self._live_widget()
-        if target is None and self._cells.children:
-            target = self._cells.children[-1]
-        if target is not None:
-            self._scroll.scroll_to_widget(target, animate=False)
-        else:
-            self._scroll.scroll_end(animate=False)
 
-    def _is_near_bottom(self) -> bool:
+        def _do_scroll() -> None:
+            if self._scroll is None:
+                return
+            # scroll_end after layout so max_scroll_y includes new cells
+            self._scroll.scroll_end(animate=False, immediate=True)
+            live = self._live_widget()
+            if live is not None:
+                self._scroll.scroll_to_widget(live, animate=False)
+
+        self._scroll.call_after_refresh(_do_scroll)
+
+    def is_near_bottom(self, *, slack: int = 4) -> bool:
         if self._scroll is None:
             return True
         try:
             max_y = self._scroll.max_scroll_y
         except Exception:
             return True
-        return self._scroll.scroll_y >= max(0, max_y - 2)
+        return self._scroll.scroll_y >= max(0, max_y - slack)

@@ -23,6 +23,7 @@ class TranscriptController:
     def __init__(self) -> None:
         self._stream = AssistantStreamController()
         self._live_text: str = ""
+        self.follow_tail: bool = True
 
     def reset(self) -> None:
         self._stream.reset()
@@ -51,6 +52,7 @@ class TranscriptController:
         state: TuiState,
         *,
         scroll: VerticalScroll | None = None,
+        force_scroll: bool = False,
     ) -> None:
         """Incremental sync: mount new cells, update in place, live assistant stream."""
         pane = TranscriptPane(cells_col, scroll)
@@ -59,7 +61,7 @@ class TranscriptController:
         for cell in state.transcript:
             pane.mount_cell(cell)
         self._sync_live_stream(pane, state)
-        pane.scroll_to_end()
+        pane.scroll_to_end(force=force_scroll or self.follow_tail, follow=self.follow_tail)
 
     def finalize_assistant_stream(
         self,

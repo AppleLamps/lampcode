@@ -8,6 +8,7 @@ from typing import Literal
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import MouseScrollDown, MouseScrollUp
 from textual.widgets import OptionList, Static, TextArea
 
 from agent.tui.composer import ComposerTextArea
@@ -46,8 +47,9 @@ from agent.tui.slash_commands import (
 )
 from agent.tui.status_row import StatusRow
 from agent.tui.theme import AGENT_LOGO, GROK_CSS, app_version, home_menu_options
+from agent.tui.messages import AgentEventMessage, WorkerErrorMessage, WorkerFinishedMessage
 from agent.tui.transcript_controller import TranscriptController
-from agent.tui.transcript_pane import compose_transcript_shell
+from agent.tui.transcript_pane import TranscriptPane, compose_transcript_shell
 from agent.tui.view_model import (
     TuiState,
     apply_event_to_state,
@@ -111,11 +113,13 @@ class AgentTuiApp(App):
         self._resume_last = resume_last
         self._state = TuiState()
         self._transcript = TranscriptController()
+        self._transcript.follow_tail = True
         self._status_row: StatusRow | None = None
         self._cancel = CancelToken()
         self._worker: threading.Thread | None = None
         self._index_worker: threading.Thread | None = None
         self._approval_queue: queue.Queue[str] = queue.Queue()
+        self._event_queue: queue.SimpleQueue[AgentEvent] = queue.SimpleQueue()
         self._session_auto_approve = False
         self._turn_running = False
         self._mode: Literal["home", "chat", "resume"] = "home"
@@ -413,6 +417,7 @@ class AgentTuiApp(App):
         transcript.display = True
         home_menu.display = False
         resume_menu.display = False
+        self._transcript.follow_tail = True
         self._refresh_chrome()
         self._sync_transcript(rebuild=True)
 
@@ -449,8 +454,44 @@ class AgentTuiApp(App):
         scroll, cells = self._transcript_targets()
         if rebuild:
             self._transcript.rebuild_all(cells, self._state, scroll=scroll)
+            TranscriptPane(cells, scroll).scroll_to_end(
+                force=True, follow=True
+            )
         else:
-            self._transcript.sync(cells, self._state, scroll=scroll)
+            self._transcript.sync(
+                cells,
+                self._state,
+                scroll=scroll,
+                force_scroll=self._turn_running,
+            )
+
+    def _event_on_transcript(self, widget) -> bool:
+        scroll = self.query_one("#transcript", VerticalScroll)
+        node = widget
+        while node is not None:
+            if node is scroll:
+                return True
+            node = getattr(node, "parent", None)
+        return False
+
+    def on_mouse_scroll_up(self, event: MouseScrollUp) -> None:
+        if self._mode != "chat":
+            return
+        if self._event_on_transcript(event.widget):
+            self._transcript.follow_tail = False
+
+    def on_mouse_scroll_down(self, event: MouseScrollDown) -> None:
+        if self._mode != "chat":
+            return
+        if self._event_on_transcript(event.widget):
+            self.call_after_refresh(self._maybe_resume_transcript_follow)
+
+    def _maybe_resume_transcript_follow(self) -> None:
+        if self._mode != "chat":
+            return
+        scroll, cells = self._transcript_targets()
+        if TranscriptPane(cells, scroll).is_near_bottom():
+            self._transcript.follow_tail = True
 
     def on_option_list_option_highlighted(
         self, event: OptionList.OptionHighlighted
@@ -672,9 +713,13 @@ class AgentTuiApp(App):
         self._refresh_chrome()
 
         def on_event(agent_event: AgentEvent) -> None:
-            self.call_from_thread(self._handle_event, agent_event)
+            # Do not use call_from_thread here — it blocks the worker on future.result()
+            # while the UI runs heavy transcript/context updates.
+            self._event_queue.put(agent_event)
+            self.post_message(AgentEventMessage())
 
         def worker() -> None:
+            worker_error: str | None = None
             try:
                 run_turn_in_thread(
                     self._thread,  # type: ignore[arg-type]
@@ -690,12 +735,27 @@ class AgentTuiApp(App):
             except CancelledError:
                 pass
             except Exception as exc:
-                self.call_from_thread(self._on_worker_error, str(exc))
-            finally:
-                self.call_from_thread(self._turn_finished)
+                worker_error = str(exc)
+            if worker_error:
+                self.post_message(WorkerErrorMessage(worker_error))
+            self.post_message(WorkerFinishedMessage())
 
         self._worker = threading.Thread(target=worker, daemon=True)
         self._worker.start()
+
+    def on_agent_event_message(self, _message: AgentEventMessage) -> None:
+        while True:
+            try:
+                event = self._event_queue.get_nowait()
+            except queue.Empty:
+                break
+            self._handle_event(event)
+
+    def on_worker_finished_message(self, _message: WorkerFinishedMessage) -> None:
+        self._turn_finished()
+
+    def on_worker_error_message(self, message: WorkerErrorMessage) -> None:
+        self._on_worker_error(message.error)
 
     def _handle_event(self, event: AgentEvent) -> None:
         if event.type == "tool.pending" and self._mode == "chat":
@@ -720,7 +780,20 @@ class AgentTuiApp(App):
             self._transcript.clear_live_stream_state()
 
         self._sync_transcript()
-        self._refresh_chrome()
+        include_context = event.type not in ("agent.delta", "agent.reasoning")
+        self._refresh_chrome(include_context=include_context)
+
+    def _watch_turn_worker(self) -> None:
+        """Recover UI state if the worker exited without posting WorkerFinishedMessage."""
+        if not self._turn_running:
+            return
+        if self._worker is not None and self._worker.is_alive():
+            return
+        self._append_system(
+            "Turn worker stopped unexpectedly (UI was still waiting). "
+            "Check ~/.agent-cli/logs/ for the last action."
+        )
+        self._turn_finished()
 
     def _turn_finished(self) -> None:
         self._turn_running = False
