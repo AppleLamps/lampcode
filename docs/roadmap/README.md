@@ -28,6 +28,10 @@ git log --oneline -5         # confirm prior phase release commit on master
 4. Keep [README.md](../../README.md) solo-first; enterprise stays in [enterprise.md](../enterprise.md).
 5. Mock OpenRouter in tests; no flaky globals (approval state, DAG registries).
 
+## TUI UX (post Phase 28)
+
+Transcript and cell rendering parity with Codex TUI — see **[ui-plan.md](../ui-plan.md)** (UI-1 / UI-2 / UI-3 phases).
+
 ## Codex reference map
 
 | Topic | Codex path |

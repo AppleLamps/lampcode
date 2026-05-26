@@ -17,7 +17,7 @@ model = "google/gemini-2.5-flash-preview"
 max_tool_rounds = 15
 
 [model_profiles.deep]
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 max_tool_rounds = 40
 reasoning_effort = "high"
 

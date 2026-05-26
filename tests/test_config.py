@@ -15,6 +15,12 @@ def test_cancel_token() -> None:
         token.check()
 
 
+def test_default_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
+    cfg = Config.resolve(cwd=tmp_path)
+    assert cfg.model == "openrouter/owl-alpha"
+
+
 def test_config_precedence_cli_over_file(tmp_path: Path, monkeypatch) -> None:
     config_dir = tmp_path / ".agent-cli"
     config_dir.mkdir()

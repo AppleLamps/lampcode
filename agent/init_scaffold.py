@@ -4,6 +4,7 @@ from pathlib import Path
 
 
 INIT_CONFIG_TEMPLATE = """profile = "interactive"
+model = "openrouter/owl-alpha"
 model_profile = "deep"
 sandbox_mode = "workspace-write"
 approval_mode = "interactive"
@@ -17,7 +18,7 @@ model = "google/gemini-2.5-flash-preview"
 max_tool_rounds = 15
 
 [model_profiles.deep]
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 max_tool_rounds = 40
 reasoning_effort = "high"
 
@@ -59,6 +60,13 @@ description: Default project skill scaffold
 
 Add project-specific guidance here.
 """
+
+
+def ensure_workspace_ready(cwd: Path) -> None:
+    """Silently create project scaffold when missing (zero-setup like Codex)."""
+    cwd = cwd.resolve()
+    if not (cwd / ".agent-cli" / "config.toml").is_file():
+        init_project(cwd, yes=False)
 
 
 def init_project(cwd: Path, *, name: str | None = None, yes: bool = False) -> dict[str, str]:

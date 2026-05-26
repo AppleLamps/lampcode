@@ -2,8 +2,8 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.9.1 (OpenRouter API parity).  
-**Daily loop:** `init → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later`
+**Current release:** v2.9.2 (TUI launch + polish).  
+**Daily loop:** `agent` → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later
 
 ---
 
@@ -14,7 +14,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | Codex capability | Status | agent-cli |
 |------------------|--------|-----------|
 | `run` / non-interactive loop | ✅ | `agent run` |
-| Interactive session | ✅ | `agent repl` + `agent tui` |
+| Interactive session | ✅ | `agent` (default TUI) + `agent repl` + `agent tui` |
 | Core tools: shell + patch + read/list | ✅ | `run_command`, `apply_patch`, `read_file`, `search_repo`, `write_file` |
 | Approvals (exec/patch) | ✅ | `y` / `n` / `a` (turn) / `A` (session); `--auto-approve` |
 | Sandbox modes | ✅ | `read-only` / `workspace-write` / `danger-full-access` (heuristic + optional kernel — see Tier 2) |
@@ -154,3 +154,4 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Budget caps / review CI | ✅ Phase 26 |
 | Turn stats + post-patch hook | ✅ Phase 26 |
 | Enterprise cloud | ❌ By design — see enterprise.md |
+| TUI transcript UX (diffs, streaming cells) | ⚠️ partial | Grok-style chrome + slash commands + context footer (v2.9.2); transcript pipeline gaps — [ui-plan.md](ui-plan.md) |

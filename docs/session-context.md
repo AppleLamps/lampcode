@@ -15,17 +15,26 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.9.1 — OpenRouter API parity)
+## Current state (v2.9.2 — TUI launch + polish)
 
-Phase 28 shipped as **v2.9.0**; OpenRouter improvements shipped as **v2.9.1**. Before doing new work, verify:
+Phase 28 shipped as **v2.9.0**; OpenRouter improvements as **v2.9.1**; TUI launch and Grok-style polish as **v2.9.2**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~999 passed, 2 skipped, 0 failed
-git log --oneline -15   # expect v2.9.1 OpenRouter commit after Phase 28
+pytest -q               # expect ~1008 passed, 2 skipped, 0 failed
+git log --oneline -15   # expect v2.9.2 TUI commit after v2.9.1 OpenRouter
 ```
 
-**Bottom line:** You're on **v2.9.1**. Next work is **Phase 29+** or enterprise features unless you explicitly pivot.
+**Bottom line:** You're on **v2.9.2**. Next harness UX work: **[ui-plan.md](ui-plan.md)** (transcript cells, diffs, streaming). Enterprise / Phase 29+ otherwise.
+
+### v2.9.2 — TUI launch + polish
+
+- **Default entry:** bare `agent` opens TUI; auto-scaffold on first launch
+- **Grok-style home:** centered New / Resume / Quit; dark theme; hide worker forks in picker
+- **Slash commands:** `/model`, `/plan`, `/compact`, `/cost`, `/help`, …
+- **Context footer:** `Context N% left · M% used`
+- **Default model:** `openrouter/owl-alpha`
+- **Docs:** `docs/ui-plan.md` — Codex transcript parity roadmap
 
 ### v2.9.1 — OpenRouter API parity
 
@@ -131,7 +140,7 @@ git log --oneline -15   # expect v2.9.1 OpenRouter commit after Phase 28
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
 - `CHANGELOG.md` — v2.9.1 / v2.9.0 / … release notes
 
-**Tests:** 999 passed, 2 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 1008 passed, 2 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)

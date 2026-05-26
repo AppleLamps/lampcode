@@ -53,7 +53,7 @@ from agent.settings import (
     load_web_search_settings,
 )
 
-DEFAULT_MODEL = "anthropic/claude-sonnet-4"
+DEFAULT_MODEL = "openrouter/owl-alpha"
 DEFAULT_MAX_ROUNDS = 25
 DEFAULT_COMMAND_TIMEOUT = 120
 DEFAULT_MAX_TOOL_OUTPUT = 20_000

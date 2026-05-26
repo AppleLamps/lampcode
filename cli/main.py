@@ -69,9 +69,9 @@ from agent.skills.selector import select_skills
 from agent.exec_policy import evaluate_command, should_prompt_for_command
 from agent.turn_checkpoint import TurnCheckpointStore
 from agent.store import ThreadStore
-from agent.tui.runner import check_tui_available, launch_tui
+from agent.tui.runner import check_tui_available, launch_interactive_session
 
-app = typer.Typer(no_args_is_help=True, help="Codex-inspired coding agent CLI")
+app = typer.Typer(no_args_is_help=False, help="Codex-inspired coding agent CLI")
 threads_app = typer.Typer(help="Manage conversation threads")
 config_app = typer.Typer(help="Configuration commands")
 mcp_app = typer.Typer(help="MCP server commands")
@@ -140,6 +140,41 @@ app.add_typer(hooks_app, name="hooks")
 app.add_typer(memories_app, name="memories")
 
 console = stderr_console
+
+
+@app.callback(invoke_without_command=True)
+def cli_entry(
+    ctx: typer.Context,
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),
+    thread_id: Optional[str] = typer.Option(None, "--thread-id", help="Resume thread"),
+    resume_last: bool = typer.Option(False, "--resume-last", help="Resume latest thread"),
+    profile: Optional[str] = typer.Option(None, "--profile", help="Named run profile"),
+    model_profile: Optional[str] = typer.Option(
+        None, "--model-profile", help="Model profile"
+    ),
+) -> None:
+    """Open the interactive agent (default when no subcommand is given)."""
+    if ctx.invoked_subcommand is not None:
+        return
+    try:
+        Config.resolve(
+            cwd=cwd,
+            profile=profile,
+            model_profile=model_profile,
+        ).require_api_key()
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    try:
+        launch_interactive_session(
+            cwd=cwd,
+            thread_id=thread_id,
+            resume_last=resume_last,
+            profile=profile,
+            model_profile=model_profile,
+        )
+    except SystemExit as exc:
+        raise typer.Exit(exc.code) from exc
 
 
 @app.command()
@@ -3253,7 +3288,16 @@ def tui_cmd(
 ) -> None:
     """Interactive terminal UI for agent sessions."""
     try:
-        launch_tui(
+        Config.resolve(
+            cwd=cwd,
+            profile=profile,
+            model_profile=model_profile,
+        ).require_api_key()
+    except ValueError as exc:
+        console.print(f"[red]Error:[/red] {exc}")
+        raise typer.Exit(1) from exc
+    try:
+        launch_interactive_session(
             cwd=cwd,
             thread_id=thread_id,
             resume_last=resume_last,
@@ -3428,6 +3472,8 @@ def repl_cmd(
     ),
 ) -> None:
     """Interactive multi-turn REPL (no Textual required)."""
+    from agent.init_scaffold import ensure_workspace_ready
+
     try:
         Config.resolve(
             cwd=cwd,
@@ -3437,6 +3483,8 @@ def repl_cmd(
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
+    root = (cwd or Path.cwd()).resolve()
+    ensure_workspace_ready(root)
     run_repl(
         cwd=cwd,
         profile=profile,

@@ -131,10 +131,10 @@ Tool-capability warnings appear once per session when the active model may not s
 ## Full example
 
 ```toml
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 
 [openrouter]
-primary_model = "anthropic/claude-sonnet-4"
+primary_model = "openrouter/owl-alpha"
 fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
 fallback_on = ["rate_limit", "provider_error", "timeout", "context_length"]
 native_fallback = true
@@ -148,7 +148,7 @@ input_per_million = 3.0
 output_per_million = 15.0
 
 [model_profiles.deep]
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 max_tool_rounds = 40
 reasoning_effort = "high"
 ```

@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.9.2] — 2026-05-25
+
+TUI launch parity and Grok-style polish (solo harness).
+
+### Added
+
+- **Default `agent` entry:** Bare `agent` opens the interactive TUI (no subcommand required); auto-scaffolds `.agent-cli/config.toml` on first launch.
+- **Grok-style TUI:** Centered home screen (New / Resume / Quit); dark minimal theme; worker forks hidden from resume picker.
+- **TUI slash commands:** `/model`, `/model-profile`, `/plan`, `/compact`, `/clear`, `/cost`, `/thread`, `/help`, `/quit`.
+- **Context footer:** `Context N% left · M% used` in TUI footer (Codex-like).
+- **Docs:** [docs/ui-plan.md](docs/ui-plan.md) — prioritized TUI UX roadmap vs Codex.
+
+### Changed
+
+- **Default model:** `openrouter/owl-alpha` (was `anthropic/claude-sonnet-4`).
+- **Textual in core deps:** `textual>=0.47.0` — no separate `[tui]` install required for default launch.
+- **REPL/TUI scaffold:** `ensure_workspace_ready()` on interactive entry.
+
+### Tests
+
+- `tests/test_default_launch.py`, `tests/test_tui_polish.py`, `tests/test_tui_view_model.py` — **1008** pytest cases (999 baseline + 9 new).
+
 ## [2.9.1] — 2026-05-25
 
 OpenRouter API parity improvements (solo harness).

@@ -32,6 +32,38 @@ def check_tui_available() -> tuple[bool, str]:
     return True, ""
 
 
+def launch_interactive_session(
+    *,
+    cwd: Path | None = None,
+    thread_id: str | None = None,
+    resume_last: bool = False,
+    profile: str | None = None,
+    model_profile: str | None = None,
+) -> None:
+    """Default entry: ensure workspace, then TUI (or REPL if Textual unavailable)."""
+    from agent.init_scaffold import ensure_workspace_ready
+    from agent.repl import run_repl
+
+    resolved = (cwd or Path.cwd()).resolve()
+    ensure_workspace_ready(resolved)
+    ok, _message = check_tui_available()
+    if ok:
+        launch_tui(
+            cwd=resolved,
+            thread_id=thread_id,
+            resume_last=resume_last,
+            profile=profile,
+            model_profile=model_profile,
+        )
+        return
+    run_repl(
+        cwd=resolved,
+        profile=profile,
+        model_profile=model_profile,
+        resume_last=resume_last,
+    )
+
+
 def launch_tui(
     *,
     cwd: Path | None = None,
@@ -67,6 +99,7 @@ def run_turn_in_thread(
     cancel_token: CancelToken,
     approval_queue: queue.Queue[str],
     session_auto_approve: bool = False,
+    plan_mode: bool = False,
 ) -> None:
     def approval_fn(summary: str) -> str:
         on_event(
@@ -101,6 +134,7 @@ def run_turn_in_thread(
             events=emitter,
             cancel_token=cancel_token,
             session_auto_approve=session_auto_approve,
+            plan_mode=plan_mode,
         )
     finally:
         set_approval_input(None)

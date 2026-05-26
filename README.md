@@ -8,9 +8,9 @@ A **Codex-like coding agent harness** in Python, powered by [OpenRouter](https:/
 |------|---------|
 | Install | `pip install -e ".[dev]"` |
 | API key | `OPENROUTER_API_KEY=...` in `.env` (auto-loaded) or `$env:OPENROUTER_API_KEY = "..."` |
-| Scaffold repo | `agent init` (inside a git repo) |
-| Run a task | `agent run "fix failing tests"` |
-| Interactive | `agent repl` or `agent tui` |
+| Start chatting | `agent` (opens interactive TUI in current directory) |
+| One-shot task | `agent run "fix failing tests"` |
+| Plain terminal chat | `agent repl` |
 
 ```powershell
 cd agent-cli
@@ -21,8 +21,7 @@ pip install -e ".[dev]"
 $env:OPENROUTER_API_KEY = "sk-or-v1-..."
 cd examples\demo-project
 .\setup.ps1
-agent init --yes
-agent doctor
+agent
 agent run "fix failing tests" --model-profile deep
 agent threads cost <thread-id>
 ```
@@ -33,8 +32,9 @@ agent threads cost <thread-id>
 
 ```powershell
 pip install -e ".[dev]"
-pip install -e ".[tui]"    # optional: interactive terminal UI
 ```
+
+Textual is included in core dependencies — `agent` opens the TUI by default.
 
 ## Configure
 
@@ -50,20 +50,24 @@ agent doctor --deep   # optional MCP + Docker hello-world
 Minimal project config (`agent init` creates this):
 
 ```toml
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 approval_mode = "interactive"
 max_tool_rounds = 25
 sandbox_mode = "workspace-write"
 exec_policy = "untrusted"
 
 [openrouter]
-primary_model = "anthropic/claude-sonnet-4"
+primary_model = "openrouter/owl-alpha"
 fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
 fallback_on = ["rate_limit", "provider_error", "timeout", "context_length"]
 native_fallback = true
 # max_tokens = 8192
 # user_id = "my-user-id"
 # reasoning_exclude = true
+
+[openrouter.pricing."openrouter/owl-alpha"]
+input_per_million = 0.0
+output_per_million = 0.0
 
 [openrouter.pricing."anthropic/claude-sonnet-4"]
 input_per_million = 3.0
@@ -74,7 +78,7 @@ model = "google/gemini-2.5-flash-preview"
 max_tool_rounds = 15
 
 [model_profiles.deep]
-model = "anthropic/claude-sonnet-4"
+model = "openrouter/owl-alpha"
 max_tool_rounds = 40
 reasoning_effort = "high"
 
@@ -216,17 +220,29 @@ Project rules: `AGENTS.md` / `agents.md` / `.agents/AGENTS.md` injected into the
 
 ## Interactive TUI
 
+Running **`agent`** with no subcommand opens the chat UI in the current directory. Project config (`.agent-cli/config.toml`) is created automatically on first launch — no `agent init` required.
+
 ```powershell
-pip install -e ".[tui]"
-agent tui --cwd examples/demo-project
+pip install -e ".[dev]"
+agent --cwd examples/demo-project
 ```
 
-| Key | Action |
-|-----|--------|
+Or explicitly:
+
+```powershell
+agent tui --cwd examples/demo-project
+agent repl --cwd examples/demo-project
+```
+
+| Key / input | Action |
+|-------------|--------|
 | Enter | Submit turn |
+| `/help` | Slash commands (`/model`, `/plan`, `/compact`, `/cost`, `/quit`, …) |
 | `y`/`n`/`a`/`A` | Approvals |
 | Ctrl+C | Cancel turn |
-| `q` | Quit |
+| `q` | Quit (home screen) |
+
+Footer shows model, plan mode, and context usage (`Context N% left · M% used`). Transcript UX roadmap: [docs/ui-plan.md](docs/ui-plan.md).
 
 ## Models & routing
 
@@ -265,16 +281,17 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 999+ tests
+pytest   # 1000+ tests
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.9.1 (OpenRouter API parity) and v2.9.0 (Phase 28).
+See [CHANGELOG.md](CHANGELOG.md) for v2.9.2 (TUI launch + polish), v2.9.1 (OpenRouter API parity), and v2.9.0 (Phase 28).
 
 ## Further reading
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
+- [TUI UX plan](docs/ui-plan.md) — Codex-style transcript roadmap
 - [OpenRouter integration](docs/openrouter.md) — fallbacks, reasoning, structured output, cost
 - [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)
 - [Roadmap (Phases 24–28)](docs/roadmap/README.md) — step-by-step harness plans

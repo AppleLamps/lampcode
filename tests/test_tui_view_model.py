@@ -5,12 +5,31 @@ from agent.models import Thread, Turn, UserMessageItem
 from agent.tui.view_model import (
     apply_event_to_state,
     approval_key_to_response,
+    filter_session_threads,
     filter_threads_by_cwd,
     handle_approval_key,
     thread_transcript_from_store,
     threads_to_entries,
 )
 from approval.gate import parse_approval_response
+
+
+def test_filter_session_threads_excludes_forks(tmp_path: Path) -> None:
+    cwd_a = tmp_path / "a"
+    cwd_a.mkdir()
+    threads = [
+        Thread(id="main", cwd=str(cwd_a), model="m", title="main task"),
+        Thread(
+            id="worker",
+            cwd=str(cwd_a),
+            model="m",
+            title="worker: lint",
+            forked_from="main123456789",
+        ),
+    ]
+    sessions = filter_session_threads(threads, cwd_a)
+    assert len(sessions) == 1
+    assert sessions[0].id == "main"
 
 
 def test_filter_threads_by_cwd(tmp_path: Path) -> None:

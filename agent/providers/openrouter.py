@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from agent.config import Config
+from agent.config import Config, DEFAULT_MODEL
 from agent.model_routing import resolve_model_profile_from_task
 from agent.settings import OpenRouterSettings, SwarmBudgetPricing
 
@@ -284,8 +284,8 @@ def recommend_model(
         scored.sort(key=lambda x: -x[0])
         return scored[0][1]
     if models:
-        return str(models[0].get("id", "anthropic/claude-sonnet-4"))
-    return "anthropic/claude-sonnet-4"
+        return str(models[0].get("id", DEFAULT_MODEL))
+    return DEFAULT_MODEL
 
 
 TOOL_UNSUPPORTED_DENYLIST: frozenset[str] = frozenset(

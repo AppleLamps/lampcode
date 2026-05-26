@@ -6,7 +6,7 @@ from typing import Any, Callable
 from agent.models import Thread
 from agent.profiles import thread_cost_summary
 from agent.store import ThreadStore
-from agent.tui.view_model import filter_threads_by_cwd
+from agent.tui.view_model import filter_session_threads, filter_threads_by_cwd
 from agent.user_input import resolve_user_input
 
 
@@ -18,7 +18,7 @@ def list_threads_for_picker(
 ) -> list[Thread]:
     threads = store.list_threads()
     if filter_cwd:
-        threads = filter_threads_by_cwd(threads, cwd)
+        threads = filter_session_threads(threads, cwd)
     return threads
 
 

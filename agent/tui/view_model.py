@@ -37,6 +37,11 @@ def filter_threads_by_cwd(threads: list[Thread], cwd: Path) -> list[Thread]:
     return filtered
 
 
+def filter_session_threads(threads: list[Thread], cwd: Path) -> list[Thread]:
+    """User-facing sessions only — hide worker forks from pickers and resume UI."""
+    return [t for t in filter_threads_by_cwd(threads, cwd) if not t.forked_from]
+
+
 def threads_to_entries(threads: list[Thread]) -> list[ThreadListEntry]:
     return [
         ThreadListEntry(

@@ -110,6 +110,7 @@ class CompactionSettings:
 
 
 DEFAULT_OPENROUTER_PRICING: dict[str, SwarmBudgetPricing] = {
+    "openrouter/owl-alpha": SwarmBudgetPricing(input_per_million=0.0, output_per_million=0.0),
     "anthropic/claude-sonnet-4": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
     "anthropic/claude-3.5-sonnet": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
     "openai/gpt-4.1": SwarmBudgetPricing(input_per_million=2.0, output_per_million=8.0),

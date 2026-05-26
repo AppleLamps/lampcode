@@ -91,11 +91,11 @@ max_tool_rounds = 5
 """,
         encoding="utf-8",
     )
-    merged = merge_layered_config(tmp_path, cli_model_profile=None)
     routed = resolve_model_profile_from_task("fix failing tests", cwd=tmp_path)
     assert routed == "deep"
-    kwargs = __import__(
-        "agent.profiles", fromlist=["apply_merged_to_resolve_kwargs"]
-    ).apply_merged_to_resolve_kwargs({**merged, "model_profile": routed})
+    merged = merge_layered_config(tmp_path, cli_model_profile=routed)
+    from agent.profiles import apply_merged_to_resolve_kwargs
+
+    kwargs = apply_merged_to_resolve_kwargs(merged)
     cfg = Config.resolve(cwd=tmp_path, **kwargs)
     assert cfg.model == "anthropic/claude-sonnet-4"
