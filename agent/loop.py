@@ -4,7 +4,12 @@ import json
 from typing import Any, Callable
 
 from agent.cancel import CancelToken, CancelledError
-from agent.compaction import compact_thread_if_needed
+from agent.compaction import compact_thread_if_needed, compact_tool_outputs
+from agent.context_meter import (
+    build_context_snapshot,
+    extract_api_context_tokens,
+    invalidate_context_cache,
+)
 from agent.config import Config
 from agent.context import build_thread_messages, estimate_tokens, load_project_rules
 from agent.events import EventEmitter
@@ -58,6 +63,16 @@ from agent.sandbox.enforcer import (
     check_write_file,
 )
 from model.openrouter import OpenRouterClient, OpenRouterError
+
+
+def _approval_diff_preview_for_tool(
+    tool_name: str, arguments: dict, config: Config
+) -> str | None:
+    if tool_name != "apply_patch":
+        return None
+    from agent.tui.patch_preview import patch_approval_diff_preview
+
+    return patch_approval_diff_preview(arguments, cwd=config.cwd)
 from tools.registry import (
     DispatchResult,
     dispatch_tool,
@@ -150,6 +165,7 @@ def run_turn(
         user_item = UserMessageItem(text=user_text)
         turn.items.append(user_item)
         store.append_item(thread, turn.id, user_item)
+        emitter.user_message(thread.id, turn.id, user_text)
 
     all_skills = discover_skills(
         config.cwd,
@@ -490,6 +506,7 @@ def _run_loop(
     if registry:
         registry.spawn_count = spawn_count
     budget = budget_tracker
+    context_length_retried = False
     for _round in range(config.max_rounds):
         cancel.check()
         if budget:
@@ -508,6 +525,7 @@ def _run_loop(
             project_rules=project_rules,
         )
         if compact_result.performed:
+            invalidate_context_cache(thread.id)
             emitter.compaction(thread.id, compact_result.removed_items)
             emitter.compaction_completed(
                 thread.id,
@@ -547,6 +565,21 @@ def _run_loop(
             if model_supports_structured_outputs(config.model, cached or None):
                 response_format = build_response_format(output_schema)
 
+        guard_messages = _run_pre_turn_context_guard(
+            thread,
+            config,
+            store,
+            client,
+            project_rules=project_rules,
+            active_skills=active_skills,
+            skills_max_body=skills_max_body,
+            memories_text=memories_text,
+            system_prompt_append=system_prompt_append,
+            hooks_runner=hooks_runner,
+        )
+        if guard_messages is not None:
+            messages = guard_messages
+
         try:
             result = client.stream_completion(
                 messages,
@@ -558,6 +591,33 @@ def _run_loop(
         except CancelledError:
             raise
         except OpenRouterError as exc:
+            if (
+                getattr(exc, "error_kind", None) == "context_length"
+                and not context_length_retried
+            ):
+                context_length_retried = True
+                compact_result = compact_thread_if_needed(
+                    thread,
+                    config,
+                    store,
+                    client,
+                    hooks_runner=hooks_runner,
+                    project_rules=project_rules,
+                    force=True,
+                )
+                if compact_result.performed:
+                    invalidate_context_cache(thread.id)
+                    messages = build_thread_messages(
+                        thread,
+                        active_skills=active_skills,
+                        skills_max_body=skills_max_body,
+                        project_rules=project_rules,
+                        execution_backend=config.execution.backend,
+                        sync_enabled=config.execution.ssh.sync_enabled,
+                        memories_text=memories_text,
+                        system_prompt_append=system_prompt_append,
+                    )
+                    continue
             turn.status = "failed"
             emitter.error(thread.id, str(exc))
             store.append_turn(thread, turn)
@@ -580,6 +640,12 @@ def _run_loop(
         turn.usage.estimated_cost_usd = round(session.turn_cost_usd, 6)
         turn.usage.model_used = enriched.get("model_used")
         turn.usage.fallback_used = bool(enriched.get("fallback_used"))
+        ctx_tokens = extract_api_context_tokens(result.usage)
+        if ctx_tokens is not None:
+            turn.usage.context_tokens = ctx_tokens
+            thread.last_context_tokens = ctx_tokens
+            thread.last_context_model = enriched.get("model_used") or config.model
+            store.save_thread(thread)
         if config.max_cost_usd_per_turn and session.turn_cost_usd > config.max_cost_usd_per_turn:
             session.budget_exceeded = True
             return _cost_cap_kill_turn(
@@ -639,6 +705,7 @@ def _run_loop(
         reasoning_details = getattr(result, "reasoning_details", None) or []
         if reasoning:
             assistant_msg["reasoning"] = reasoning
+            emitter.agent_reasoning(thread.id, turn.id, reasoning)
         if reasoning_details:
             assistant_msg["reasoning_details"] = reasoning_details
         messages.append(assistant_msg)
@@ -765,7 +832,16 @@ def _run_loop(
                 session=session,
             ):
                 summary = format_tool_summary(tool_name, arguments)
-                emitter.approval_requested(thread.id, turn.id, tool_name, summary)
+                diff_preview = _approval_diff_preview_for_tool(
+                    tool_name, arguments, config
+                )
+                emitter.approval_requested(
+                    thread.id,
+                    turn.id,
+                    tool_name,
+                    summary,
+                    diff_preview=diff_preview,
+                )
                 approved = _prompt_with_hooks(
                     hooks_runner,
                     thread,
@@ -1095,6 +1171,7 @@ def _run_loop(
                 thread,
                 turn.id,
                 emitter,
+                config=config,
             )
             patch_preview = None
             if tool_name == "apply_patch" and dispatch_result.file_items:
@@ -1111,6 +1188,7 @@ def _run_loop(
                 source=source,
                 diff_preview=patch_preview,
                 summary=result_text[:200] if tool_name == "apply_patch" else None,
+                **_tool_completed_extra(tool_name, tracking_items, result_text),
             )
 
             messages.append(
@@ -1225,6 +1303,36 @@ def _create_tracking_items(
     return []
 
 
+def _tool_completed_extra(
+    tool_name: str,
+    tracking_items: list[TrackingItem],
+    result_text: str,
+    *,
+    max_output: int = 2000,
+) -> dict[str, Any]:
+    """Build optional output/exit_code/duration fields for tool_completed events."""
+    extra: dict[str, Any] = {}
+    if tool_name == "apply_patch":
+        return extra
+    if tracking_items:
+        item = tracking_items[0]
+        if isinstance(item, CommandExecutionItem):
+            extra["output"] = (item.output or result_text or "")[:max_output] or None
+            extra["exit_code"] = item.exit_code
+            extra["duration_ms"] = item.duration_ms
+            return extra
+        if isinstance(item, McpToolCallItem):
+            extra["output"] = (item.output or item.error or result_text or "")[:max_output] or None
+            extra["duration_ms"] = item.duration_ms
+            return extra
+        if isinstance(item, WebSearchItem):
+            extra["output"] = result_text[:max_output] if result_text else None
+            return extra
+    if result_text and tool_name != "apply_patch":
+        extra["output"] = result_text[:max_output]
+    return extra
+
+
 def _mark_denied(items: list[TrackingItem], store, thread, turn_id) -> None:
     for item in items:
         item.status = "denied"
@@ -1244,6 +1352,110 @@ def _mark_approved(items: list[TrackingItem]) -> None:
         item.status = "approved"
 
 
+def _run_pre_turn_context_guard(
+    thread: Thread,
+    config: Config,
+    store: ThreadStore,
+    client,
+    *,
+    project_rules: str,
+    active_skills,
+    skills_max_body: int,
+    memories_text: str,
+    system_prompt_append: str,
+    hooks_runner,
+) -> list | None:
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    pre_limit = int(snap.effective_window * config.compaction.pre_turn_threshold)
+    if snap.estimated_total <= pre_limit:
+        return None
+
+    t1 = compact_tool_outputs(thread, config, store, project_rules=project_rules)
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    if snap.estimated_total <= pre_limit:
+        return _rebuild_messages(
+            thread,
+            config,
+            project_rules=project_rules,
+            active_skills=active_skills,
+            skills_max_body=skills_max_body,
+            memories_text=memories_text,
+            system_prompt_append=system_prompt_append,
+        )
+
+    cr = compact_thread_if_needed(
+        thread,
+        config,
+        store,
+        client,
+        hooks_runner=hooks_runner,
+        project_rules=project_rules,
+        force=True,
+    )
+    if cr.performed:
+        invalidate_context_cache(thread.id)
+        return _rebuild_messages(
+            thread,
+            config,
+            project_rules=project_rules,
+            active_skills=active_skills,
+            skills_max_body=skills_max_body,
+            memories_text=memories_text,
+            system_prompt_append=system_prompt_append,
+        )
+    if t1.performed:
+        return _rebuild_messages(
+            thread,
+            config,
+            project_rules=project_rules,
+            active_skills=active_skills,
+            skills_max_body=skills_max_body,
+            memories_text=memories_text,
+            system_prompt_append=system_prompt_append,
+        )
+    return None
+
+
+def _rebuild_messages(
+    thread: Thread,
+    config: Config,
+    *,
+    project_rules: str,
+    active_skills,
+    skills_max_body: int,
+    memories_text: str,
+    system_prompt_append: str,
+) -> list:
+    return build_thread_messages(
+        thread,
+        active_skills=active_skills,
+        skills_max_body=skills_max_body,
+        project_rules=project_rules,
+        execution_backend=config.execution.backend,
+        sync_enabled=config.execution.ssh.sync_enabled,
+        memories_text=memories_text,
+        system_prompt_append=system_prompt_append,
+    )
+
+
+def _spill_item_output(
+    config: Config,
+    *,
+    thread_id: str,
+    item_id: str,
+    text: str | None,
+) -> tuple[str | None, str | None, int | None]:
+    if not text:
+        return text, None, None
+    from agent.artifacts import spill_if_large
+
+    limit = min(config.max_tool_output, config.context.artifact_inline_limit)
+    inline, path = spill_if_large(
+        text, thread_id=thread_id, item_id=item_id, inline_limit=limit
+    )
+    return inline, path, len(text)
+
+
 def _apply_dispatch_results(
     result: DispatchResult,
     tracking_items: list[TrackingItem],
@@ -1251,12 +1463,23 @@ def _apply_dispatch_results(
     thread: Thread,
     turn_id: str,
     emitter: EventEmitter,
+    *,
+    config: Config | None = None,
 ) -> str:
     if result.mcp_item and tracking_items:
         item = tracking_items[0]
         if isinstance(item, McpToolCallItem):
             item.status = result.mcp_item.status
-            item.output = result.mcp_item.output
+            raw_out = result.mcp_item.output
+            if config and raw_out:
+                inline, path, chars = _spill_item_output(
+                    config, thread_id=thread.id, item_id=item.id, text=raw_out
+                )
+                item.output = inline
+                item.artifact_path = path
+                item.output_chars = chars
+            else:
+                item.output = raw_out
             item.error = result.mcp_item.error
             store.append_item(thread, turn_id, item)
             emitter.item_completed(thread.id, turn_id, item.type, item.id, item.status)
@@ -1266,7 +1489,16 @@ def _apply_dispatch_results(
         item = tracking_items[0]
         if isinstance(item, CommandExecutionItem):
             item.status = result.command_item.status
-            item.output = result.command_item.output
+            raw_out = result.command_item.output
+            if config and raw_out:
+                inline, path, chars = _spill_item_output(
+                    config, thread_id=thread.id, item_id=item.id, text=raw_out
+                )
+                item.output = inline
+                item.artifact_path = path
+                item.output_chars = chars
+            else:
+                item.output = raw_out
             item.exit_code = result.command_item.exit_code
             item.duration_ms = result.command_item.duration_ms
             store.append_item(thread, turn_id, item)
@@ -1438,7 +1670,16 @@ def _run_parallel_read_tool_round(
             session=session,
         ):
             summary = format_tool_summary(tool_name, arguments)
-            emitter.approval_requested(thread.id, turn.id, tool_name, summary)
+            diff_preview = _approval_diff_preview_for_tool(
+                tool_name, arguments, config
+            )
+            emitter.approval_requested(
+                thread.id,
+                turn.id,
+                tool_name,
+                summary,
+                diff_preview=diff_preview,
+            )
             approved = _prompt_with_hooks(
                 hooks_runner,
                 thread,
@@ -1526,6 +1767,7 @@ def _run_parallel_read_tool_round(
             thread,
             turn.id,
             emitter,
+            config=config,
         )
 
     jobs = [(index, lambda entry=entry: _dispatch_entry(entry)) for index, entry in enumerate(prepared)]
@@ -1540,6 +1782,7 @@ def _run_parallel_read_tool_round(
             tool_name,
             tracking_items[0].status if tracking_items else "completed",
             source=entry["source"],
+            **_tool_completed_extra(tool_name, tracking_items, result_text),
         )
         messages.append(
             {

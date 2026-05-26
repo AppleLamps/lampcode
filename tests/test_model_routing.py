@@ -7,6 +7,7 @@ import pytest
 from agent.config import Config
 from agent.model_routing import (
     DEFAULT_ROUTING_RULES,
+    explain_model_routing,
     load_model_routing,
     resolve_model_profile_from_task,
 )
@@ -32,6 +33,12 @@ def test_cli_model_profile_wins() -> None:
 
 def test_summarize_routes_fast() -> None:
     assert resolve_model_profile_from_task("summarize this module") == "fast"
+
+
+def test_explain_model_routing_matched_rule() -> None:
+    msg = explain_model_routing("fix failing pytest tests")
+    assert "deep" in msg
+    assert "Matched" in msg
 
 
 def test_load_model_routing_from_project(tmp_path: Path) -> None:

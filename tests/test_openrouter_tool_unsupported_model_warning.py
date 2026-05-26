@@ -20,6 +20,7 @@ def test_denylist_model_not_supported() -> None:
 def test_common_model_supported() -> None:
     assert model_supports_tools("anthropic/claude-sonnet-4")
     assert tool_support_warning("anthropic/claude-sonnet-4") is None
+    assert tool_support_warning("minimax/minimax-m2.7") is None
 
 
 def test_run_warns_on_unsupported_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TYPE_CHECKING
 
 from agent.config import Config
 from agent.context import build_thread_messages, estimate_tokens, load_project_rules
+from agent.context_meter import build_context_snapshot, invalidate_context_cache
+from agent.models import CommandExecutionItem, McpToolCallItem
 from agent.models import (
     AgentMessageItem,
     ContextCompactionItem,
@@ -83,12 +85,85 @@ def build_compaction_base_instructions(
     return "\n".join(parts)
 
 
-def should_compact(messages: list[dict[str, Any]], config: Config) -> bool:
+def _effective_compact_threshold(config: Config, thread: Thread | None) -> int:
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    return int(snap.effective_window * config.compaction.threshold)
+
+
+def should_compact(
+    messages: list[dict[str, Any]], config: Config, thread: Thread | None = None
+) -> bool:
     if not config.compaction.enabled:
         return False
     estimate = estimate_tokens(messages)
-    threshold = int(config.context_window_tokens * config.compaction.threshold)
-    return estimate >= threshold
+    return estimate >= _effective_compact_threshold(config, thread)
+
+
+def _summarize_tool_output(command: str, output: str, artifact_path: str | None) -> str:
+    first_lines = "\n".join(output.splitlines()[:3])
+    suffix = f" [artifact: {artifact_path}]" if artifact_path else ""
+    return f"[Compacted tool output] {command}\n{first_lines}{suffix}"
+
+
+def compact_tool_outputs(
+    thread: Thread,
+    config: Config,
+    store: ThreadStore,
+    *,
+    project_rules: str = "",
+) -> CompactionResult:
+    """Tier-1: replace long tool outputs in older turns with short summaries."""
+    if not config.compaction.enabled:
+        return CompactionResult(compaction_count=count_thread_compactions(thread))
+
+    messages = build_thread_messages(thread, project_rules=project_rules)
+    tokens_before = estimate_tokens(messages)
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    threshold = int(snap.effective_window * config.compaction.tool_output_threshold)
+    if tokens_before < threshold:
+        return CompactionResult(
+            estimated_tokens_before=tokens_before,
+            compaction_count=count_thread_compactions(thread),
+        )
+
+    preserve = config.compaction.keep_recent_turns
+    if len(thread.turns) <= preserve:
+        return CompactionResult(
+            estimated_tokens_before=tokens_before,
+            compaction_count=count_thread_compactions(thread),
+        )
+
+    changed = 0
+    for turn in thread.turns[:-preserve]:
+        for item in turn.items:
+            if isinstance(item, CommandExecutionItem) and item.output:
+                if len(item.output) > 500:
+                    item.output = _summarize_tool_output(
+                        item.command, item.output, item.artifact_path
+                    )
+                    changed += 1
+            elif isinstance(item, McpToolCallItem) and item.output:
+                if len(item.output) > 500:
+                    label = f"{item.server}/{item.tool}"
+                    item.output = _summarize_tool_output(label, item.output, item.artifact_path)
+                    changed += 1
+
+    if not changed:
+        return CompactionResult(
+            estimated_tokens_before=tokens_before,
+            compaction_count=count_thread_compactions(thread),
+        )
+
+    store.rewrite_turns(thread)
+    store.save_thread(thread)
+    invalidate_context_cache(thread.id)
+    tokens_after = estimate_tokens(build_thread_messages(thread, project_rules=project_rules))
+    return CompactionResult(
+        removed_items=changed,
+        estimated_tokens_before=tokens_before,
+        estimated_tokens_after=tokens_after,
+        compaction_count=count_thread_compactions(thread),
+    )
 
 
 def compact_thread_if_needed(
@@ -109,7 +184,7 @@ def compact_thread_if_needed(
             estimated_tokens_before=tokens_before,
             compaction_count=count_thread_compactions(thread),
         )
-    if not force and not should_compact(messages, config):
+    if not force and not should_compact(messages, config, thread):
         return CompactionResult(
             estimated_tokens_before=tokens_before,
             compaction_count=count_thread_compactions(thread),
@@ -191,9 +266,16 @@ def _perform_compaction(
             elif isinstance(item, AgentMessageItem):
                 transcript_parts.append(f"Agent: {item.text}")
             elif item.type == "commandExecution":
-                transcript_parts.append(
-                    f"Command ({item.status}): {item.command}\n{item.output or ''}"
-                )
+                out = item.output or ""
+                if item.artifact_path:
+                    transcript_parts.append(
+                        f"Command ({item.status}): {item.command}\n"
+                        f"[output at {item.artifact_path}]\n{out}"
+                    )
+                else:
+                    transcript_parts.append(
+                        f"Command ({item.status}): {item.command}\n{out}"
+                    )
             elif item.type == "fileChange":
                 transcript_parts.append(
                     f"FileChange ({item.status}): {item.path} — {item.summary or ''}"
@@ -218,7 +300,11 @@ def _perform_compaction(
         },
     ]
 
-    summary = client.complete(summary_messages)
+    compaction_model = config.compaction.model or config.model
+    compact_client = client
+    if compaction_model != config.model:
+        compact_client = OpenRouterClient(replace(config, model=compaction_model))
+    summary = compact_client.complete(summary_messages)
     max_chars = config.compaction.summary_max_chars
     if len(summary) > max_chars:
         summary = summary[: max_chars - 20] + "\n[... truncated ...]"
@@ -238,6 +324,7 @@ def _perform_compaction(
     thread.turns = [compact_turn] + recent_turns
     store.rewrite_turns(thread)
     store.save_thread(thread)
+    invalidate_context_cache(thread.id)
 
     warning = MULTI_COMPACT_WARNING if prior_compactions >= 1 else None
 

@@ -17,6 +17,7 @@ from agent.profiles import merge_layered_config, apply_merged_to_resolve_kwargs,
 from agent.sandbox.policy import SandboxMode
 from agent.settings import (
     CompactionSettings,
+    ContextSettings,
     ExecutionSettings,
     IsolationSettings,
     MultiAgentSettings,
@@ -34,11 +35,14 @@ from agent.settings import (
     TelemetrySettings,
     WebSearchSettings,
     load_compaction_settings,
+    load_context_settings,
     load_execution_settings,
     load_isolation_settings,
     load_multi_agent_settings,
     load_openrouter_settings,
     load_recording_settings,
+    load_action_log_settings,
+    ActionLogSettings,
     load_turn_checkpoint_settings,
     load_shell_settings,
     load_hooks_settings,
@@ -53,7 +57,7 @@ from agent.settings import (
     load_web_search_settings,
 )
 
-DEFAULT_MODEL = "openrouter/owl-alpha"
+DEFAULT_MODEL = "minimax/minimax-m2.7"
 DEFAULT_MAX_ROUNDS = 25
 DEFAULT_COMMAND_TIMEOUT = 120
 DEFAULT_MAX_TOOL_OUTPUT = 20_000
@@ -65,7 +69,7 @@ ApprovalMode = Literal["interactive", "auto"]
 @dataclass
 class FileConfig:
     model: str | None = None
-    approval_mode: ApprovalMode = "interactive"
+    approval_mode: ApprovalMode | None = None
     max_tool_rounds: int = DEFAULT_MAX_ROUNDS
     command_timeout_sec: int = DEFAULT_COMMAND_TIMEOUT
     max_tool_output_chars: int = DEFAULT_MAX_TOOL_OUTPUT
@@ -101,7 +105,7 @@ class FileConfig:
 
         return cls(
             model=data.get("model"),
-            approval_mode=data.get("approval_mode", "interactive"),
+            approval_mode=data.get("approval_mode"),
             max_tool_rounds=int(data.get("max_tool_rounds", DEFAULT_MAX_ROUNDS)),
             command_timeout_sec=int(
                 data.get("command_timeout_sec", DEFAULT_COMMAND_TIMEOUT)
@@ -124,18 +128,20 @@ class FileConfig:
 class Config:
     cwd: Path
     model: str
-    approval_mode: ApprovalMode = "interactive"
+    approval_mode: ApprovalMode = "auto"
     max_rounds: int = DEFAULT_MAX_ROUNDS
     command_timeout: int = DEFAULT_COMMAND_TIMEOUT
     max_tool_output: int = DEFAULT_MAX_TOOL_OUTPUT
     prefer_ripgrep: bool = True
     context_window_tokens: int = DEFAULT_CONTEXT_WINDOW
     compaction_threshold: float = DEFAULT_COMPACTION_THRESHOLD
-    sandbox_mode: SandboxMode = SandboxMode.DANGER_FULL_ACCESS
+    sandbox_mode: SandboxMode = SandboxMode.WORKSPACE_WRITE
     exec_policy: ExecPolicyConfig = field(default_factory=ExecPolicyConfig)
     compaction: CompactionSettings = field(default_factory=CompactionSettings)
+    context: ContextSettings = field(default_factory=ContextSettings)
     openrouter: OpenRouterSettings = field(default_factory=OpenRouterSettings)
     recording: RecordingSettings = field(default_factory=RecordingSettings)
+    action_log: ActionLogSettings = field(default_factory=ActionLogSettings)
     turn_checkpoint: TurnCheckpointSettings = field(default_factory=TurnCheckpointSettings)
     shell: ShellSettings = field(default_factory=ShellSettings)
     hooks: HooksSettings = field(default_factory=HooksSettings)
@@ -237,7 +243,7 @@ class Config:
                 file_cfg.model = project_cfg.model
             if project_cfg.sandbox_mode:
                 file_cfg.sandbox_mode = project_cfg.sandbox_mode
-            if project_cfg.approval_mode != "interactive":
+            if project_cfg.approval_mode is not None:
                 file_cfg.approval_mode = project_cfg.approval_mode
             if project_cfg.max_tool_rounds != DEFAULT_MAX_ROUNDS:
                 file_cfg.max_tool_rounds = project_cfg.max_tool_rounds
@@ -276,7 +282,7 @@ class Config:
         elif env_approval in ("auto", "interactive"):
             approval_mode = env_approval  # type: ignore[assignment]
         else:
-            approval_mode = file_cfg.approval_mode
+            approval_mode = file_cfg.approval_mode or "auto"
 
         resolved_max_rounds = max_rounds
         if resolved_max_rounds is None and env_max_rounds:
@@ -309,6 +315,7 @@ class Config:
             resolved_context = file_cfg.context_window_tokens
 
         compaction_cfg = load_compaction_settings(resolved_config_path)
+        context_cfg = load_context_settings(resolved_config_path)
         resolved_compaction = compaction_threshold
         if resolved_compaction is None and env_compaction:
             resolved_compaction = float(env_compaction)
@@ -322,6 +329,7 @@ class Config:
         exec_policy.allow_prefixes = load_allow_prefixes(resolved_cwd)
         openrouter = load_openrouter_settings(resolved_config_path, project_path=project_path)
         recording = load_recording_settings(resolved_config_path)
+        action_log_cfg = load_action_log_settings(resolved_config_path)
         turn_checkpoint = load_turn_checkpoint_settings(
             resolved_config_path, project_path=project_path
         )
@@ -381,8 +389,10 @@ class Config:
             sandbox_mode=resolved_sandbox,
             exec_policy=exec_policy,
             compaction=compaction_cfg,
+            context=context_cfg,
             openrouter=openrouter,
             recording=recording,
+            action_log=action_log_cfg,
             turn_checkpoint=turn_checkpoint,
             shell=shell_cfg,
             hooks=hooks_cfg,

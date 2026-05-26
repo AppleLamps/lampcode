@@ -50,14 +50,14 @@ agent doctor --deep   # optional MCP + Docker hello-world
 Minimal project config (`agent init` creates this):
 
 ```toml
-model = "openrouter/owl-alpha"
-approval_mode = "interactive"
+model = "minimax/minimax-m2.7"
+approval_mode = "auto"
 max_tool_rounds = 25
 sandbox_mode = "workspace-write"
 exec_policy = "untrusted"
 
 [openrouter]
-primary_model = "openrouter/owl-alpha"
+primary_model = "minimax/minimax-m2.7"
 fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
 fallback_on = ["rate_limit", "provider_error", "timeout", "context_length"]
 native_fallback = true
@@ -65,7 +65,7 @@ native_fallback = true
 # user_id = "my-user-id"
 # reasoning_exclude = true
 
-[openrouter.pricing."openrouter/owl-alpha"]
+[openrouter.pricing."minimax/minimax-m2.7"]
 input_per_million = 0.0
 output_per_million = 0.0
 
@@ -78,7 +78,7 @@ model = "google/gemini-2.5-flash-preview"
 max_tool_rounds = 15
 
 [model_profiles.deep]
-model = "openrouter/owl-alpha"
+model = "minimax/minimax-m2.7"
 max_tool_rounds = 40
 reasoning_effort = "high"
 

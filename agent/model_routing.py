@@ -96,3 +96,26 @@ def resolve_model_profile_from_task(
         if re.search(rule.match, task_l, re.IGNORECASE):
             return rule.profile
     return None
+
+
+def explain_model_routing(
+    task: str,
+    *,
+    cli_model_profile: str | None = None,
+    cwd: Path | None = None,
+) -> str:
+    """Human-readable explanation of which routing rule would apply."""
+    if cli_model_profile:
+        return f"CLI --model-profile={cli_model_profile} is set; routing rules are skipped."
+    project_path = project_config_path(cwd) if cwd else None
+    routing = load_model_routing(project_path=project_path)
+    if not routing.enabled:
+        return "Model routing is disabled ([model_routing] enabled = false)."
+    task_l = task.lower()
+    for rule in routing.rules:
+        if re.search(rule.match, task_l, re.IGNORECASE):
+            return f"Matched /{rule.match}/ → profile '{rule.profile}'"
+    lines = ["No rule matched the last prompt. Configured rules:"]
+    for rule in routing.rules[:10]:
+        lines.append(f"  • /{rule.match}/ → {rule.profile}")
+    return "\n".join(lines)

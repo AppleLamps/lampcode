@@ -101,16 +101,31 @@ class McpConfig:
 
 
 @dataclass
+class ContextSettings:
+    baseline_mode: str = "auto"  # auto | fixed | none
+    baseline_tokens: int = 12000
+    headroom_tokens: int = 8000
+    headroom_pct: float = 0.05
+    warn_yellow_left_pct: int = 25
+    warn_red_left_pct: int = 10
+    artifact_inline_limit: int = 8000
+    divergence_threshold: float = 0.15
+
+
+@dataclass
 class CompactionSettings:
     enabled: bool = True
     keep_recent_turns: int = 2
     threshold: float = 0.7
     summary_max_chars: int = 8000
     auto_mid_turn: bool = True
+    model: str | None = "google/gemini-2.5-flash-preview"
+    pre_turn_threshold: float = 0.85
+    tool_output_threshold: float = 0.75
 
 
 DEFAULT_OPENROUTER_PRICING: dict[str, SwarmBudgetPricing] = {
-    "openrouter/owl-alpha": SwarmBudgetPricing(input_per_million=0.0, output_per_million=0.0),
+    "minimax/minimax-m2.7": SwarmBudgetPricing(input_per_million=0.0, output_per_million=0.0),
     "anthropic/claude-sonnet-4": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
     "anthropic/claude-3.5-sonnet": SwarmBudgetPricing(input_per_million=3.0, output_per_million=15.0),
     "openai/gpt-4.1": SwarmBudgetPricing(input_per_million=2.0, output_per_million=8.0),
@@ -159,6 +174,13 @@ DEFAULT_ALLOWED_ENV = [
 class RecordingSettings:
     enabled: bool = True
     keep_last_runs_per_thread: int = 50
+
+
+@dataclass
+class ActionLogSettings:
+    enabled: bool = True
+    dir: str = "~/.agent-cli/logs"
+    mirror_to_project: bool = True
 
 
 @dataclass
@@ -510,17 +532,38 @@ def _load_toml(path: Path) -> dict[str, Any]:
         return tomllib.load(f)
 
 
+def load_context_settings(path: Path | None = None) -> ContextSettings:
+    data = _load_toml(path or default_config_path())
+    ctx = data.get("context", {})
+    if not isinstance(ctx, dict):
+        ctx = {}
+    return ContextSettings(
+        baseline_mode=str(ctx.get("baseline_mode", "auto")),
+        baseline_tokens=int(ctx.get("baseline_tokens", 12000)),
+        headroom_tokens=int(ctx.get("headroom_tokens", 8000)),
+        headroom_pct=float(ctx.get("headroom_pct", 0.05)),
+        warn_yellow_left_pct=int(ctx.get("warn_left_pct", ctx.get("warn_yellow_left_pct", 25))),
+        warn_red_left_pct=int(ctx.get("warn_red_left_pct", 10)),
+        artifact_inline_limit=int(ctx.get("artifact_inline_limit", 8000)),
+        divergence_threshold=float(ctx.get("divergence_threshold", 0.15)),
+    )
+
+
 def load_compaction_settings(path: Path | None = None) -> CompactionSettings:
     data = _load_toml(path or default_config_path())
     compaction = data.get("compaction", {})
     if not isinstance(compaction, dict):
         compaction = {}
+    model = compaction.get("model")
     return CompactionSettings(
         enabled=bool(compaction.get("enabled", True)),
         keep_recent_turns=int(compaction.get("keep_recent_turns", 2)),
         threshold=float(compaction.get("threshold", data.get("compaction_threshold", 0.7))),
         summary_max_chars=int(compaction.get("summary_max_chars", 8000)),
         auto_mid_turn=bool(compaction.get("auto_mid_turn", True)),
+        model=str(model) if model else "google/gemini-2.5-flash-preview",
+        pre_turn_threshold=float(compaction.get("pre_turn_threshold", 0.85)),
+        tool_output_threshold=float(compaction.get("tool_output_threshold", 0.75)),
     )
 
 
@@ -590,6 +633,18 @@ def load_openrouter_settings(path: Path | None = None, *, project_path: Path | N
         for k, v in pricing.items()
     }
     return _parse_openrouter_section(merged)
+
+
+def load_action_log_settings(path: Path | None = None) -> ActionLogSettings:
+    data = _load_toml(path or default_config_path())
+    section = data.get("action_log", {})
+    if not isinstance(section, dict):
+        section = {}
+    return ActionLogSettings(
+        enabled=bool(section.get("enabled", True)),
+        dir=str(section.get("dir", "~/.agent-cli/logs")),
+        mirror_to_project=bool(section.get("mirror_to_project", True)),
+    )
 
 
 def load_recording_settings(path: Path | None = None) -> RecordingSettings:

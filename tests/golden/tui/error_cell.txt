@@ -1,0 +1,3 @@
+
+✕ sandbox blocked (workspace-write): command not allowed
+  command: rm -rf /

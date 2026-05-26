@@ -33,7 +33,7 @@ git log --oneline -15   # expect v2.9.2 TUI commit after v2.9.1 OpenRouter
 - **Grok-style home:** centered New / Resume / Quit; dark theme; hide worker forks in picker
 - **Slash commands:** `/model`, `/plan`, `/compact`, `/cost`, `/help`, …
 - **Context footer:** `Context N% left · M% used`
-- **Default model:** `openrouter/owl-alpha`
+- **Default model:** `minimax/minimax-m2.7`
 - **Docs:** `docs/ui-plan.md` — Codex transcript parity roadmap
 
 ### v2.9.1 — OpenRouter API parity

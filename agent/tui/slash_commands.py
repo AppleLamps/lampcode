@@ -17,6 +17,7 @@ class TuiSlashState:
     profile_override: str | None = None
     model_profile_override: str | None = None
     plan_mode: bool = False
+    last_routing_prompt: str = ""
 
 
 @dataclass
@@ -55,9 +56,26 @@ def execute_slash_command(
         return SlashCommandResult(
             handled=True,
             message=(
-                "Commands: /model [id], /model-profile [name], /plan [on|off], "
-                "/compact, /clear, /cost, /thread, /quit"
+                "Commands: /model [id], /model-profile [name], /why-model, /plan [on|off], "
+                "/context [--json], /compact, /clear, /cost, /thread, /memories, /statusline, /quit"
             ),
+        )
+
+    if name == "/memories":
+        return _handle_memories(arg, config=config, thread=thread)
+
+    if name == "/statusline":
+        from agent.tui.statusline import DEFAULT_STATUSLINE, load_statusline_settings
+
+        settings = load_statusline_settings(config.config_path)
+        if arg.lower() == "default":
+            return SlashCommandResult(
+                handled=True,
+                message=f"Default items: {', '.join(DEFAULT_STATUSLINE)}",
+            )
+        return SlashCommandResult(
+            handled=True,
+            message=f"Status line: {', '.join(settings.items)}",
         )
 
     if name == "/model":
@@ -75,6 +93,24 @@ def execute_slash_command(
             )
         current = state.model_profile_override or "(default)"
         return SlashCommandResult(handled=True, message=f"Model profile: {current}")
+
+    if name in ("/why-model", "/why"):
+        from agent.model_routing import explain_model_routing
+
+        task = arg or getattr(state, "last_routing_prompt", "") or ""
+        if not task:
+            return SlashCommandResult(
+                handled=True,
+                message="No prompt to analyze yet. Usage: /why-model [text]",
+            )
+        return SlashCommandResult(
+            handled=True,
+            message=explain_model_routing(
+                task,
+                cli_model_profile=state.model_profile_override,
+                cwd=config.cwd,
+            ),
+        )
 
     if name == "/profile":
         if arg:
@@ -111,6 +147,9 @@ def execute_slash_command(
             handled=True,
             message=f"Thread {thread.id[:8]}… · {len(thread.turns)} turns",
         )
+
+    if name == "/context":
+        return _handle_context(arg, config=config, thread=thread)
 
     if name == "/compact":
         return _handle_compact(arg, config=config, store=store, thread=thread)
@@ -154,6 +193,62 @@ def _handle_plan_command(
     else:
         lines.append("Last proposed plan: (none)")
     return SlashCommandResult(handled=True, message="\n".join(lines))
+
+
+def _handle_memories(
+    arg: str,
+    *,
+    config: Config,
+    thread: Thread | None,
+) -> SlashCommandResult:
+    from agent.memories import SuggestQueue, inject_memories_dry_run, memories_store_path
+
+    settings = config.memories
+    if arg.lower() == "inject":
+        preview = inject_memories_dry_run(
+            arg or (thread.title if thread and thread.title else "project"),
+            settings,
+            cwd=str(config.cwd),
+        )
+        return SlashCommandResult(handled=True, message=preview[:2000])
+    pending = 0
+    if settings.enabled:
+        pending = SuggestQueue(config.cwd).pending_count()
+    store_path = memories_store_path(settings)
+    lines = [
+        f"Memories: {'enabled' if settings.enabled else 'disabled'}",
+        f"Store: {store_path}",
+        f"Pending suggestions: {pending}",
+    ]
+    if arg.lower() in ("on", "enable", "true"):
+        lines.append("Enable via [memories] enabled = true in config.toml")
+    return SlashCommandResult(handled=True, message="\n".join(lines))
+
+
+def _handle_context(
+    arg: str,
+    *,
+    config: Config,
+    thread: Thread | None,
+) -> SlashCommandResult:
+    import json
+
+    from agent.context_meter import (
+        build_context_snapshot,
+        format_context_breakdown,
+        snapshot_to_dict,
+    )
+
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    if arg.strip().lower() == "--json":
+        return SlashCommandResult(
+            handled=True,
+            message=json.dumps(snapshot_to_dict(snap), indent=2),
+        )
+    return SlashCommandResult(
+        handled=True,
+        message=format_context_breakdown(snap),
+    )
 
 
 def _handle_compact(

@@ -317,7 +317,7 @@ def model_supports_tools(model_id: str, models: list[dict[str, Any]] | None = No
                     return False
             return True
     # Conservative allowlist for common harness models without cache
-    if any(x in mid for x in ("claude", "gpt", "gemini", "mistral", "deepseek")):
+    if any(x in mid for x in ("claude", "gpt", "gemini", "mistral", "deepseek", "minimax")):
         return True
     return False
 

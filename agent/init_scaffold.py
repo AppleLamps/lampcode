@@ -4,10 +4,10 @@ from pathlib import Path
 
 
 INIT_CONFIG_TEMPLATE = """profile = "interactive"
-model = "openrouter/owl-alpha"
+model = "minimax/minimax-m2.7"
 model_profile = "deep"
 sandbox_mode = "workspace-write"
-approval_mode = "interactive"
+approval_mode = "auto"
 
 [project]
 name = "{name}"
@@ -18,7 +18,7 @@ model = "google/gemini-2.5-flash-preview"
 max_tool_rounds = 15
 
 [model_profiles.deep]
-model = "openrouter/owl-alpha"
+model = "minimax/minimax-m2.7"
 max_tool_rounds = 40
 reasoning_effort = "high"
 
@@ -26,8 +26,20 @@ reasoning_effort = "high"
 # enabled = false
 # max_inject = 5
 
+# [action_log]
+# enabled = true
+# mirror_to_project = true   # also writes .agent-cli/action.log in the project
+
+# [context]
+# baseline_mode = "auto"   # auto | fixed | none
+# headroom_tokens = 8000
+# artifact_inline_limit = 8000
+
 # [compaction]
 # auto_mid_turn = true
+# model = "google/gemini-2.5-flash-preview"
+# pre_turn_threshold = 0.85
+# tool_output_threshold = 0.75
 
 # [budget]
 # max_cost_usd_per_turn = 0.50
@@ -38,6 +50,9 @@ reasoning_effort = "high"
 # [shell]
 # enabled = false
 # backend = "auto"  # auto | pipes | conpty | pty
+
+# [tui]
+# statusline = ["model", "mode", "sandbox", "approvals", "context", "branch", "session"]
 
 # [.agent-cli/exec-policy.toml]
 # [allow_prefixes]

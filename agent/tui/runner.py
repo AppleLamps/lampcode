@@ -39,6 +39,7 @@ def launch_interactive_session(
     resume_last: bool = False,
     profile: str | None = None,
     model_profile: str | None = None,
+    config: Config | None = None,
 ) -> None:
     """Default entry: ensure workspace, then TUI (or REPL if Textual unavailable)."""
     from agent.init_scaffold import ensure_workspace_ready
@@ -46,7 +47,7 @@ def launch_interactive_session(
 
     resolved = (cwd or Path.cwd()).resolve()
     ensure_workspace_ready(resolved)
-    ok, _message = check_tui_available()
+    ok, message = check_tui_available()
     if ok:
         launch_tui(
             cwd=resolved,
@@ -54,6 +55,7 @@ def launch_interactive_session(
             resume_last=resume_last,
             profile=profile,
             model_profile=model_profile,
+            config=config,
         )
         return
     run_repl(
@@ -71,6 +73,7 @@ def launch_tui(
     resume_last: bool = False,
     profile: str | None = None,
     model_profile: str | None = None,
+    config: Config | None = None,
 ) -> None:
     ok, message = check_tui_available()
     if not ok:
@@ -85,6 +88,7 @@ def launch_tui(
         resume_last=resume_last,
         profile=profile,
         model_profile=model_profile,
+        config=config,
     )
     app.run()
 
@@ -102,13 +106,7 @@ def run_turn_in_thread(
     plan_mode: bool = False,
 ) -> None:
     def approval_fn(summary: str) -> str:
-        on_event(
-            AgentEvent(
-                "approval.requested",
-                thread_id=thread.id,
-                data={"tool_name": "", "summary": summary},
-            )
-        )
+        # Loop already emits approval.requested with tool metadata for the TUI banner.
         while True:
             try:
                 key = approval_queue.get(timeout=0.2)
@@ -124,6 +122,9 @@ def run_turn_in_thread(
         on_event,
         recording=config.recording.enabled,
         recording_keep=config.recording.keep_last_runs_per_thread,
+        action_log=config.action_log,
+        project_cwd=config.cwd,
+        model=config.model,
     )
     try:
         run_turn(

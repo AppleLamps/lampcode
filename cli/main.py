@@ -157,11 +157,12 @@ def cli_entry(
     if ctx.invoked_subcommand is not None:
         return
     try:
-        Config.resolve(
+        resolved_config = Config.resolve(
             cwd=cwd,
             profile=profile,
             model_profile=model_profile,
-        ).require_api_key()
+        )
+        resolved_config.require_api_key()
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
@@ -172,6 +173,7 @@ def cli_entry(
             resume_last=resume_last,
             profile=profile,
             model_profile=model_profile,
+            config=resolved_config,
         )
     except SystemExit as exc:
         raise typer.Exit(exc.code) from exc
@@ -441,6 +443,9 @@ def run(
         output.handle,
         recording=config.recording.enabled,
         recording_keep=config.recording.keep_last_runs_per_thread,
+        action_log=config.action_log,
+        project_cwd=config.cwd,
+        model=config.model,
     )
     if json_output:
         emitter.thread_started(thread.id, title=thread.title)
@@ -2858,7 +2863,12 @@ def multi_agent_resume_cmd(
     if not cp:
         console.print("[red]No checkpoint found.[/red]")
         raise typer.Exit(1)
-    emitter = build_event_emitter(recording=config.recording.enabled)
+    emitter = build_event_emitter(
+        recording=config.recording.enabled,
+        action_log=config.action_log,
+        project_cwd=config.cwd,
+        model=config.model,
+    )
     resume_supervisor_turn(
         thread, cp, config, store, retry_failed=retry_failed, events=emitter
     )
@@ -3024,7 +3034,13 @@ def threads_resume_turn(
         console.print("[red]Error:[/red] No turn checkpoint found.")
         raise typer.Exit(1)
     output = OutputHandler()
-    emitter = build_event_emitter(output.handle, recording=config.recording.enabled)
+    emitter = build_event_emitter(
+        output.handle,
+        recording=config.recording.enabled,
+        action_log=config.action_log,
+        project_cwd=config.cwd,
+        model=config.model,
+    )
     console.print(f"[dim]Resuming turn {resume_cp.turn_id[:8]}…[/dim]")
     turn = run_turn(
         thread,
@@ -3288,11 +3304,12 @@ def tui_cmd(
 ) -> None:
     """Interactive terminal UI for agent sessions."""
     try:
-        Config.resolve(
+        resolved_config = Config.resolve(
             cwd=cwd,
             profile=profile,
             model_profile=model_profile,
-        ).require_api_key()
+        )
+        resolved_config.require_api_key()
     except ValueError as exc:
         console.print(f"[red]Error:[/red] {exc}")
         raise typer.Exit(1) from exc
@@ -3303,6 +3320,7 @@ def tui_cmd(
             resume_last=resume_last,
             profile=profile,
             model_profile=model_profile,
+            config=resolved_config,
         )
     except SystemExit as exc:
         raise typer.Exit(exc.code) from exc
@@ -3648,6 +3666,42 @@ def skills_doctor_cmd(
         console.print(f"[{color}]{issue['level']}[/] {issue['skill']}: {issue['message']}")
     if not report["ok"]:
         raise typer.Exit(1)
+
+
+@app.command("context")
+def context_cmd(
+    cwd: Optional[Path] = typer.Option(None, "--cwd", help="Working directory"),
+    thread_id: Optional[str] = typer.Option(None, "--thread", help="Thread ID"),
+    json_output: bool = typer.Option(False, "--json", help="Machine-readable breakdown"),
+) -> None:
+    """Show context window usage breakdown for a thread."""
+    import json as json_mod
+
+    from agent.context_meter import (
+        build_context_snapshot,
+        format_context_breakdown,
+        snapshot_to_dict,
+    )
+    from agent.store import ThreadStore
+
+    config = Config.resolve(cwd=cwd)
+    store = ThreadStore(config.cwd)
+    thread = None
+    if thread_id:
+        thread = store.load_thread(thread_id)
+        if thread is None:
+            typer.echo(f"Thread not found: {thread_id}", err=True)
+            raise typer.Exit(1)
+    else:
+        threads = store.list_threads()
+        if threads:
+            thread = store.load_thread(threads[0].id)
+
+    snap = build_context_snapshot(config, thread, ctx_settings=config.context)
+    if json_output:
+        stdout_console.print(json_mod.dumps(snapshot_to_dict(snap), indent=2))
+    else:
+        stdout_console.print(format_context_breakdown(snap))
 
 
 @app.command("version")

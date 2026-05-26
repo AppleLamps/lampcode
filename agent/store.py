@@ -149,6 +149,53 @@ class ThreadStore:
         thread.turns = [turns_by_id[tid] for tid in turn_order if tid in turns_by_id]
         return thread
 
+    def read_thread_meta(self, thread_id: str) -> Thread:
+        """Load thread header only (first meta record) — fast for pickers and startup."""
+        path = self.thread_path(thread_id)
+        if not path.exists():
+            raise FileNotFoundError(f"Thread not found: {thread_id}")
+        thread = self._read_thread_meta_from_path(path)
+        if thread is None:
+            raise ValueError(f"Corrupt thread file (missing meta): {thread_id}")
+        return thread
+
+    def _read_thread_meta_from_path(self, path: Path) -> Thread | None:
+        try:
+            with path.open("r", encoding="utf-8") as f:
+                first = f.readline().strip()
+            if not first:
+                return None
+            record = json.loads(first)
+            if record.get("record_type") != "meta":
+                return None
+            thread_data = record["thread"]
+            return Thread(
+                id=thread_data["id"],
+                cwd=thread_data["cwd"],
+                model=thread_data["model"],
+                repo_root=thread_data.get("repo_root"),
+                forked_from=thread_data.get("forked_from"),
+                title=thread_data.get("title"),
+                created_at=thread_data["created_at"],
+                updated_at=thread_data["updated_at"],
+                turns=[],
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+
+    def list_thread_meta(self) -> list[Thread]:
+        """List threads using only each file's meta line (no turn/item parse)."""
+        threads: list[Thread] = []
+        for path in sorted(
+            self.base_dir.glob("*.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        ):
+            thread = self._read_thread_meta_from_path(path)
+            if thread is not None:
+                threads.append(thread)
+        return threads
+
     def list_threads(self) -> list[Thread]:
         threads: list[Thread] = []
         for path in sorted(self.base_dir.glob("*.jsonl"), key=lambda p: p.stat().st_mtime, reverse=True):
@@ -210,7 +257,7 @@ class ThreadStore:
         target = str(Path(cwd).resolve())
         matches = [
             thread
-            for thread in self.list_threads()
+            for thread in self.list_thread_meta()
             if str(Path(thread.cwd).resolve()) == target
         ]
         if not matches:

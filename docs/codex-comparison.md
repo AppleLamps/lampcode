@@ -154,4 +154,4 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Budget caps / review CI | ✅ Phase 26 |
 | Turn stats + post-patch hook | ✅ Phase 26 |
 | Enterprise cloud | ❌ By design — see enterprise.md |
-| TUI transcript UX (diffs, streaming cells) | ⚠️ partial | Grok-style chrome + slash commands + context footer (v2.9.2); transcript pipeline gaps — [ui-plan.md](ui-plan.md) |
+| TUI transcript UX (diffs, streaming cells) | ✅ | Typed cells, incremental render, patch/exec blocks, working row, approval banner, Ctrl+T overlay — [ui-plan.md](ui-plan.md) |

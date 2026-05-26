@@ -451,7 +451,7 @@ class OpenRouterClient:
         elif status == 400 and "tool" in body.lower():
             hint = (
                 f" Tool calling may not be supported by model '{model_name}'."
-                " Try another model with --model, e.g. openrouter/owl-alpha."
+                " Try another model with --model, e.g. minimax/minimax-m2.7."
             )
         elif status == 400 and classify_http_status(status, body) == "context_length":
             hint = " Context length exceeded. Try compaction or a shorter thread."

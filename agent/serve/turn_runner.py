@@ -89,10 +89,14 @@ class TurnRunner:
                 events.append(event)
 
             base_emitter = EventEmitter(_collect)
+            cfg = Config.resolve()
             emitter = build_event_emitter(
                 _collect,
                 recording=True,
                 run_store=run_store or RunStore(),
+                action_log=cfg.action_log,
+                project_cwd=cfg.cwd,
+                model=cfg.model,
             )
 
             def _emit_approval(approval_id: str, tool_name: str, summary: str) -> None:

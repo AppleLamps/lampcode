@@ -11,7 +11,7 @@ class SandboxMode(str, Enum):
     @classmethod
     def from_str(cls, value: str | None) -> SandboxMode:
         if not value:
-            return cls.DANGER_FULL_ACCESS
+            return cls.WORKSPACE_WRITE
         normalized = value.strip().lower()
         for mode in cls:
             if mode.value == normalized:

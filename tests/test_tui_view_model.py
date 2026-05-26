@@ -1,7 +1,14 @@
 from pathlib import Path
 
 from agent.events import AgentEvent
-from agent.models import Thread, Turn, UserMessageItem
+from agent.models import (
+    CommandExecutionItem,
+    FileChangeItem,
+    Thread,
+    Turn,
+    UserMessageItem,
+)
+from agent.tui.cells.base import PatchCell, ToolExecCell, TurnSummaryCell, UserMessageCell
 from agent.tui.view_model import (
     apply_event_to_state,
     approval_key_to_response,
@@ -84,7 +91,7 @@ def test_apply_event_approval_pending() -> None:
     )
     state = apply_event_to_state(state, event)
     assert state.pending_approval_summary == "run_command: pytest"
-    assert state.transcript[-1].role == "approval"
+    assert state.transcript[-1].summary == "run_command: pytest"  # ApprovalCell
 
 
 def test_handle_approval_keys() -> None:
@@ -141,5 +148,43 @@ def test_thread_transcript_from_store() -> None:
     turn.items = [UserMessageItem(text="hello")]
     thread.turns.append(turn)
     lines = thread_transcript_from_store(thread)
-    assert lines[0].role == "user"
+    assert isinstance(lines[0], UserMessageCell)
     assert lines[0].text == "hello"
+
+
+def test_thread_transcript_file_change() -> None:
+    thread = Thread(id="t", cwd="/tmp", model="m")
+    turn = Turn()
+    turn.items = [
+        FileChangeItem(
+            path="foo.py",
+            change_type="update",
+            diff_snippet="+added",
+            status="completed",
+        )
+    ]
+    turn.status = "completed"
+    thread.turns.append(turn)
+    lines = thread_transcript_from_store(thread)
+    assert isinstance(lines[0], PatchCell)
+    assert lines[0].files[0].path == "foo.py"
+
+
+def test_thread_transcript_command_execution() -> None:
+    thread = Thread(id="t", cwd="/tmp", model="m")
+    turn = Turn()
+    turn.items = [
+        CommandExecutionItem(
+            command="pytest -q",
+            cwd="/tmp",
+            status="completed",
+            output="1 passed",
+            exit_code=0,
+        )
+    ]
+    turn.status = "completed"
+    thread.turns.append(turn)
+    lines = thread_transcript_from_store(thread)
+    assert isinstance(lines[0], ToolExecCell)
+    assert lines[0].args_brief == "pytest -q"
+    assert isinstance(lines[1], TurnSummaryCell)

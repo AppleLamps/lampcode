@@ -96,7 +96,14 @@ class ReplSession:
             return self._handle_command(stripped)
         thread = self._ensure_thread()
         cfg = self._resolve_config()
-        emitter = build_event_emitter(self.output.handle)
+        emitter = build_event_emitter(
+            self.output.handle,
+            recording=cfg.recording.enabled,
+            recording_keep=cfg.recording.keep_last_runs_per_thread,
+            action_log=cfg.action_log,
+            project_cwd=cfg.cwd,
+            model=cfg.model,
+        )
         resume_cp = None
         prompt = stripped
         if self._pending_resume_turn:

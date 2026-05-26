@@ -18,7 +18,7 @@ def test_cancel_token() -> None:
 def test_default_model(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("OPENROUTER_MODEL", raising=False)
     cfg = Config.resolve(cwd=tmp_path)
-    assert cfg.model == "openrouter/owl-alpha"
+    assert cfg.model == "minimax/minimax-m2.7"
 
 
 def test_config_precedence_cli_over_file(tmp_path: Path, monkeypatch) -> None:
@@ -56,5 +56,12 @@ def test_execution_backend_precedence(tmp_path: Path, monkeypatch) -> None:
 
 def test_file_config_defaults() -> None:
     cfg = FileConfig.load(Path("/nonexistent/config.toml"))
-    assert cfg.approval_mode == "interactive"
+    assert cfg.approval_mode is None
     assert cfg.max_tool_rounds == 25
+
+
+def test_config_default_approval_is_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENT_APPROVAL_MODE", raising=False)
+    cfg = Config.resolve(cwd=tmp_path)
+    assert cfg.approval_mode == "auto"
+    assert cfg.auto_approve

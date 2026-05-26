@@ -61,7 +61,14 @@ def build_event_emitter(
     recording: bool = False,
     recording_keep: int = 50,
     run_store: "RunStore | None" = None,
+    action_log: "ActionLogSettings | None" = None,
+    project_cwd: "Path | None" = None,
+    model: str | None = None,
 ) -> EventEmitter:
+    from pathlib import Path
+
+    from agent.settings import ActionLogSettings
+
     bus = EventBus(list(handlers))
     if recording:
         from agent.recording.store import RunStore
@@ -71,6 +78,17 @@ def build_event_emitter(
             keep_last_runs_per_thread=recording_keep,
         )
         bus.subscribe(recorder.handle)
+    log_cfg = action_log if action_log is not None else ActionLogSettings()
+    if log_cfg.enabled:
+        from agent.action_log import ActionLogHandler
+
+        bus.subscribe(
+            ActionLogHandler(
+                log_cfg,
+                project_cwd=Path(project_cwd) if project_cwd else None,
+                model=model,
+            ).handle
+        )
     return EventEmitter(bus.as_handler())
 
 
@@ -110,6 +128,16 @@ class EventEmitter:
     def turn_started(self, thread_id: str, turn_id: str) -> None:
         self.emit(AgentEvent("turn.started", thread_id=thread_id, turn_id=turn_id))
 
+    def user_message(self, thread_id: str, turn_id: str, text: str) -> None:
+        self.emit(
+            AgentEvent(
+                "user.message",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"text": text},
+            )
+        )
+
     def turn_completed(
         self,
         thread_id: str,
@@ -147,6 +175,16 @@ class EventEmitter:
             )
         )
 
+    def agent_reasoning(self, thread_id: str, turn_id: str, text: str) -> None:
+        self.emit(
+            AgentEvent(
+                "agent.reasoning",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={"text": text},
+            )
+        )
+
     def tool_pending(
         self, thread_id: str, turn_id: str, tool_name: str, arguments: dict[str, Any], *, source: str = "builtin"
     ) -> None:
@@ -167,10 +205,13 @@ class EventEmitter:
         summary: str,
         *,
         approval_id: str | None = None,
+        diff_preview: str | None = None,
     ) -> None:
         data: dict[str, Any] = {"tool_name": tool_name, "summary": summary}
         if approval_id:
             data["approval_id"] = approval_id
+        if diff_preview:
+            data["diff_preview"] = diff_preview
         self.emit(
             AgentEvent(
                 "approval.requested",
@@ -978,12 +1019,21 @@ class EventEmitter:
         source: str = "builtin",
         diff_preview: str | None = None,
         summary: str | None = None,
+        output: str | None = None,
+        exit_code: int | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         data: dict[str, Any] = {"tool_name": tool_name, "status": status, "source": source}
         if diff_preview:
             data["diff_preview"] = diff_preview
         if summary:
             data["summary"] = summary
+        if output:
+            data["output"] = output
+        if exit_code is not None:
+            data["exit_code"] = exit_code
+        if duration_ms is not None:
+            data["duration_ms"] = duration_ms
         self.emit(
             AgentEvent(
                 "tool.completed",

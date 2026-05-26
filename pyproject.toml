@@ -36,6 +36,9 @@ tui = [
 windows = [
     "pywinpty>=2.0.0",
 ]
+tokenizer = [
+    "tiktoken>=0.7.0",
+]
 
 [project.scripts]
 agent = "cli.main:main"

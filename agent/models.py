@@ -18,6 +18,7 @@ def new_id() -> str:
 class Usage(BaseModel):
     input_tokens: int | None = None
     output_tokens: int | None = None
+    context_tokens: int | None = None
     estimated_cost_usd: float | None = None
     model_used: str | None = None
     fallback_used: bool = False
@@ -53,6 +54,8 @@ class CommandExecutionItem(BaseModel):
         "pending", "approved", "denied", "running", "completed", "failed"
     ] = "pending"
     output: str | None = None
+    artifact_path: str | None = None
+    output_chars: int | None = None
     exit_code: int | None = None
     duration_ms: int | None = None
     tool_call_id: str | None = None
@@ -103,6 +106,8 @@ class McpToolCallItem(BaseModel):
     ] = "pending"
     output: str | None = None
     error: str | None = None
+    artifact_path: str | None = None
+    output_chars: int | None = None
     duration_ms: int | None = None
     tool_call_id: str | None = None
 
@@ -210,6 +215,8 @@ class Thread(BaseModel):
     repo_root: str | None = None
     forked_from: str | None = None
     title: str | None = None
+    last_context_tokens: int | None = None
+    last_context_model: str | None = None
     created_at: str = Field(default_factory=utc_now_iso)
     updated_at: str = Field(default_factory=utc_now_iso)
     turns: list[Turn] = Field(default_factory=list)

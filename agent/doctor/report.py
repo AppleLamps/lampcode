@@ -38,6 +38,18 @@ def build_doctor_report(config: Config | None = None) -> list[dict[str, str]]:
     checks.append(row("ripgrep", _found("rg"), _which("rg") or "not found"))
     checks.append(row("model", "ok", cfg.model))
 
+    sandbox = cfg.sandbox_mode.value
+    if sandbox == "danger-full-access":
+        checks.append(
+            row(
+                "sandbox",
+                "WARN",
+                f"{sandbox} — tools can modify files outside workspace; prefer workspace-write",
+            )
+        )
+    else:
+        checks.append(row("sandbox", "ok", sandbox))
+
     pty = pty_support_status()
     checks.append(
         row(

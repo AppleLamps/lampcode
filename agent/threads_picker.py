@@ -15,23 +15,32 @@ def list_threads_for_picker(
     cwd: Path,
     *,
     filter_cwd: bool = True,
+    meta_only: bool = False,
 ) -> list[Thread]:
-    threads = store.list_threads()
+    threads = store.list_thread_meta() if meta_only else store.list_threads()
     if filter_cwd:
         threads = filter_session_threads(threads, cwd)
     return threads
 
 
-def thread_picker_label(thread: Thread) -> str:
-    cost = thread_cost_summary(thread)
-    cost_part = (
-        f"${cost['estimated_cost_usd']:.4f}"
-        if cost.get("estimated_cost_usd")
-        else "—"
-    )
+def thread_picker_label(thread: Thread, *, include_cost: bool = True) -> str:
     title = thread.display_label()
     updated = thread.updated_at[:19] if thread.updated_at else "—"
+    if include_cost and thread.turns:
+        cost = thread_cost_summary(thread)
+        cost_part = (
+            f"${cost['estimated_cost_usd']:.4f}"
+            if cost.get("estimated_cost_usd")
+            else "—"
+        )
+    else:
+        cost_part = "—"
     return f"{title} | {thread.model} | {updated} | {cost_part}"
+
+
+def thread_picker_label_summary(thread: Thread) -> str:
+    """Fast label for meta-only threads (no cost — turns not loaded)."""
+    return thread_picker_label(thread, include_cost=False)
 
 
 def pick_thread(
@@ -88,6 +97,21 @@ def pick_thread_or_last(
         headless=headless,
         auto_approve=auto_approve,
     )
+
+
+def thread_resume_preview(thread: Thread, *, max_len: int = 120) -> str:
+    """One-line preview for TUI resume picker."""
+    if thread.turns:
+        for turn in reversed(thread.turns):
+            for item in reversed(turn.items):
+                if item.type == "userMessage":
+                    text = " ".join(item.text.split())
+                    if len(text) > max_len:
+                        return text[: max_len - 1] + "…"
+                    return text or "(empty message)"
+    title = thread.title or thread.display_label()
+    updated = thread.updated_at[:19] if thread.updated_at else "—"
+    return f"{title} · {thread.model} · updated {updated}"
 
 
 def format_thread_picker_table(threads: list[Thread]) -> list[dict[str, Any]]:
