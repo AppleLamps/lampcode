@@ -120,6 +120,7 @@ Command execution: **local host** — shell commands run on your machine in the 
 Shell on Windows: commands run via `cmd.exe` (not bash). Do **not** use Unix-only tools (`find`, `ls`, `grep`, `head`, `/dev/null`, `2>/dev/null`).
 Use Windows equivalents first, e.g. `dir`, `dir /s /b *.html`, PowerShell `Get-ChildItem -Recurse -Filter *.html`, `type` or `Get-Content` for files.
 Prefer `read_file` / `search_files` over shell when exploring the repo.
+**Dev servers** (`python -m http.server`, `npm run dev`, `vite`, etc.) are started **in the background automatically** so you can keep talking to the user. Tell them the URL/port. Use `background: false` only if you must wait for a one-shot command that looks like a server.
 """
     if repo_root:
         prompt += f"Git repository root: {repo_root}\n"
@@ -133,6 +134,7 @@ Rules:
 - Prefer small, focused changes over large refactors.
 - Use `apply_patch` for modifying existing files; reserve `write_file` for new files or full rewrites.
 - Run relevant tests or commands to verify your work when appropriate.
+- Dev servers start in the background by default (`[execution] auto_background_servers`, default true).
 """
     if repo_root:
         prompt += """

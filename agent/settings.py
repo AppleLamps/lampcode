@@ -343,6 +343,7 @@ class ExecutionSettings:
     memory_limit: str = "1g"
     cpu_limit: str = "1.0"
     command_timeout_sec: int = 120
+    auto_background_servers: bool = True
     auto_pull: bool = False
     docker: DockerExecutionSettings = field(default_factory=DockerExecutionSettings)
     ssh: SshExecutionSettings = field(default_factory=SshExecutionSettings)
@@ -904,6 +905,7 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
         memory_limit=str(exe.get("memory_limit", "1g")),
         cpu_limit=str(exe.get("cpu_limit", "1.0")),
         command_timeout_sec=int(exe.get("command_timeout_sec", 120)),
+        auto_background_servers=bool(exe.get("auto_background_servers", True)),
         auto_pull=bool(exe.get("auto_pull", False)),
         docker=DockerExecutionSettings(
             binary=str(docker_raw.get("binary", "docker")),

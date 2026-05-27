@@ -60,6 +60,15 @@ class _DeleteOp:
     path: str
 
 
+def _marker_line_index(lines: list[str], marker: str) -> int | None:
+    """Find a line whose stripped form equals or starts with `marker`."""
+    for i, ln in enumerate(lines):
+        stripped = ln.strip()
+        if stripped == marker or stripped.startswith(f"{marker} "):
+            return i
+    return None
+
+
 def parse_patch(patch_text: str) -> list[_UpdateOp | _AddOp | _DeleteOp]:
     text = patch_text.strip()
     if "*** Begin Patch" not in text:
@@ -68,8 +77,14 @@ def parse_patch(patch_text: str) -> list[_UpdateOp | _AddOp | _DeleteOp]:
         raise ValueError("Patch must end with '*** End Patch'")
 
     lines = text.splitlines()
-    start = next(i for i, ln in enumerate(lines) if ln.strip() == "*** Begin Patch")
-    end = next(i for i, ln in enumerate(lines) if ln.strip() == "*** End Patch")
+    start = _marker_line_index(lines, "*** Begin Patch")
+    end = _marker_line_index(lines, "*** End Patch")
+    if start is None:
+        raise ValueError("Patch must start with '*** Begin Patch'")
+    if end is None:
+        raise ValueError("Patch must end with '*** End Patch'")
+    if end <= start:
+        raise ValueError("Patch must end with '*** End Patch' after begin marker")
     body = lines[start + 1 : end]
 
     operations: list[_UpdateOp | _AddOp | _DeleteOp] = []
@@ -382,11 +397,33 @@ def preview_patch(
     return previews, None
 
 
+def _patch_brief_fallback(patch_text: str) -> str | None:
+    """Best-effort label when structured parse fails (e.g. unified diff under Begin Patch)."""
+    for ln in patch_text.splitlines():
+        stripped = ln.strip()
+        if stripped.startswith("*** Begin Patch"):
+            rest = stripped.removeprefix("*** Begin Patch").strip()
+            if rest:
+                return f"apply_patch: {rest}"
+        if stripped.startswith("+++ "):
+            path = stripped[4:].strip()
+            if path.startswith("b/"):
+                path = path[2:]
+            elif path.startswith("a/"):
+                path = path[2:]
+            if path:
+                return f"apply_patch: {path}"
+    return None
+
+
 def format_patch_brief(patch_text: str, *, max_files: int = 3) -> str:
     """One-line summary for tool pending / approval prompts."""
-    previews, err = preview_patch(patch_text)
+    try:
+        previews, err = preview_patch(patch_text)
+    except Exception as exc:
+        return _patch_brief_fallback(patch_text) or f"apply_patch: invalid ({str(exc)[:60]})"
     if err:
-        return f"apply_patch: invalid ({err[:60]})"
+        return _patch_brief_fallback(patch_text) or f"apply_patch: invalid ({err[:60]})"
     if not previews:
         return "apply_patch: (empty)"
     parts: list[str] = []

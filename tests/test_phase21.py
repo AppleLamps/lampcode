@@ -76,6 +76,22 @@ def test_format_patch_brief_lists_files() -> None:
     assert "apply_patch:" in brief
 
 
+def test_format_patch_brief_begin_patch_with_path_suffix() -> None:
+    """Models sometimes put the path on the Begin Patch line (unified diff body)."""
+    patch = """*** Begin Patch src/styles/base.css
+--- a/src/styles/base.css
++++ b/src/styles/base.css
+@@ -1,1 +1,1 @@
+-old
++new
+*** End Patch
+"""
+    brief = format_patch_brief(patch)
+    assert brief.startswith("apply_patch:")
+    assert "base.css" in brief
+    assert "StopIteration" not in brief
+
+
 def test_format_patch_preview_block_multiline() -> None:
     block = format_patch_preview_block(UPDATE_PATCH)
     assert "Patch preview" in block

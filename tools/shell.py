@@ -25,10 +25,34 @@ def run_command(
     stdin: str | None = None,
     new_session: bool = False,
     yield_ms: int | None = None,
+    background: bool | None = None,
 ) -> tuple[str, int, int, dict | None]:
     """Run a shell command via execution backend. Returns (output, exit_code, duration_ms, meta)."""
     if config is None:
         raise ValueError("config is required for run_command")
+
+    from agent.execution.background import resolve_background, start_background_command
+
+    use_background = resolve_background(
+        cmd,
+        background,
+        auto_background_servers=config.execution.auto_background_servers,
+    )
+    if use_background:
+        if config.execution.backend != "local":
+            return (
+                "background execution is only supported for local execution backend.",
+                -1,
+                0,
+                {"background": True},
+            )
+        output, exit_code, duration_ms, meta = start_background_command(
+            cwd, cmd, workdir=workdir
+        )
+        meta["backend"] = "local"
+        if background is None:
+            meta["background_auto"] = True
+        return output, exit_code, duration_ms, meta
 
     if (
         config.shell.enabled

@@ -159,6 +159,11 @@ def dispatch_tool(
             stdin=arguments.get("stdin"),
             new_session=bool(arguments.get("new_session")),
             yield_ms=arguments.get("yield_ms"),
+            background=(
+                None
+                if arguments.get("background") is None
+                else bool(arguments.get("background"))
+            ),
         )
         item.output = output
         item.exit_code = exit_code
@@ -297,6 +302,13 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                         "yield_ms": {
                             "type": "integer",
                             "description": "Max wait time (ms) before returning partial persistent-shell output.",
+                        },
+                        "background": {
+                            "type": "boolean",
+                            "description": (
+                                "Force detached start (true) or foreground wait (false). "
+                                "Omit to auto-detect dev servers (http.server, npm run dev, vite, …)."
+                            ),
                         },
                     },
                     "required": ["cmd"],

@@ -15,8 +15,10 @@ The TUI uses a Textual app with a flat `RichLog` transcript, not Codex's typed `
 
 | Component | Path | Role today |
 |-----------|------|------------|
-| Main app | `agent/tui/app.py` | Textual layout, event loop, `_render_transcript()` |
-| View model | `agent/tui/view_model.py` | `AgentEvent` → `TranscriptLine` mapping |
+| Main app | `agent/tui/app.py` | Textual layout, worker thread, `post_message` event drain |
+| Event bridge | `agent/tui/messages.py` | `AgentEventMessage` — non-blocking worker → UI delivery |
+| Transcript | `agent/tui/transcript_controller.py`, `transcript_pane.py` | Per-cell Static widgets, live assistant stream |
+| View model | `agent/tui/view_model.py` | `AgentEvent` → typed transcript cells |
 | Theme | `agent/tui/theme.py` | Grok-style dark CSS |
 | Slash commands | `agent/tui/slash_commands.py` | `/model`, `/plan`, `/compact`, etc. |
 | Context footer | `agent/tui/context_usage.py` | `Context N% left · M% used` |
@@ -26,19 +28,22 @@ The TUI uses a Textual app with a flat `RichLog` transcript, not Codex's typed `
 
 | Moment | agent-cli TUI today |
 |--------|---------------------|
-| **User sends message** | Appends `TranscriptLine(role="user")`; full `_render_transcript()` clears and redraws the entire log |
-| **Agent responds** | `agent.delta` events append to `assistant_buffer`; on turn complete, buffer becomes assistant line. Streaming shows raw text — no markdown or syntax |
-| **Tools start** | `tool.pending` → dim italic line like `▸ apply_patch: …` |
-| **Tools finish** | **`tool.completed` not handled in TUI** (CLI stderr does show diff preview) |
+| **User sends message** | `UserMessageCell`; incremental transcript sync |
+| **Agent responds** | `agent.delta` → live Rich `Markdown` stream; finalized to `AssistantMessageCell` at tool boundaries / turn end |
+| **Tools start** | `tool.pending` → `ToolExecCell` / `PatchCell` (running) |
+| **Tools finish** | `tool.completed` updates cell status, output, patch diff preview |
 | **Approvals** | Yellow `⚠ summary [y/n/a/A]` in transcript; user types in same input box |
 | **Reload from store** | `thread_transcript_from_store()` includes user/agent messages and `commandExecution` / `collabWorker` / `workspaceSync` — **not** `fileChange`, `planProposal`, `mcpToolCall`, etc. |
 
 ### What already works (recent polish)
 
 - Grok-style centered home screen (no sidebar clutter)
-- Footer context % (Codex-like)
+- Footer context % (Codex-like hybrid bar; see [context.md](context.md))
 - Slash commands in input (`/model`, `/plan`, `/compact`, `/cost`, `/help`, etc.)
 - Session resume picker filtered to real threads (`filter_session_threads`)
+- Non-blocking event queue (`post_message`, not `call_from_thread` per event) — avoids worker/UI deadlock during heavy transcript renders
+- Turn worker watchdog clears zombie “Working…” if the worker exits unexpectedly
+- Human-readable [action-log.md](action-log.md) with `tool executing` between pending and done
 
 ---
 

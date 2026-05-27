@@ -32,6 +32,8 @@ pip install agent-cli[tokenizer]
 - TUI: `/context` or `/context --json`
 - CLI: `agent context [--thread ID] [--json]`
 
+For a plain-text trace of each turn (tools, compaction, errors), see [action-log.md](action-log.md).
+
 ## Artifacts
 
 Large tool outputs spill to `.agent-cli/artifacts/<thread_id>/<item_id>.txt`. Thread items keep a short inline summary plus the artifact path.

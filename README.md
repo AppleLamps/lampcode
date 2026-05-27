@@ -244,6 +244,8 @@ agent repl --cwd examples/demo-project
 
 Footer shows model, plan mode, and context usage (`Context N% left · M% used`). Transcript UX roadmap: [docs/ui-plan.md](docs/ui-plan.md).
 
+**Debugging:** every turn writes a plain-text trace to `.agent-cli/action.log` (project) and `~/.agent-cli/logs/<thread_id>.log`. Look for `tool pending` → `tool executing` → `tool done` per tool. See [docs/action-log.md](docs/action-log.md).
+
 ## Models & routing
 
 ```powershell
@@ -292,6 +294,7 @@ See [CHANGELOG.md](CHANGELOG.md) for v2.9.2 (TUI launch + polish), v2.9.1 (OpenR
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
 - [TUI UX plan](docs/ui-plan.md) — Codex-style transcript roadmap
+- [Action log](docs/action-log.md) — human-readable turn trace and stuck-turn diagnosis
 - [OpenRouter integration](docs/openrouter.md) — fallbacks, reasoning, structured output, cost
 - [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)
 - [Roadmap (Phases 24–28)](docs/roadmap/README.md) — step-by-step harness plans

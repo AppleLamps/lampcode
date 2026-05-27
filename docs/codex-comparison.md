@@ -54,6 +54,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **Exec policy (Starlark rules)** | ⚠️ partial | TOML glob allow/deny + modes (`prompt` / `untrusted` / `never`); `agent exec-policy test` |
 | **OS-native sandbox** | ⚠️ partial | Heuristic sandbox default; opt-in kernel (bubblewrap/seatbelt/AppContainer) — not Codex-lightweight-by-default |
 | **Unified exec (PTY + stdin)** | ✅ | Opt-in `[shell] enabled`; stdin + output caps + yield_ms (Phase 24); pipe-persistent Windows + Unix |
+| **Background / dev servers** | ⚠️ partial | `run_command` + `background: true` detaches locally; Codex also yields from PTY without a separate flag |
 | **Orchestration (approval cache + sandbox retry)** | ✅ | Session approval cache; one sandbox escalation retry after approved denial (Phase 24) |
 | **Parallel read-only tools** | ✅ | `read_file` / `search_repo` / `web_search` batched per round (Phase 24) |
 | **`request_user_input` tool** | ✅ | Structured mid-turn questions; REPL/TTY + `AGENT_INPUT_ANSWERS` (Phase 22) |
