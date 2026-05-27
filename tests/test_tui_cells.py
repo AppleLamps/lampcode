@@ -25,6 +25,19 @@ from agent.tui.diff_render import strip_rich_markup
 _GOLDEN_DIR = Path(__file__).parent / "golden" / "tui"
 
 
+def _plain_at_width(cell, width: int = 200) -> str:
+    rendered = render_cell(cell)
+    if isinstance(rendered, str):
+        return strip_rich_markup(rendered)
+    from io import StringIO
+
+    from rich.console import Console
+
+    buf = StringIO()
+    Console(file=buf, width=width, force_terminal=True).print(rendered)
+    return buf.getvalue()
+
+
 def _plain(cell) -> str:
     rendered = render_cell(cell)
     if isinstance(rendered, str):
@@ -192,6 +205,31 @@ def test_golden_approval_banner() -> None:
     )
 
 
+def test_golden_approval_banner_patch_without_diff() -> None:
+    text = strip_rich_markup(
+        render_approval_banner_text(
+            "apply_patch: auth.py",
+            tool_name="apply_patch",
+        )
+    )
+    assert "No diff preview" in text
+
+
+def test_exec_cell_long_output_header() -> None:
+    long_out = "\n".join(f"line {i}" for i in range(220))
+    text = _plain(
+        ToolExecCell(
+            tool_name="run_command",
+            args_brief="pytest -q",
+            status="completed",
+            output=long_out,
+            exit_code=0,
+            expanded=True,
+        )
+    )
+    assert "Total output lines: 220" in text
+
+
 def test_golden_error_cell() -> None:
     _assert_golden(
         "error_cell.txt",
@@ -220,6 +258,46 @@ def test_golden_turn_summary() -> None:
                     commands_run=1,
                 )
             )
+        ),
+    )
+
+
+def test_golden_compaction_cell() -> None:
+    _assert_golden(
+        "compaction_cell.txt",
+        _plain(
+            CompactionCell(
+                kind="completed",
+                removed_items=12,
+                tokens_before=90000,
+                tokens_after=12000,
+            )
+        ),
+    )
+
+
+def test_golden_plan_cell() -> None:
+    _assert_golden(
+        "plan_cell.txt",
+        _plain(
+            PlanCell(
+                summary="Refactor auth module",
+                body="1. Extract session store\n2. Add tests",
+            )
+        ),
+    )
+
+
+def test_golden_patch_cell_narrow() -> None:
+    _assert_golden(
+        "patch_cell_narrow.txt",
+        _plain_at_width(
+            PatchCell(
+                files=[FileChange(path="auth.py", change_type="update")],
+                diff_text="+def login(): pass\n-return None",
+                status="completed",
+            ),
+            width=52,
         ),
     )
 

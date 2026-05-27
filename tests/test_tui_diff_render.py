@@ -18,7 +18,8 @@ def test_format_file_summary() -> None:
 def test_format_diff_line_addition() -> None:
     line = format_diff_line("+added line")
     assert "green" in line
-    assert "+added line" in line
+    assert "+" in line
+    assert "added line" in line
 
 
 def test_format_diff_line_deletion() -> None:

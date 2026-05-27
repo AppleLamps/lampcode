@@ -5,26 +5,13 @@ from __future__ import annotations
 from agent.tui.cells.base import ToolExecCell, ToolGroupCell
 from agent.tui.cells.panel import expand_affordance, panel_bottom_border, panel_top_border
 from agent.tui.cells.tool import tool_header
-
-_DEFAULT_OUTPUT_LINES = 8
-_EXPANDED_OUTPUT_LINES = 200
+from agent.tui.output_truncation import format_tool_output_lines
 
 
 def _output_line_count(text: str | None) -> int:
     if not text:
         return 0
     return len(text.splitlines())
-
-
-def _truncate_output(text: str | None, *, expanded: bool) -> list[str]:
-    if not text:
-        return []
-    lines = text.splitlines()
-    limit = _EXPANDED_OUTPUT_LINES if expanded else _DEFAULT_OUTPUT_LINES
-    if len(lines) > limit:
-        remaining = len(lines) - limit
-        lines = lines[:limit] + [f"... ({remaining} more lines — press e to expand)"]
-    return lines
 
 
 def _collapsible_tool(cell: ToolExecCell) -> bool:
@@ -49,8 +36,12 @@ def render_tool_exec(cell: ToolExecCell) -> str:
         lines.append(f"  [dim]args[/dim]  {cell.args_brief}")
 
     if show_body and cell.output:
-        for ol in _truncate_output(cell.output, expanded=cell.expanded):
-            lines.append(f"  [dim]{ol}[/dim]")
+        display = format_tool_output_lines(cell.output, expanded=cell.expanded)
+        for idx, ol in enumerate(display):
+            if idx == 0 and ol.startswith("Total output lines:"):
+                lines.append(f"  [dim]{ol}[/dim]")
+            else:
+                lines.append(f"  [dim]{ol}[/dim]")
     elif collapsible and out_lines:
         lines.append(f"  [dim]({out_lines} lines hidden)[/dim]")
 

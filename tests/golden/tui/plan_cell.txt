@@ -1,0 +1,5 @@
+┌─
+📋 Plan Refactor auth module
+  1. Extract session store
+  2. Add tests
+└─

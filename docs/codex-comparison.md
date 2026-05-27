@@ -2,8 +2,13 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.9.2 (TUI launch + polish).  
+**Current release:** v2.9.4 (TUI diff palette + composer drafts).  
 **Daily loop:** `agent` → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later
+
+**Read this doc in two layers:**
+
+1. **Harness (Tiers 1–3, OpenRouter)** — agent loop, tools, sandbox, CI, review. Strong parity here does **not** mean the interactive transcript matches Codex pixel-for-pixel.
+2. **TUI (below)** — what you see in `agent` / `agent tui`. Detail and backlog: [ui-plan.md](ui-plan.md).
 
 ---
 
@@ -133,6 +138,68 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 
 ---
 
+## TUI — Interactive transcript (separate from harness)
+
+Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-only). Implementation backlog: [ui-plan.md](ui-plan.md).
+
+### TUI Tier A — Structure and daily turn (shipped)
+
+| Capability | Status | agent-cli |
+|------------|--------|-----------|
+| Typed transcript (not flat log) | ✅ | `TranscriptCell` + `agent/tui/cells/*` |
+| Incremental render (per-cell widgets) | ✅ | `TranscriptController` + `TranscriptPane` |
+| Live assistant streaming + holdback | ✅ | `streaming_controller.py`, `table_holdback.py` |
+| Tool / patch / exec cells | ✅ | `ToolExecCell`, `PatchCell`, colored diff + file summary |
+| Parallel read grouping | ✅ | `ToolGroupCell` |
+| Working / busy indicator | ✅ | `status_row.py`, `WorkingCell` |
+| Plan + compaction cells | ✅ | `PlanCell`, `CompactionCell`; live events + store reload |
+| Turn summary (model, cost, stats) | ✅ | `TurnSummaryCell` |
+| Approvals in session | ✅ | `ApprovalCell` + composer banner; `y` / `n` / `a` / `A` |
+| Context % in footer | ✅ | `context_usage.py` |
+| Transcript overlay | ✅ | `Ctrl+T` → `overlay.py` |
+| Resume transcript from thread store | ✅ | `thread_transcript_from_store()` — messages, exec, patches, plan, MCP, web search, workers |
+| Non-blocking UI events | ✅ | `AgentEventMessage` / `post_message` (see [action-log.md](action-log.md)) |
+| Expand long output / diffs | ✅ | `e` key, click expandable cells |
+| Basic visual regression | ✅ | `tests/golden/tui/*.txt` (8 fixtures) |
+
+### TUI Tier B — Polish gaps (worth chasing)
+
+| Capability | Status | Gap vs Codex |
+|------------|--------|----------------|
+| Patch diff v2 (syntax + theme backgrounds) | ✅ palette; ⚠️ syntax | `diff_palette.py` Codex truecolor/256/16 + hunk Rich Syntax; not full syntect tables |
+| Exec output truncation policy | ✅ | `output_truncation.py` — byte middle-trunc + `Total output lines: N` |
+| Approval UX (dedicated overlay / locked composer) | ✅ | `ApprovalOverlayScreen` + composer blocked while modals open; inline y/n/a/A when banner only |
+| Resize reflow | ⚠️ partial | Debounced `rebuild_all` on width change; Codex also repairs terminal scrollback |
+| Composer `@file` / `@skill` popups | ✅ | Mention popup + Tab/↑/↓; draft bindings in `.agent-cli/composer-drafts/` |
+| `request_user_input` TUI overlay | ✅ | Modal overlay + `questions[]` batch wizard `(n/N)` |
+| Markdown depth | ⚠️ partial | `markdown_render.py`; not full Codex markdown pipeline |
+| Snapshot / regression breadth | ⚠️ partial | 8 golden strings; Codex has hundreds of insta buffer snapshots |
+| Frame budget / reduced motion | ❌ | Codex `FrameRateLimiter`, motion modes |
+| Rate-limit / account status strip | ❌ | Codex status card (ChatGPT quotas); we show OpenRouter cost/model in footer instead |
+
+### TUI Tier C — Skip unless product pivots
+
+| Codex TUI feature | Why skip |
+|-------------------|----------|
+| Voice input/output | Experimental; OpenRouter harness |
+| Multi-agent / swarms UI | [enterprise.md](enterprise.md) |
+| Theme picker / pets / onboarding NUX | Product chrome; Grok theme is intentional |
+| Image attachments in user cells | Not required for solo coding loop |
+| ChatGPT OAuth / Plus rate limits in footer | OpenRouter API key model |
+
+### TUI summary
+
+| Area | Match level |
+|------|-------------|
+| Transcript architecture | ✅ Strong (cells + incremental sync) |
+| Daily turn readability | ✅ Good (patch/exec/plan/working) |
+| Diff / exec visual fidelity | ⚠️ Behind Codex |
+| Composer / mid-turn structured UI | ⚠️ Behind Codex |
+| Terminal engineering (reflow, snapshots) | ⚠️ Behind Codex |
+| OpenRouter footer (model, cost, routing) | ✅ Differentiator vs Codex |
+
+---
+
 ## What we match (summary table)
 
 | Area | Match level |
@@ -155,4 +222,5 @@ Codex on OpenAI infra gets these natively; the harness must replicate them.
 | Budget caps / review CI | ✅ Phase 26 |
 | Turn stats + post-patch hook | ✅ Phase 26 |
 | Enterprise cloud | ❌ By design — see enterprise.md |
-| TUI transcript UX (diffs, streaming cells) | ✅ | Typed cells, incremental render, patch/exec blocks, working row, approval banner, Ctrl+T overlay — [ui-plan.md](ui-plan.md) |
+| **TUI transcript (structure)** | ✅ Strong | See [TUI Tier A](#tui-tier-a--structure-and-daily-turn-shipped) |
+| **TUI transcript (polish)** | ⚠️ Partial | Syntect-level diff syntax, scrollback repair, golden breadth — [TUI Tier B](#tui-tier-b--polish-gaps-worth-chasing), [ui-plan.md](ui-plan.md) |

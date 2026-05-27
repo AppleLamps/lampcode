@@ -28,6 +28,18 @@ class ComposerTextArea(TextArea):
             return
 
         app = self._app_composer()
+        if app is not None and getattr(app, "_composer_blocked", lambda: False)():
+            event.stop()
+            event.prevent_default()
+            return
+
+        if app is not None and getattr(app, "_approval_pending", lambda: False)():
+            if await self._handle_approval_key(event):
+                return
+            if event.character or event.key not in ("escape",):
+                event.stop()
+                event.prevent_default()
+            return
 
         if app is not None and getattr(app, "_reverse_search_active", False):
             await self._handle_reverse_search_key(event)
@@ -70,6 +82,25 @@ class ComposerTextArea(TextArea):
                 event.stop()
                 event.prevent_default()
                 self.text = expanded
+                if hasattr(self.app, "_sync_mention_popup"):
+                    self.app._sync_mention_popup()  # type: ignore[attr-defined]
+                return
+
+        if app is not None and getattr(app, "_mention_candidates", None):
+            if event.key == "down":
+                app._mention_highlight = min(  # type: ignore[attr-defined]
+                    len(app._mention_candidates) - 1,
+                    app._mention_highlight + 1,  # type: ignore[attr-defined]
+                )
+                app._refresh_mention_highlight()  # type: ignore[attr-defined]
+                event.stop()
+                event.prevent_default()
+                return
+            if event.key == "up":
+                app._mention_highlight = max(0, app._mention_highlight - 1)  # type: ignore[attr-defined]
+                app._refresh_mention_highlight()  # type: ignore[attr-defined]
+                event.stop()
+                event.prevent_default()
                 return
 
         if event.character and len(event.character) == 1:
@@ -81,6 +112,39 @@ class ComposerTextArea(TextArea):
                 return
 
         await super()._on_key(event)
+
+    async def _handle_approval_key(self, event: events.Key) -> bool:
+        """Single-key approval (y/n/a/A) without Enter; Enter still accepted."""
+        app = self._app_composer()
+        if app is None:
+            return False
+
+        key = event.character or ""
+        if event.key == "enter":
+            text = self.text.strip()
+            if text:
+                app._submit_input(text)  # type: ignore[attr-defined]
+                event.stop()
+                event.prevent_default()
+                return True
+            return False
+
+        if key in ("y", "Y", "n", "N"):
+            app._submit_input(key.lower())  # type: ignore[attr-defined]
+            event.stop()
+            event.prevent_default()
+            return True
+        if key == "a":
+            app._submit_input("a")  # type: ignore[attr-defined]
+            event.stop()
+            event.prevent_default()
+            return True
+        if key == "A":
+            app._submit_input("A")  # type: ignore[attr-defined]
+            event.stop()
+            event.prevent_default()
+            return True
+        return False
 
     def _history_navigate(self, app, *, delta: int) -> bool:
         entries = app._input_history.all_entries()  # type: ignore[attr-defined]
@@ -97,6 +161,8 @@ class ComposerTextArea(TextArea):
             self._history_index = None
             return True
         self.text = self._history_browse[self._history_index]
+        if hasattr(app, "_restore_bindings_for_text"):
+            app._restore_bindings_for_text(self.text)  # type: ignore[attr-defined]
         return True
 
     def reset_history_navigation(self) -> None:

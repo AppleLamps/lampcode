@@ -3,7 +3,59 @@ from __future__ import annotations
 import json
 import os
 import sys
-from typing import Any
+from typing import Any, Callable
+
+# TUI / harness hook: (question, options, allow_free_text, index, total) -> (answer, selected, error)
+UserInputHandler = Callable[
+    [str, list[str] | None, bool, int, int],
+    tuple[str | None, str | None, str | None],
+]
+
+_user_input_handler: UserInputHandler | None = None
+
+
+def set_user_input_handler(fn: UserInputHandler | None) -> None:
+    global _user_input_handler
+    _user_input_handler = fn
+
+
+def normalize_user_input_questions(arguments: dict) -> list[dict[str, Any]]:
+    """Expand tool args into a list of question specs (single or batch)."""
+    raw = arguments.get("questions")
+    if isinstance(raw, list) and raw:
+        specs: list[dict[str, Any]] = []
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            question = str(item.get("question", "")).strip()
+            if not question:
+                continue
+            opts = item.get("options")
+            if opts is not None and not isinstance(opts, list):
+                opts = None
+            specs.append(
+                {
+                    "question": question,
+                    "options": [str(o) for o in opts] if opts else None,
+                    "allow_free_text": bool(item.get("allow_free_text", True)),
+                }
+            )
+        if specs:
+            return specs
+
+    question = str(arguments.get("question", "")).strip()
+    if not question:
+        return []
+    opts = arguments.get("options")
+    if opts is not None and not isinstance(opts, list):
+        opts = None
+    return [
+        {
+            "question": question,
+            "options": [str(o) for o in opts] if opts else None,
+            "allow_free_text": bool(arguments.get("allow_free_text", True)),
+        }
+    ]
 
 
 def load_ci_answers() -> dict[str, str]:
@@ -28,6 +80,8 @@ def resolve_user_input(
     headless_json: bool = False,
     input_fn: Any = None,
     question_key: str | None = None,
+    question_index: int = 1,
+    question_total: int = 1,
 ) -> tuple[str | None, str | None, str | None]:
     """
     Returns (answer, selected_option, error).
@@ -45,8 +99,16 @@ def resolve_user_input(
             return options[0], options[0], None
         return "(auto-approved)", None, None
 
+    if _user_input_handler is not None:
+        return _user_input_handler(
+            question, options, allow_free_text, question_index, question_total
+        )
+
     if input_fn:
-        prompt_lines = [question]
+        header = ""
+        if question_total > 1:
+            header = f"[{question_index}/{question_total}]\n"
+        prompt_lines = [header + question]
         if options:
             for i, opt in enumerate(options, 1):
                 prompt_lines.append(f"  {i}. {opt}")
@@ -71,7 +133,10 @@ def resolve_user_input(
             "request_user_input requires TTY, --auto-approve, or AGENT_INPUT_ANSWERS JSON",
         )
 
-    prompt_lines = [question]
+    prompt_lines = []
+    if question_total > 1:
+        prompt_lines.append(f"[{question_index}/{question_total}]")
+    prompt_lines.append(question)
     if options:
         for i, opt in enumerate(options, 1):
             prompt_lines.append(f"  {i}. {opt}")

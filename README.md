@@ -237,12 +237,19 @@ agent repl --cwd examples/demo-project
 | Key / input | Action |
 |-------------|--------|
 | Enter | Submit turn |
+| Shift+Enter | New line in composer |
+| `@file` / `@skill` | Mention popup (Tab or ↑/↓ to pick); draft restored on resume |
+| Ctrl+R | Reverse-search composer history |
+| Ctrl+T | Full transcript overlay (composer locked while open) |
+| `e` | Expand/collapse long tool output or diffs |
 | `/help` | Slash commands (`/model`, `/plan`, `/compact`, `/cost`, `/quit`, …) |
-| `y`/`n`/`a`/`A` | Approvals |
+| `y`/`n`/`a`/`A` | Approvals (modal overlay or inline banner; composer locked in modal) |
 | Ctrl+C | Cancel turn |
 | `q` | Quit (home screen) |
 
-Footer shows model, plan mode, and context usage (`Context N% left · M% used`). Transcript UX roadmap: [docs/ui-plan.md](docs/ui-plan.md).
+**Transcript:** typed cells (tools, patches, plan, compaction, MCP, web search) with Codex-style patch diffs — truecolor/256/16 add-delete backgrounds via `diff_palette.py`, hunk syntax highlight, truncation headers on large exec output. **Composer draft** (text + `@` bindings) persists per thread under `.agent-cli/composer-drafts/`.
+
+Footer shows model, plan mode, and context usage (`Context N% left · M% used`). Details: [docs/ui-plan.md](docs/ui-plan.md), colors: [docs/tui-styles.md](docs/tui-styles.md).
 
 **Debugging:** every turn writes a plain-text trace to `.agent-cli/action.log` (project) and `~/.agent-cli/logs/<thread_id>.log`. Look for `tool pending` → `tool executing` → `tool done` per tool. See [docs/action-log.md](docs/action-log.md).
 
@@ -288,12 +295,13 @@ pytest   # 1000+ tests
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.9.2 (TUI launch + polish), v2.9.1 (OpenRouter API parity), and v2.9.0 (Phase 28).
+See [CHANGELOG.md](CHANGELOG.md) for v2.9.4 (TUI diff palette + composer drafts), v2.9.2 (TUI launch + polish), and v2.9.1 (OpenRouter API parity).
 
 ## Further reading
 
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
 - [TUI UX plan](docs/ui-plan.md) — Codex-style transcript roadmap
+- [TUI style guide](docs/tui-styles.md) — diff colors, approval chrome, composer behavior
 - [Action log](docs/action-log.md) — human-readable turn trace and stuck-turn diagnosis
 - [OpenRouter integration](docs/openrouter.md) — fallbacks, reasoning, structured output, cost
 - [Session context](docs/session-context.md) — Cursor/agent briefing (phase, rules, next work)

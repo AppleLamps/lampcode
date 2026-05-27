@@ -1,5 +1,24 @@
 # Changelog
 
+## [2.9.4] — 2026-05-26
+
+TUI polish: Codex-level diff colors, composer drafts, modal input lock.
+
+### Added
+
+- **Diff palette (`diff_palette.py`):** Codex `diff_render.rs` truecolor add/delete backgrounds (`#213A2B` / `#4A221D`), light-theme pastels, 256-color indices, 16-color foreground fallback; `COLORFGBG` / `COLORTERM` detection.
+- **Composer mention drafts:** `MentionBinding` + per-thread `.agent-cli/composer-drafts/{thread_id}.json`; restore on session load/resume; rebuild bindings from `@` tokens when missing.
+- **Modal composer lock:** Composer `read_only` while approval, `request_user_input`, or transcript (`Ctrl+T`) overlays are open; inline `y`/`n`/`a`/`A` when approval banner only.
+- **Docs:** README TUI section; [docs/tui-styles.md](docs/tui-styles.md) composer/diff notes; [docs/ui-plan.md](docs/ui-plan.md) and [docs/codex-comparison.md](docs/codex-comparison.md) backlog brought current.
+
+### Changed
+
+- **`diff_render.py`:** All patch/approval diff rows routed through `diff_palette` + `format_diff_row` (hunk separators and Rich `Syntax` per hunk unchanged).
+
+### Tests
+
+- `tests/test_diff_palette.py`, `tests/test_composer_draft.py`, plus existing diff/TUI suites — **1145** pytest cases (1008 at v2.9.2 + 137).
+
 ## [2.9.2] — 2026-05-25
 
 TUI launch parity and Grok-style polish (solo harness).

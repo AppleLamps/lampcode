@@ -39,7 +39,25 @@ from agent.threads_picker import (
 from agent.tui.cells.base import SystemCell, UserMessageCell
 from agent.tui.cells.error import render_approval_banner_text
 from agent.tui.overlay import TranscriptOverlayScreen
+from agent.tui.approval_overlay import ApprovalOverlayScreen
+from agent.tui.diff_render import infer_path_from_diff
+from agent.tui.user_input_overlay import UserInputOverlayScreen
+from agent.tui.composer_draft import (
+    clear_composer_draft,
+    load_composer_draft,
+    save_composer_draft,
+    ComposerDraft,
+)
+from agent.tui.mention_popup import (
+    MentionBinding,
+    MentionCandidate,
+    apply_mention,
+    binding_from_candidate,
+    list_mention_candidates,
+    rebuild_bindings_from_text,
+)
 from agent.tui.runner import run_turn_in_thread
+from agent.tui.transcript_reflow import REFLOW_DEBOUNCE_SEC, TranscriptReflowState
 from agent.tui.slash_commands import (
     TuiSlashState,
     execute_slash_command,
@@ -119,13 +137,20 @@ class AgentTuiApp(App):
         self._worker: threading.Thread | None = None
         self._index_worker: threading.Thread | None = None
         self._approval_queue: queue.Queue[str] = queue.Queue()
+        self._user_input_response_queue: queue.Queue[dict[str, str | None]] = (
+            queue.Queue()
+        )
         self._event_queue: queue.SimpleQueue[AgentEvent] = queue.SimpleQueue()
         self._session_auto_approve = False
         self._turn_running = False
         self._mode: Literal["home", "chat", "resume"] = "home"
         self._session_threads: list[Thread] = []
         self._slash = TuiSlashState()
-        self._needs_reflow = False
+        self._reflow = TranscriptReflowState()
+        self._reflow_timer = None
+        self._mention_candidates: list[MentionCandidate] = []
+        self._mention_highlight: int = 0
+        self._approval_overlay_open = False
         self._threads_loading = True
         self._pending_chat: Literal["none", "thread_id", "resume_last"] = "none"
         self._statusline_settings = load_statusline_settings(self._config.config_path)
@@ -136,6 +161,8 @@ class AgentTuiApp(App):
         self._reverse_search_match = ""
         self._reverse_search_saved_draft = ""
         self._resume_preview_text = ""
+        self._composer_bindings: list[MentionBinding] = []
+        self._composer_draft_timer = None
         if thread_id:
             self._pending_chat = "thread_id"
         elif resume_last:
@@ -174,6 +201,7 @@ class AgentTuiApp(App):
             with Vertical(id="bottom_chrome"):
                 yield Static(id="status_row")
                 yield Static(id="resume_preview")
+                yield OptionList(id="mention_popup")
                 yield Static(id="composer_meta")
                 with Horizontal(id="composer_row"):
                     yield Static(id="mode_badge")
@@ -185,6 +213,7 @@ class AgentTuiApp(App):
         self.query_one("#status_row", Static).display = False
         self.query_one("#approval_banner", Static).display = False
         self.query_one("#resume_preview", Static).display = False
+        self.query_one("#mention_popup", OptionList).display = False
 
         self._set_mode("home")
         self._refresh_chrome()
@@ -246,6 +275,8 @@ class AgentTuiApp(App):
     def _on_chat_thread_loaded(self, thread: Thread) -> None:
         self._load_thread(thread)
         self._set_mode("chat")
+        self._restore_composer_draft()
+        self.query_one("#input", ComposerTextArea).focus()
 
     def _on_chat_thread_failed(self, message: str) -> None:
         self._pending_chat = "none"
@@ -255,9 +286,36 @@ class AgentTuiApp(App):
         )
 
     def on_resize(self) -> None:
-        if self._mode == "chat":
-            self._sync_transcript(rebuild=False)
+        width = max(40, self.size.width)
+        if self._reflow.observe_width(width):
+            if self._turn_running:
+                self._reflow.resize_during_stream = True
+            self._schedule_transcript_reflow()
         self._refresh_chrome()
+
+    def _schedule_transcript_reflow(self) -> None:
+        if self._reflow_timer is not None:
+            self._reflow_timer.stop()
+        self._reflow_timer = self.set_timer(
+            REFLOW_DEBOUNCE_SEC,
+            self._apply_transcript_reflow,
+            name="transcript_reflow",
+        )
+
+    def _apply_transcript_reflow(self) -> None:
+        self._reflow_timer = None
+        if self._mode != "chat":
+            return
+        width = max(40, self.size.width)
+        if not self._reflow.needs_rebuild(width):
+            return
+        scroll, cells = self._transcript_targets()
+        pane = TranscriptPane(cells, scroll)
+        pin_tail = pane.is_near_bottom() or self._transcript.follow_tail
+        self._sync_transcript(rebuild=True)
+        if pin_tail:
+            pane.scroll_to_end(force=True, follow=self._transcript.follow_tail)
+        self._reflow.mark_rebuilt(width)
 
     def _active_model_profile_name(self) -> str | None:
         if self._slash.model_profile_override:
@@ -322,6 +380,7 @@ class AgentTuiApp(App):
         )
         footer_mode = resolve_footer_mode(
             pending_approval=bool(self._state.pending_approval_summary),
+            pending_user_input=bool(self._state.pending_user_input_question),
             turn_running=self._turn_running,
             threads_loading=self._threads_loading,
             screen_mode=self._mode,
@@ -351,21 +410,76 @@ class AgentTuiApp(App):
             preview.display = False
         self._refresh_approval_banner()
 
+    def _approval_pending(self) -> bool:
+        return bool(self._state.pending_approval_summary)
+
     def _refresh_approval_banner(self) -> None:
         banner = self.query_one("#approval_banner", Static)
-        inp = self.query_one("#input", TextArea)
-        if self._state.pending_approval_summary:
-            banner.update(
-                render_approval_banner_text(
-                    self._state.pending_approval_summary,
-                    diff_preview=self._state.pending_approval_diff,
+        inp = self.query_one("#input", ComposerTextArea)
+        bottom = self.query_one("#bottom_chrome")
+        if self._approval_pending():
+            if self._approval_overlay_open:
+                banner.update(
+                    "[dim]Approval dialog open — y/n/a/A or Esc[/dim]"
                 )
-            )
-            banner.display = True
-            inp.placeholder = "Approve: y / n / a / A"
+                banner.display = True
+            else:
+                source_path = infer_path_from_diff(self._state.pending_approval_diff)
+                banner.update(
+                    render_approval_banner_text(
+                        self._state.pending_approval_summary or "",
+                        diff_preview=self._state.pending_approval_diff,
+                        tool_name=self._state.pending_approval_tool,
+                        source_path=source_path,
+                    )
+                )
+                banner.display = True
+            banner.add_class("approval-active")
+            bottom.add_class("approval-active")
+            inp.placeholder = "y / n / a / A"
         else:
             banner.display = False
+            banner.remove_class("approval-active")
+            bottom.remove_class("approval-active")
             inp.placeholder = "Message the agent…"
+        self._sync_composer_blocked()
+
+    def _open_approval_overlay(self) -> None:
+        if self._approval_overlay_open or not self._approval_pending():
+            return
+        if isinstance(self.screen, ApprovalOverlayScreen):
+            return
+
+        summary = self._state.pending_approval_summary or ""
+        diff_preview = self._state.pending_approval_diff
+        tool_name = self._state.pending_approval_tool
+        source_path = infer_path_from_diff(diff_preview)
+
+        def on_done(key: str | None) -> None:
+            self._approval_overlay_open = False
+            if key:
+                self._approval_queue.put(key)
+                if key in ("A", "a"):
+                    self._session_auto_approve = True
+                self._state.pending_approval_summary = None
+                self._state.pending_approval_diff = None
+                self._state.pending_approval_tool = None
+            self._sync_composer_blocked()
+            self.query_one("#input", ComposerTextArea).focus()
+            self._refresh_approval_banner()
+            self._refresh_chrome()
+
+        self._approval_overlay_open = True
+        self.push_screen(
+            ApprovalOverlayScreen(
+                summary=summary,
+                diff_preview=diff_preview,
+                tool_name=tool_name,
+                source_path=source_path,
+            ),
+            on_done,
+        )
+        self._sync_composer_blocked()
 
     def _populate_home_menu(self) -> None:
         menu = self.query_one("#home_menu", OptionList)
@@ -445,6 +559,62 @@ class AgentTuiApp(App):
         if summary.get("estimated_cost_usd"):
             self._last_turn_cost = float(summary["estimated_cost_usd"])
 
+    def _composer_blocked(self) -> bool:
+        return isinstance(
+            self.screen,
+            (ApprovalOverlayScreen, UserInputOverlayScreen, TranscriptOverlayScreen),
+        )
+
+    def _sync_composer_blocked(self) -> None:
+        inp = self.query_one("#input", ComposerTextArea)
+        if self._composer_blocked():
+            inp.read_only = True
+            return
+        inp.read_only = False
+
+    def _restore_bindings_for_text(self, text: str) -> None:
+        self._composer_bindings = rebuild_bindings_from_text(text, self._config.cwd)
+
+    def _restore_composer_draft(self) -> None:
+        if not self._thread:
+            return
+        draft = load_composer_draft(self._config.cwd, self._thread.id)
+        inp = self.query_one("#input", ComposerTextArea)
+        inp.text = draft.text
+        self._composer_bindings = list(draft.bindings)
+        inp.reset_history_navigation()
+
+    def _schedule_composer_draft_save(self) -> None:
+        if self._composer_draft_timer is not None:
+            self._composer_draft_timer.stop()
+        self._composer_draft_timer = self.set_timer(
+            0.4,
+            self._flush_composer_draft,
+            name="composer_draft",
+        )
+
+    def _flush_composer_draft(self) -> None:
+        self._composer_draft_timer = None
+        if not self._thread:
+            return
+        inp = self.query_one("#input", ComposerTextArea)
+        bindings = list(self._composer_bindings)
+        if inp.text.strip() and not bindings:
+            bindings = rebuild_bindings_from_text(inp.text, self._config.cwd)
+        save_composer_draft(
+            self._config.cwd,
+            self._thread.id,
+            ComposerDraft(text=inp.text, bindings=bindings),
+        )
+
+    def _record_mention_binding(self, candidate: MentionCandidate) -> None:
+        binding = binding_from_candidate(candidate)
+        self._composer_bindings = [
+            b for b in self._composer_bindings if b.mention != binding.mention
+        ]
+        self._composer_bindings.append(binding)
+        self._schedule_composer_draft_save()
+
     def _transcript_targets(self) -> tuple[VerticalScroll, Vertical]:
         scroll = self.query_one("#transcript", VerticalScroll)
         cells = scroll.query_one("#transcript_cells", Vertical)
@@ -511,9 +681,65 @@ class AgentTuiApp(App):
                 self._resume_preview_text = "[dim]Preview unavailable[/dim]"
         self._refresh_chrome()
 
+    def _sync_mention_popup(self) -> None:
+        popup = self.query_one("#mention_popup", OptionList)
+        inp = self.query_one("#input", ComposerTextArea)
+        if self._approval_pending() or self._mode not in ("chat", "home"):
+            popup.display = False
+            popup.clear_options()
+            self._mention_candidates = []
+            return
+        self._mention_candidates = list_mention_candidates(inp.text, self._config.cwd)
+        if not self._mention_candidates:
+            popup.display = False
+            popup.clear_options()
+            self._mention_highlight = 0
+            return
+        if self._mention_highlight >= len(self._mention_candidates):
+            self._mention_highlight = 0
+        popup.clear_options()
+        for idx, cand in enumerate(self._mention_candidates):
+            tag = "skill" if cand.kind == "skill" else "file"
+            popup.add_option(Option(f"[dim]{tag}[/dim] {cand.label}", id=str(idx)))
+        popup.display = True
+        self._refresh_mention_highlight()
+
+    def _refresh_mention_highlight(self) -> None:
+        popup = self.query_one("#mention_popup", OptionList)
+        if not self._mention_candidates:
+            return
+        idx = max(0, min(self._mention_highlight, len(self._mention_candidates) - 1))
+        self._mention_highlight = idx
+        popup.highlighted = idx
+
+    def _apply_mention_candidate(self, index: int) -> None:
+        if index < 0 or index >= len(self._mention_candidates):
+            return
+        cand = self._mention_candidates[index]
+        inp = self.query_one("#input", ComposerTextArea)
+        inp.text = apply_mention(inp.text, cand)
+        self._record_mention_binding(cand)
+        self._mention_candidates = []
+        self.query_one("#mention_popup", OptionList).display = False
+        inp.focus()
+
+    def on_text_area_changed(self, event: TextArea.Changed) -> None:
+        if event.text_area.id != "input":
+            return
+        self._sync_mention_popup()
+        if self._thread:
+            self._schedule_composer_draft_save()
+
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         option_id = str(event.option_id or "")
         widget_id = event.option_list.id
+
+        if widget_id == "mention_popup":
+            try:
+                self._apply_mention_candidate(int(option_id))
+            except ValueError:
+                pass
+            return
 
         if widget_id == "home_menu":
             if option_id == "new":
@@ -531,32 +757,53 @@ class AgentTuiApp(App):
             thread = self._resolve_thread(option_id)
             self._load_thread(thread)
             self._set_mode("chat")
+            self._restore_composer_draft()
             self.query_one("#input", TextArea).focus()
 
     def on_text_area_submitted(self, event: TextArea.Submitted) -> None:
         self._submit_input(event.text_area.text)
 
     def _expand_file_mention(self, text: str) -> str | None:
-        """Complete @path mentions on Tab."""
-        import re
+        """Complete the active @file or @skill mention on Tab."""
+        if not self._mention_candidates:
+            self._mention_candidates = list_mention_candidates(text, self._config.cwd)
+        if not self._mention_candidates:
+            return None
+        idx = max(0, min(self._mention_highlight, len(self._mention_candidates) - 1))
+        return apply_mention(text, self._mention_candidates[idx])
 
-        match = re.search(r"@([\w./\\-]+)$", text)
-        if not match:
-            return None
-        partial = match.group(1)
-        cwd = self._config.cwd
-        candidates: list[str] = []
-        for path in cwd.rglob("*"):
-            if not path.is_file():
-                continue
-            rel = path.relative_to(cwd).as_posix()
-            if rel.startswith(partial) or partial in rel:
-                candidates.append(rel)
-        if not candidates:
-            return None
-        candidates.sort(key=len)
-        chosen = candidates[0]
-        return text[: match.start()] + "@" + chosen + " "
+    def _open_user_input_overlay(
+        self,
+        *,
+        question: str,
+        options: list[str],
+        allow_free_text: bool,
+        question_index: int = 1,
+        question_total: int = 1,
+    ) -> None:
+        if isinstance(self.screen, UserInputOverlayScreen):
+            return
+
+        def on_done(result: dict[str, str | None] | None) -> None:
+            if result is None:
+                self._user_input_response_queue.put({"cancelled": "1"})
+            else:
+                self._user_input_response_queue.put(result)
+            self._sync_composer_blocked()
+            self.query_one("#input", ComposerTextArea).focus()
+            self._refresh_chrome()
+
+        self.push_screen(
+            UserInputOverlayScreen(
+                question=question,
+                options=options or None,
+                allow_free_text=allow_free_text,
+                question_index=question_index,
+                question_total=question_total,
+            ),
+            on_done,
+        )
+        self._sync_composer_blocked()
 
     def _submit_input(self, raw_text: str) -> None:
         text = raw_text.strip()
@@ -569,7 +816,7 @@ class AgentTuiApp(App):
         if self._reverse_search_active:
             return
 
-        if self._state.pending_approval_summary:
+        if self._approval_pending():
             response = approval_key_to_response(text)
             if response is None:
                 self._append_system(f"Invalid key {text!r} — use y, n, a, or A")
@@ -579,6 +826,7 @@ class AgentTuiApp(App):
                 self._session_auto_approve = True
             self._state.pending_approval_summary = None
             self._state.pending_approval_diff = None
+            self._state.pending_approval_tool = None
             self._refresh_approval_banner()
             self._refresh_chrome()
             return
@@ -597,6 +845,10 @@ class AgentTuiApp(App):
 
         if not self._thread:
             self._ensure_thread()
+
+        if self._thread:
+            clear_composer_draft(self._config.cwd, self._thread.id)
+        self._composer_bindings = []
 
         self._input_history.add(text)
         self._state.transcript.append(UserMessageCell(text=text))
@@ -729,6 +981,7 @@ class AgentTuiApp(App):
                     on_event=on_event,
                     cancel_token=self._cancel,
                     approval_queue=self._approval_queue,
+                    user_input_response_queue=self._user_input_response_queue,
                     session_auto_approve=self._session_auto_approve,
                     plan_mode=self._slash.plan_mode,
                 )
@@ -779,6 +1032,18 @@ class AgentTuiApp(App):
             self._transcript.commit_orphan_live_stream(self._state)
             self._transcript.clear_live_stream_state()
 
+        if event.type == "user_input.requested":
+            self._open_user_input_overlay(
+                question=str(event.data.get("question", "")),
+                options=list(event.data.get("options") or []),
+                allow_free_text=bool(event.data.get("allow_free_text", True)),
+                question_index=int(event.data.get("question_index", 1) or 1),
+                question_total=int(event.data.get("question_total", 1) or 1),
+            )
+
+        if event.type == "approval.requested":
+            self._open_approval_overlay()
+
         self._sync_transcript()
         include_context = event.type not in ("agent.delta", "agent.reasoning")
         self._refresh_chrome(include_context=include_context)
@@ -797,6 +1062,8 @@ class AgentTuiApp(App):
 
     def _turn_finished(self) -> None:
         self._turn_running = False
+        if self._reflow.resize_during_stream:
+            self._schedule_transcript_reflow()
         if self._status_row:
             self._status_row.stop_turn(self._state.status_line)
         if self._thread:
@@ -859,8 +1126,11 @@ class AgentTuiApp(App):
         self._last_turn_cost = None
         self._slash = TuiSlashState()
         self._session_auto_approve = False
+        self._composer_bindings = []
+        inp = self.query_one("#input", ComposerTextArea)
+        inp.clear()
         self._set_mode("home")
-        self.query_one("#input", TextArea).focus()
+        inp.focus()
 
     def action_resume_session(self) -> None:
         if self._turn_running:
@@ -899,10 +1169,13 @@ class AgentTuiApp(App):
                 TranscriptOverlayScreen(self._state),
                 callback=self._on_overlay_closed,
             )
+            self._sync_composer_blocked()
 
     def _on_overlay_closed(self, _result: object | None = None) -> None:
+        self._sync_composer_blocked()
         if self._mode == "chat":
             self._sync_transcript()
+            self.query_one("#input", ComposerTextArea).focus()
 
     def action_toggle_expand(self) -> None:
         if self._transcript.toggle_last_expandable(self._state):

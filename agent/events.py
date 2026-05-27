@@ -1107,6 +1107,32 @@ class EventEmitter:
             )
         )
 
+    def user_input_requested(
+        self,
+        thread_id: str,
+        turn_id: str,
+        *,
+        question: str,
+        options: list[str] | None = None,
+        allow_free_text: bool = True,
+        question_index: int = 1,
+        question_total: int = 1,
+    ) -> None:
+        self.emit(
+            AgentEvent(
+                "user_input.requested",
+                thread_id=thread_id,
+                turn_id=turn_id,
+                data={
+                    "question": question,
+                    "options": list(options) if options else [],
+                    "allow_free_text": allow_free_text,
+                    "question_index": question_index,
+                    "question_total": question_total,
+                },
+            )
+        )
+
     def user_input(
         self,
         thread_id: str,

@@ -2131,13 +2131,11 @@ def _handle_request_user_input(
     session: HarnessSession,
     turn_state: TurnApprovalState,
 ) -> str:
-    from agent.user_input import resolve_user_input
+    from agent.user_input import normalize_user_input_questions, resolve_user_input
 
-    question = arguments.get("question", "")
-    options = arguments.get("options")
-    if options is not None and not isinstance(options, list):
-        options = None
-    allow_free = bool(arguments.get("allow_free_text", True))
+    specs = normalize_user_input_questions(arguments)
+    if not specs:
+        return json.dumps({"error": "question or questions required"})
 
     if not config.auto_approve and needs_approval_prompt(
         "request_user_input", arguments, config, turn_state=turn_state, session=session
@@ -2153,29 +2151,62 @@ def _handle_request_user_input(
         ):
             return json.dumps({"error": "user denied input prompt"})
 
-    answer, selected, err = resolve_user_input(
-        question,
-        options,
-        allow_free_text=allow_free,
-        auto_approve=config.auto_approve,
-        headless_json=headless_json,
-    )
-    if err:
-        emitter.error(thread.id, err)
-        return json.dumps({"error": err})
+    total = len(specs)
+    results: list[dict[str, Any]] = []
 
-    item = UserInputItem(
-        question=question,
-        answer=answer or "",
-        selected_option=selected,
-        options=[str(o) for o in options] if options else [],
-    )
-    turn.items.append(item)
-    store.append_item(thread, turn.id, item)
-    emitter.user_input(
-        thread.id, turn.id, question=question, answer=answer or "", selected_option=selected
-    )
-    return json.dumps({"answer": answer, "selected_option": selected})
+    for index, spec in enumerate(specs, start=1):
+        question = spec["question"]
+        options = spec.get("options")
+        allow_free = bool(spec.get("allow_free_text", True))
+
+        emitter.user_input_requested(
+            thread.id,
+            turn.id,
+            question=question,
+            options=options,
+            allow_free_text=allow_free,
+            question_index=index,
+            question_total=total,
+        )
+        answer, selected, err = resolve_user_input(
+            question,
+            options,
+            allow_free_text=allow_free,
+            auto_approve=config.auto_approve,
+            headless_json=headless_json,
+            question_key=question,
+            question_index=index,
+            question_total=total,
+        )
+        if err:
+            emitter.error(thread.id, err)
+            return json.dumps({"error": err, "partial_answers": results})
+
+        item = UserInputItem(
+            question=question,
+            answer=answer or "",
+            selected_option=selected,
+            options=options or [],
+        )
+        turn.items.append(item)
+        store.append_item(thread, turn.id, item)
+        emitter.user_input(
+            thread.id,
+            turn.id,
+            question=question,
+            answer=answer or "",
+            selected_option=selected,
+        )
+        entry = {"question": question, "answer": answer, "selected_option": selected}
+        results.append(entry)
+
+    first = results[0]
+    payload: dict[str, Any] = {
+        "answer": first.get("answer"),
+        "selected_option": first.get("selected_option"),
+        "answers": results,
+    }
+    return json.dumps(payload)
 
 
 def _handle_request_permissions(

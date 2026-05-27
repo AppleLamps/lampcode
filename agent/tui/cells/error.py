@@ -64,14 +64,27 @@ def render_system_cell(cell: SystemCell) -> str:
     return f"\n[dim]{cell.text}[/dim]"
 
 
-def render_approval_banner_text(summary: str, *, diff_preview: str | None = None) -> str:
+def render_approval_banner_text(
+    summary: str,
+    *,
+    diff_preview: str | None = None,
+    tool_name: str | None = None,
+    source_path: str | None = None,
+) -> str:
     lines = [
-        f"[yellow bold]Approve:[/yellow bold] {summary}?  "
-        f"[dim][y] yes  [n] no  [a] turn  [A] session[/dim]"
+        f"[yellow bold]Approve[/yellow bold]  {summary}",
+        "[dim]Keys: y yes | n no | a all this turn | A all session (no Enter needed)[/dim]",
     ]
+    if tool_name == "apply_patch" and not diff_preview:
+        lines.append("  [yellow]No diff preview — review carefully before approving.[/yellow]")
     if diff_preview:
+        lines.append("  [dim]Patch preview:[/dim]")
         for diff_line in format_diff_lines(
-            diff_preview, max_lines=12, line_numbers=True
+            diff_preview,
+            max_lines=32,
+            line_numbers=True,
+            source_path=source_path,
+            hunk_aware=True,
         ):
             lines.append(f"  {diff_line}")
     return "\n".join(lines)

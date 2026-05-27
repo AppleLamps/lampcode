@@ -418,6 +418,22 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                     "type": "object",
                     "properties": {
                         "question": {"type": "string"},
+                        "questions": {
+                            "type": "array",
+                            "description": "Optional batch of questions (each may have options).",
+                            "items": {
+                                "type": "object",
+                                "properties": {
+                                    "question": {"type": "string"},
+                                    "options": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "allow_free_text": {"type": "boolean"},
+                                },
+                                "required": ["question"],
+                            },
+                        },
                         "options": {
                             "type": "array",
                             "items": {"type": "string"},
@@ -428,7 +444,6 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                             "description": "Allow free-text answer when options provided.",
                         },
                     },
-                    "required": ["question"],
                 },
             },
         },

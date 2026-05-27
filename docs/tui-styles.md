@@ -1,40 +1,48 @@
-# TUI visual language
+# TUI style guide (agent-cli)
 
-Aligned with Codex `codex-rs/tui/styles.md` — keep the transcript readable in any terminal theme.
+Semantic colors for the interactive transcript. Matches the spirit of Codex `codex-rs/tui/styles.md`.
 
 ## Text roles
 
-| Role | Style |
-|------|--------|
-| Headers | `bold` |
-| Primary | default foreground |
-| Secondary | `dim` |
-| User hints / status | `cyan` |
-| Success / additions | `green` |
-| Errors / deletions | `red` |
-| Agent brand accent | `#58a6ff` |
-| Plan mode | `yellow` |
+| Role | Rich / CSS | Use for |
+|------|------------|---------|
+| Primary | default `#e6edf3` | Agent prose, tool args |
+| Secondary | `[dim]` / `#8b949e` | Hints, metadata, file summaries |
+| Headers | `[bold]` | Tool names, section labels |
 
-## Cells
+## Foreground semantics
 
-- **User messages:** labeled "You", default text
-- **Agent messages:** labeled "Agent", markdown when complete
-- **Exec / patch / plan:** bordered panels; collapsed by default; click or `e` to expand
-- **Approval:** yellow banner above composer; footer switches to `y` / `n` / `a` / `A` hints
-- **Working:** blue status row while a turn runs
+| Meaning | Color | Examples |
+|---------|-------|----------|
+| User / input tips | `#388bfd` (blue) | User message bar, focus ring |
+| Success / additions | `green` / `#3fb950` | `+` diff lines, exit 0 |
+| Errors / deletions | `red` | `-` diff lines, failures, sandbox blocks |
+| Status / working | `#58a6ff` (cyan) | Status row, tool headers |
+| Warnings / approval | `yellow` / `#e3b341` | Approval banner, denials |
+| Agent label | `#3fb950` | "Agent" header |
 
-## Composer chrome
+## Diff lines
 
-The bottom panel is a fixed stack inside `#app_shell` (not overlapped by the home menu or transcript):
-
-1. **Status line** (`#composer_meta`) — model, mode, sandbox, approvals, context bar, session, etc. Configure with `[tui] statusline` in config.
-2. **Composer row** — `CODE` / `PLAN` badge + multiline input (Enter send, Shift+Enter newline).
-3. **Footer** (`#composer_footer`) — shortcuts for the current screen (home vs chat vs approval).
-
-Optional rows above the status line: live status (`#status_row`), resume preview (`#resume_preview`), approval banner (`#approval_banner`).
+- `+` additions: green gutter; truecolor dark bg `#213A2B` (Codex), light `#dafbe1`
+- `-` deletions: red gutter; truecolor dark bg `#4A221D` (Codex), light `#ffebe9`
+- 256-color and 16-color fallbacks follow `agent/tui/diff_palette.py` (Codex `diff_render.rs` indices)
+- `@@` / `+++` / `---`: cyan
+- Context: dim or syntax-highlighted body
 
 ## Avoid
 
-- Custom RGB colors except panel borders and mode badges
-- Full transcript clear on every event (use incremental cell sync)
-- Hiding sandbox `danger-full-access` without a red label in the status line
+- Custom purple/orange palette colors (poor contrast on arbitrary terminal themes)
+- Raw ANSI `black` / `white` for body text
+- Burying approvals only in scrollback — use `#approval_banner` + footer `APPROVAL` mode
+
+## Composer
+
+- Draft + `@` mention bindings persist per thread under `.agent-cli/composer-drafts/{thread_id}.json`
+- Composer is `read_only` while approval, user-input, or transcript (`Ctrl+T`) modal screens are on the stack
+
+## Chrome
+
+- Background stack: `#0d1117` (main), `#161b22` (panels), `#1c1400` (approval)
+- Borders: `#30363d` idle, `#58a6ff` focus, `#e3b341` approval-active
+
+When adding cells, extend this table rather than inventing new colors.

@@ -150,13 +150,28 @@ Screen {
 
 #approval_banner {
     height: auto;
-    max-height: 6;
+    max-height: 8;
     min-height: 1;
     padding: 0 2;
     color: #e3b341;
     background: #1c1400;
     border: solid #484f58;
     display: none;
+}
+
+#approval_banner.approval-active {
+    max-height: 16;
+    border: solid #e3b341;
+}
+
+#bottom_chrome.approval-active #input {
+    border: solid #e3b341;
+    background: #1c1400;
+}
+
+#bottom_chrome.approval-active #mode_badge {
+    border-color: #e3b341;
+    color: #e3b341;
 }
 
 #mode_badge {
@@ -199,6 +214,24 @@ Screen {
     padding: 0 3;
     color: #8b949e;
     background: #0d1117;
+}
+
+#mention_popup {
+    height: auto;
+    max-height: 6;
+    min-height: 0;
+    margin: 0 2;
+    border: solid #30363d;
+    background: #161b22;
+    display: none;
+}
+
+#mention_popup > .option-list--option {
+    padding: 0 1;
+}
+
+#mention_popup > .option-list--option-highlighted {
+    background: #1f6feb;
 }
 
 #composer_meta {

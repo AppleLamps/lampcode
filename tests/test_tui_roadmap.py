@@ -12,9 +12,23 @@ from agent.threads_picker import thread_resume_preview
 from agent.models import Thread, UserMessageItem, Turn
 
 
+def test_footer_mode_user_input() -> None:
+    mode = resolve_footer_mode(
+        pending_approval=False,
+        pending_user_input=True,
+        turn_running=True,
+        threads_loading=False,
+        screen_mode="chat",
+        reverse_search_active=False,
+        resume_highlight=False,
+    )
+    assert mode == FooterMode.USER_INPUT
+
+
 def test_footer_mode_approval() -> None:
     mode = resolve_footer_mode(
         pending_approval=True,
+        pending_user_input=False,
         turn_running=False,
         threads_loading=False,
         screen_mode="chat",

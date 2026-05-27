@@ -15,17 +15,24 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.9.2 — TUI launch + polish)
+## Current state (v2.9.4 — TUI diff palette + composer drafts)
 
-Phase 28 shipped as **v2.9.0**; OpenRouter improvements as **v2.9.1**; TUI launch and Grok-style polish as **v2.9.2**. Before doing new work, verify:
+Phase 28 shipped as **v2.9.0**; OpenRouter improvements as **v2.9.1**; TUI launch as **v2.9.2**; diff palette + mention drafts as **v2.9.4**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~1008 passed, 2 skipped, 0 failed
-git log --oneline -15   # expect v2.9.2 TUI commit after v2.9.1 OpenRouter
+pytest -q               # expect ~1145 passed, 2 skipped, 0 failed
+git log --oneline -15   # expect v2.9.4 after v2.9.2 TUI launch
 ```
 
-**Bottom line:** You're on **v2.9.2**. Next harness UX work: **[ui-plan.md](ui-plan.md)** (transcript cells, diffs, streaming). Enterprise / Phase 29+ otherwise.
+**Bottom line:** You're on **v2.9.4**. Next TUI polish: syntect-level diff syntax, golden snapshot breadth — **[ui-plan.md](ui-plan.md)** Tier B. Enterprise / Phase 29+ otherwise.
+
+### v2.9.4 — TUI diff palette + composer drafts
+
+- **`diff_palette.py`:** Codex truecolor/256/16 add-delete backgrounds; wired through `diff_render.py`
+- **Composer drafts:** `.agent-cli/composer-drafts/{thread_id}.json` with `MentionBinding` restore on resume
+- **Modal lock:** composer `read_only` during approval / user-input / transcript overlays
+- **Docs:** README, `tui-styles.md`, `ui-plan.md`, `codex-comparison.md` updated
 
 ### v2.9.2 — TUI launch + polish
 

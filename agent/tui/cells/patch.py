@@ -32,8 +32,12 @@ def render_patch_cell(cell: PatchCell) -> str:
 
     if show_diff and cell.diff_text:
         max_lines = 200 if cell.expanded else 40
+        source = cell.files[0].path if cell.files else None
         for diff_line in format_diff_lines(
-            cell.diff_text, max_lines=max_lines, line_numbers=True
+            cell.diff_text,
+            max_lines=max_lines,
+            line_numbers=True,
+            source_path=source,
         ):
             lines.append(f"  {diff_line}")
     elif collapsible and diff_lines:

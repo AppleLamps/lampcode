@@ -21,6 +21,7 @@ from agent.tui.view_model import (
     thread_transcript_from_store,
     threads_to_entries,
 )
+from agent.user_input import set_user_input_handler
 from approval.gate import parse_approval_response, set_approval_input
 
 
@@ -102,6 +103,7 @@ def run_turn_in_thread(
     on_event: Callable[[AgentEvent], None],
     cancel_token: CancelToken,
     approval_queue: queue.Queue[str],
+    user_input_response_queue: queue.Queue[dict[str, str | None]] | None = None,
     session_auto_approve: bool = False,
     plan_mode: bool = False,
 ) -> None:
@@ -117,7 +119,31 @@ def run_turn_in_thread(
                 return "n"
             return key
 
+    def user_input_fn(
+        question: str,
+        options: list[str] | None,
+        allow_free_text: bool,
+        question_index: int = 1,
+        question_total: int = 1,
+    ) -> tuple[str | None, str | None, str | None]:
+        if user_input_response_queue is None:
+            return None, None, "request_user_input requires TUI response queue"
+        while True:
+            try:
+                payload = user_input_response_queue.get(timeout=0.2)
+            except queue.Empty:
+                cancel_token.check()
+                continue
+            if payload.get("cancelled"):
+                return None, None, "user input cancelled"
+            answer = payload.get("answer")
+            if not answer:
+                return None, None, "empty response"
+            selected = payload.get("selected_option")
+            return str(answer), selected, None
+
     set_approval_input(approval_fn)
+    set_user_input_handler(user_input_fn if user_input_response_queue else None)
     emitter = build_event_emitter(
         on_event,
         recording=config.recording.enabled,
@@ -139,6 +165,7 @@ def run_turn_in_thread(
         )
     finally:
         set_approval_input(None)
+        set_user_input_handler(None)
 
 
 def load_thread_with_runs(

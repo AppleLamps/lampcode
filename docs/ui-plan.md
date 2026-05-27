@@ -1,284 +1,251 @@
 # TUI UX plan — Codex parity for the conversation canvas
 
-Living plan for making `agent tui` feel like Codex during an actual coding turn. The **chrome** (home screen, footer, slash commands) is already Grok/Codex-inspired; this document covers the **transcript pipeline** — what users stare at while the agent works.
+Living plan for making `agent tui` feel like Codex during an actual coding turn. The **chrome** (home screen, footer, slash commands) is Grok/Codex-inspired; this document covers the **transcript pipeline** — what users stare at while the agent works.
 
-**Reference:** Codex TUI in `codex-rs/tui/` (read-only).  
-**Implementation target:** `lampcode/agent-cli` only.
+**Reference:** Codex TUI in `codex-rs/tui/` (read-only). Use the [Codex reference map](#codex-reference-map-tui-specific) below as a reading list when porting behaviors.  
+**Implementation target:** `lampcode/agent-cli` only.  
+**Harness parity** (tools, sandbox, review, MCP) lives in [codex-comparison.md](codex-comparison.md) — do not confuse harness ✅ with TUI polish.
 
 ---
 
-## Current state (baseline)
+## Current state (as of v2.9.4)
 
 ### Architecture
 
-The TUI uses a Textual app with a flat `RichLog` transcript, not Codex's typed `HistoryCell` pipeline.
+The TUI is a **Textual app** with a **typed `TranscriptCell` model** and **incremental sync** — the same shape as Codex's `HistoryCell` pipeline, implemented in Python/Rich rather than Rust/ratatui.
 
-| Component | Path | Role today |
-|-----------|------|------------|
-| Main app | `agent/tui/app.py` | Textual layout, worker thread, `post_message` event drain |
-| Event bridge | `agent/tui/messages.py` | `AgentEventMessage` — non-blocking worker → UI delivery |
-| Transcript | `agent/tui/transcript_controller.py`, `transcript_pane.py` | Per-cell Static widgets, live assistant stream |
-| View model | `agent/tui/view_model.py` | `AgentEvent` → typed transcript cells |
+```
+AgentEvent (worker thread)
+    → AgentEventMessage (post_message, non-blocking)
+    → apply_event_to_state() → list[TranscriptCell]
+    → TranscriptController.sync() → one Static widget per cell + live stream region
+```
+
+| Component | Path | Role |
+|-----------|------|------|
+| Main app | `agent/tui/app.py` | Layout, worker thread, bindings (`Ctrl+T`, `e` expand, `Ctrl+C` cancel) |
+| Event bridge | `agent/tui/messages.py` | `AgentEventMessage` — worker must not `call_from_thread` per event |
+| View model | `agent/tui/view_model.py` | `AgentEvent` → cells; `thread_transcript_from_store()` for resume |
+| Transcript sync | `agent/tui/transcript_controller.py` | Incremental mount/update; `rebuild_all()` on session load / expand |
+| Transcript pane | `agent/tui/transcript_pane.py` | Per-cell DOM ids, live assistant stream, scroll-to-end |
+| Streaming | `agent/tui/streaming_controller.py`, `table_holdback.py` | Code-fence + markdown table holdback (Codex-style) |
+| Cell renderers | `agent/tui/cells/*.py` | Rich markup per cell type |
+| Diff formatting | `agent/tui/diff_render.py`, `diff_palette.py`, `patch_preview.py` | Codex-style truecolor/256/16 add-delete backgrounds + hunk syntax |
+| Composer draft | `agent/tui/composer_draft.py` | Per-thread draft + `MentionBinding` restore on session reload |
+| Markdown | `agent/tui/markdown_render.py` | Assistant message markdown → Rich |
+| Status row | `agent/tui/status_row.py` | Spinner + elapsed time above composer |
+| Footer / chrome | `agent/tui/footer_state.py`, `context_usage.py`, `composer_chrome.py` | Mode-aware footer, context %, mode badge |
+| Composer | `agent/tui/composer.py`, `paste_burst.py` | Multiline input; Windows paste-burst heuristic |
+| Overlay | `agent/tui/overlay.py` | Full scrollback (`Ctrl+T`) |
 | Theme | `agent/tui/theme.py` | Grok-style dark CSS |
-| Slash commands | `agent/tui/slash_commands.py` | `/model`, `/plan`, `/compact`, etc. |
-| Context footer | `agent/tui/context_usage.py` | `Context N% left · M% used` |
-| CLI output (not TUI) | `agent/output_handler.py` | Patch diff preview on stderr for `agent run` |
+| Slash commands | `agent/tui/slash_commands.py` | `/model`, `/plan`, `/compact`, `/cost`, etc. |
+| Turn runner | `agent/tui/runner.py` | Background turn execution |
+| CLI diff (reuse) | `agent/output_handler.py` | Patch preview on stderr for `agent run` |
+
+### Transcript cell types (`agent/tui/cells/base.py`)
+
+| Cell | Purpose |
+|------|---------|
+| `UserMessageCell` | User prompt (styled block) |
+| `AssistantMessageCell` | Finalized agent text; `streaming` flag during live region |
+| `ToolExecCell` | `run_command`, reads, MCP, web search, workers |
+| `PatchCell` | `apply_patch` with file summary + colored diff |
+| `ToolGroupCell` | Batched parallel `read_file` tools |
+| `PlanCell` | `plan.proposed` / `planProposal` on resume |
+| `CompactionCell` | `compaction` / `compaction.completed` / store compaction items |
+| `ApprovalCell` | Pending approval in transcript |
+| `ErrorCell` | Failures, sandbox blocks |
+| `TurnSummaryCell` | End-of-turn model, cost, files/lines/commands stats |
+| `ReasoningCell` | Collapsible reasoning stream (`agent.reasoning`) |
+| `WorkingCell` | Ephemeral in-transcript step indicator |
+| `SystemCell` | SSH pool, checkpoints, workspace sync, etc. |
+
+Rendering is centralized in `agent/tui/cells/__init__.py` (`render_cell`).
 
 ### What happens during a turn
 
-| Moment | agent-cli TUI today |
-|--------|---------------------|
-| **User sends message** | `UserMessageCell`; incremental transcript sync |
-| **Agent responds** | `agent.delta` → live Rich `Markdown` stream; finalized to `AssistantMessageCell` at tool boundaries / turn end |
-| **Tools start** | `tool.pending` → `ToolExecCell` / `PatchCell` (running) |
-| **Tools finish** | `tool.completed` updates cell status, output, patch diff preview |
-| **Approvals** | Yellow `⚠ summary [y/n/a/A]` in transcript; user types in same input box |
-| **Reload from store** | `thread_transcript_from_store()` includes user/agent messages and `commandExecution` / `collabWorker` / `workspaceSync` — **not** `fileChange`, `planProposal`, `mcpToolCall`, etc. |
+| Moment | agent-cli TUI |
+|--------|----------------|
+| **User sends** | `UserMessageCell`; `TranscriptController.sync()` appends widget |
+| **Agent streams** | `agent.delta` → `AssistantStreamController` holdback → live stream in pane; flush to `AssistantMessageCell` at tool boundaries / turn end |
+| **Tools start** | `tool.pending` → `PatchCell` or `ToolExecCell` (running); parallel reads may merge into `ToolGroupCell` |
+| **Tools finish** | `tool.completed` updates status, output, `diff_preview` on patches |
+| **Working** | `#status_row` spinner + elapsed; optional `WorkingCell` between steps |
+| **Approvals** | `ApprovalCell` + composer footer banner (`render_approval_banner_text`); keys `y` / `n` / `a` / `A` |
+| **Plan / compact** | `PlanCell`, `CompactionCell` from live events |
+| **Turn end** | `TurnSummaryCell` with cost and diff stats |
+| **Resume from store** | `thread_transcript_from_store()` loads `userMessage`, `agentMessage`, `commandExecution`, `fileChange`, `planProposal`, `contextCompaction`, `mcpToolCall`, `webSearch`, `collabWorker`, `workspaceSync` + per-turn summary |
 
-### What already works (recent polish)
+### Chrome and ergonomics (shipped)
 
-- Grok-style centered home screen (no sidebar clutter)
-- Footer context % (Codex-like hybrid bar; see [context.md](context.md))
-- Slash commands in input (`/model`, `/plan`, `/compact`, `/cost`, `/help`, etc.)
-- Session resume picker filtered to real threads (`filter_session_threads`)
-- Non-blocking event queue (`post_message`, not `call_from_thread` per event) — avoids worker/UI deadlock during heavy transcript renders
-- Turn worker watchdog clears zombie “Working…” if the worker exits unexpectedly
-- Human-readable [action-log.md](action-log.md) with `tool executing` between pending and done
+- Grok-style centered home screen; session resume picker (`filter_session_threads`)
+- Footer context % and configurable statusline items ([context.md](context.md))
+- Non-blocking event delivery + turn worker watchdog (clears zombie “Working…”)
+- Human-readable [action-log.md](action-log.md) for freeze diagnosis
+- `Ctrl+T` transcript overlay; `e` / click to expand long tool output and diffs
+- Tab completes `@path` file mentions in composer (no popup picker yet)
+- Golden string tests for core cells (`tests/golden/tui/*.txt`, `tests/test_tui_cells.py`) — includes plan, compaction
+- Style guide: [tui-styles.md](tui-styles.md)
 
 ---
 
 ## How Codex does it (target behavior)
 
-Codex treats chat as a **typed transcript of `HistoryCell`s**, not a flat log.
+Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level rendering and terminal scrollback repair on resize.
 
 | Moment | Codex pattern | Key files |
 |--------|---------------|-----------|
 | **User message** | Dedicated cell with background styling | `tui/src/style.rs` (`user_message_style`) |
-| **Agent streaming** | Two-region controller: stable lines + in-flight region; markdown; table/code fence holdback | `tui/src/streaming/controller.rs` |
+| **Agent streaming** | Stable lines + in-flight region; markdown; table/code fence holdback | `tui/src/streaming/controller.rs` |
 | **Shell commands** | `ExecCell`: header, live spinner, truncated output | `tui/src/history_cell/` (exec) |
-| **Patches** | `PatchHistoryCell`: per-file summary, green/red unified diff, line numbers, syntax highlight | `tui/src/history_cell/patches.rs`, `tui/src/diff_render.rs` |
-| **While working** | Status row: `Working (3s • esc to interrupt)` with animated indicator | `tui/src/status_indicator_widget.rs` |
-| **Footer** | Model, mode, context %, shortcuts — always visible | `tui/src/bottom_pane/footer.rs` |
-| **Scrollback** | Full transcript overlay (`Ctrl+T`), resize reflow | `tui/src/transcript_reflow.rs` |
-| **Approvals** | Structured cells / composer state, not just transcript text | `tui/src/bottom_pane/` |
-| **Visual language** | Green = additions/success, red = errors/deletions, dim = secondary | `tui/styles.md` |
+| **Patches** | Per-file summary, unified diff, line numbers, **syntax highlight** | `tui/src/history_cell/patches.rs`, `tui/src/diff_render.rs` |
+| **While working** | Status row: `Working (3s • esc to interrupt)` | `tui/src/status_indicator_widget.rs` |
+| **Footer** | Model, mode, context %, shortcuts | `tui/src/bottom_pane/footer.rs` |
+| **Scrollback** | Overlay + **terminal reflow** on width change | `tui/src/transcript_reflow.rs` |
+| **Approvals** | Bottom-pane overlays, not only transcript text | `tui/src/bottom_pane/approval_overlay.rs` |
+| **Composer** | Mentions v2, skill/file popups, documented state machine | `tui/src/bottom_pane/chat_composer.rs`, `docs/tui-chat-composer.md` |
+| **Visual language** | Green/red/dim/cyan per `styles.md` | `tui/styles.md` |
+| **Regression tests** | Hundreds of `insta` buffer snapshots + vt100 suites | `tui/src/history_cell/snapshots/`, `tui/tests/suite/` |
 
 ---
 
-## Gap analysis
+## Gap analysis (honest)
 
 | UX principle | Codex | agent-cli TUI |
 |--------------|-------|---------------|
-| Separate content types (message vs tool vs diff vs status) | ✅ Typed cells | ❌ Mostly plain `TranscriptLine` strings |
-| Incremental streaming | ✅ Append stable lines, mutate active cell | ⚠️ Re-render entire log each event |
-| Patch/diff readability | ✅ Full diff UI | ❌ Missing (CLI stderr has 8-line preview only) |
-| Command output | ✅ Collapsible exec blocks | ❌ One-line summary on reload only |
-| Working / busy state | ✅ Spinner + elapsed time | ❌ No visible "agent is thinking" row |
-| Markdown / code in replies | ✅ Rendered | ❌ Raw text in RichLog |
-| Context budget visible | ✅ Footer % | ✅ Recently added |
-| Approvals discoverable | ✅ Prominent | ⚠️ Inline text, easy to miss |
-| Plan mode output | ✅ `<proposed_plan>` styled cell | ❌ Not in TUI event handler |
-| Compaction feedback | ✅ Dedicated cells | ❌ Not in TUI event handler |
-| Visual regression tests | ✅ insta snapshots | ❌ No TUI snapshot coverage |
-| Resize / long session | ✅ Reflow | ❌ RichLog reflow is basic |
+| Typed transcript cells | ✅ `HistoryCell` | ✅ `TranscriptCell` + per-type renderers |
+| Incremental render (no full clear) | ✅ | ✅ `TranscriptController.sync()` |
+| Streaming holdback (fence/table) | ✅ | ✅ `AssistantStreamController` + `table_holdback` |
+| Patch/diff readability | ✅ Syntax + theme-aware backgrounds | ⚠️ Colored unified diff + line numbers; **no syntax highlight** |
+| Exec output truncation | ✅ Token/byte policy + “show more” | ⚠️ Expand/collapse on long cells; not full Codex truncation policy |
+| Working / busy state | ✅ Status widget + motion modes | ✅ `status_row.py` + `WorkingCell` |
+| Markdown in replies | ✅ Full pipeline | ⚠️ `markdown_render.py` (common MD); not full Codex markdown stack |
+| Context in footer | ✅ | ✅ `context_usage.py` |
+| Approvals discoverable | ✅ Dedicated overlay | ⚠️ Banner + transcript cell; composer still shared with chat input |
+| Plan / compaction cells | ✅ | ✅ Live + resume from store |
+| Resume fidelity | ✅ | ✅ Broad store loader (see table above) |
+| Transcript overlay | ✅ | ✅ `Ctrl+T` |
+| Resize / reflow | ✅ Rebuilds terminal scrollback from cells | ⚠️ Widget resync on resize; **no Codex-style scrollback repair** |
+| Composer `@` mentions | ✅ Popups + bindings | ✅ Popup + Tab/↑/↓ + draft bindings on reload (`.agent-cli/composer-drafts/`) |
+| `request_user_input` UI | ✅ Full bottom-pane overlay | ✅ Modal overlay (`user_input_overlay.py`) + handler queue |
+| Visual regression tests | ✅ insta @ buffer width | ⚠️ 8 golden text files; narrow width / footer not covered |
+| Frame rate / reduced motion | ✅ 120 FPS cap, shimmer, a11y | ❌ Textual defaults |
+| Product extras | Voice, multi-agent, rate-limit card | ❌ Out of scope unless prioritized |
 
-**Bottom line:** The frame is improving; the conversation canvas inside it is still CLI-grade.
-
----
-
-## Improvement backlog
-
-### P0 — Must fix for "feels like Codex" during a turn
-
-#### 1. Stop full-log re-renders
-
-**Problem:** `_render_transcript()` calls `log.clear()` on every event — flicker, poor streaming feel, scroll position loss.
-
-**Target:** Append/incremental update per cell; keep scroll pinned to bottom.
-
-**Files:** `agent/tui/app.py`, new cell renderer module.
+**Bottom line:** Structure and daily-turn UX are at Codex parity; remaining gaps are **syntect-level syntax theming**, **terminal scrollback repair on resize**, and **golden/regression breadth** — not missing cell types or composer mention drafts.
 
 ---
 
-#### 2. Wire missing events in TUI
+## Open backlog (prioritized)
 
-**Problem:** `apply_event_to_state()` handles `agent.delta`, `turn.*`, `tool.pending`, `approval.pending` — but not completions or lifecycle events.
+### P0 — Highest perception impact
 
-**Wire at minimum:**
+#### Diff v2 (syntax + theme-aware hunks) — ✅ palette; ⚠️ syntax engine (v2.9.4)
 
-| Event | Action |
-|-------|--------|
-| `tool.completed` | Finalize tool cell; include `diff_preview` for `apply_patch` |
-| `plan.proposed` | Distinct plan cell with summary + expandable body |
-| `compaction` / `compaction.completed` | Status line or compact cell |
-| `tool.completed` (`run_command`) | Exec block with truncated output |
+**Today:** `diff_palette.py` (Codex `diff_render.rs` colors: truecolor `#213A2B` / `#4A221D`, light pastels, 256/16 fallbacks, `COLORFGBG` theme detect) + `diff_render.py` hunk separators, per-hunk Rich `Syntax` highlight, `infer_path_from_diff`.
 
-**Files:** `agent/tui/view_model.py`, `agent/events.py` (reference payloads).
+**Still open:** Full Codex syntect/terminal palette quantization (we use Rich Syntax + monokai, not per-terminal theme tables).
+
+**Files:** `agent/tui/diff_palette.py`, `agent/tui/diff_render.py`, `agent/tui/cells/patch.py`.
 
 ---
 
-#### 3. First-class patch/diff cells
+#### Exec output truncation policy — ✅ shipped (v2.9.3)
 
-**Problem:** No visual diff in TUI; users can't review what changed without leaving the app.
-
-**Target:** Port the spirit of Codex `PatchHistoryCell` + `diff_render`:
-
-- File list summary (`A path`, `M path`, `D path`)
-- Colored `+`/`-` lines (green additions, red deletions)
-- Optional line numbers
-- Start with simplified rendering (no full syntect required for v1)
-
-**Reuse:** `OutputHandler` already has diff preview logic for `agent run` — extract shared diff formatting.
-
-**Files:** new `agent/tui/cells/patch.py`, `agent/output_handler.py` (shared diff helper).
+**Today:** `agent/tui/output_truncation.py` — byte middle-truncation, collapsed/expanded line limits, `Total output lines: N` header in `ToolExecCell`.
 
 ---
 
-#### 4. Exec / tool cells
+#### Approval UX v2 — ✅ shipped (v2.9.3+)
 
-**Problem:** Tools appear as one dim line: `▸ run_command (completed): pytest -q`.
+**Today:** `ApprovalOverlayScreen` on `approval.requested` (scrollable diff, y/n/a/A keys); inline banner fallback; single-key composer approval when overlay closed; composer `read_only` while approval / user-input / transcript modals are open.
 
-**Target:** Structured blocks:
-
-```
-• run_command
-  └ pytest -q
-  └ (output, truncated, expandable)
-```
-
-Distinct headers/icons per tool family: `run_command`, `apply_patch`, `read_file`, `mcp__*`.
-
-**Files:** new `agent/tui/cells/exec.py`, `agent/tui/cells/tool.py`.
+**Files:** `agent/tui/approval_overlay.py`, `app.py`, `composer.py`, `cells/error.py`.
 
 ---
 
-#### 5. "Working…" status row
+### P1 — Terminal and composer polish
 
-**Problem:** No visible busy state while `_turn_running` — users don't know if the agent is thinking, calling tools, or stuck.
+#### Resize reflow (Codex `transcript_reflow.rs`) — ✅ shipped (v2.9.3)
 
-**Target:** Separate status row (not buried in transcript):
-
-```
-Working (3s • Ctrl+C to interrupt)
-```
-
-Animated spinner when terminal supports it; static text fallback otherwise.
-
-**Reference:** Codex `status_indicator_widget.rs`.
-
-**Files:** `agent/tui/app.py`, new `agent/tui/status_row.py`.
+**Today:** `transcript_reflow.py` debounces resize (75ms), `rebuild_all()` on width change, reflow after stream if resized mid-turn.
 
 ---
 
-#### 6. Render `fileChange` items from thread store
+#### Composer mentions — ✅ shipped (v2.9.4)
 
-**Problem:** `thread_transcript_from_store()` skips `fileChange` — patches vanish on resume.
+**Today:** `#mention_popup` lists `@file` + `@skill` candidates; Tab/↑/↓/click to insert; `MentionBinding` persisted in `.agent-cli/composer-drafts/{thread_id}.json` and restored on session load/resume; bindings rebuilt from text when missing.
 
-**Target:** Load and render file changes with diff snippets on session reload.
-
-**Files:** `agent/tui/view_model.py` (`thread_transcript_from_store`).
+**Files:** `agent/tui/mention_popup.py`, `composer_draft.py`, `composer.py`, `app.py`.
 
 ---
 
-### P1 — Polish Codex users expect
+#### TUI `request_user_input` overlay — ✅ shipped (v2.9.3)
 
-#### 7. Markdown rendering for assistant messages
+**Today:** `UserInputOverlayScreen` on `user_input.requested`; `set_user_input_handler` + response queue in `runner.py`.
 
-Fenced code blocks, headers, lists. Use Textual markdown widget or lightweight custom renderer.
-
-#### 8. User message styling
-
-Background block or left border so user vs agent is obvious at a glance (Codex `user_message_style`).
-
-#### 9. Better approval UX
-
-Modal or highlighted composer banner:
-
-```
-Approve: run_command pytest -q?  [y] yes  [n] no  [a] turn  [A] session
-```
-
-Not buried in scrollback. Show patch preview in approval prompt before `y` for `apply_patch`.
-
-#### 10. Live streaming assistant text
-
-Render markdown incrementally where safe; don't wait for turn end to finalize assistant block.
-
-#### 11. Turn boundary markers
-
-Subtle divider or inline `[done]` summary: model, cost, files changed — like Codex end-of-turn feedback.
-
-#### 12. Expand/collapse long tool output
-
-Codex truncates with "show more"; avoid dumping everything or collapsing to one line.
+**Still open:** Notes per option (Codex request_user_input pane). **Done:** `questions[]` batch + overlay progress `(2/3)`.
 
 ---
 
-### P2 — Parity with Codex power features
+#### Snapshot breadth
 
-#### 13. Transcript overlay (`Ctrl+T`)
+**Today:** 8 golden files under `tests/golden/tui/`.
 
-Full scrollback pager for long sessions.
+**Add:** narrow terminal (60 cols), approval footer, streaming partial table, grouped read tools, compaction cell, plan cell — follow Codex insta culture at string-golden level first.
 
-#### 14. Resize reflow
+**Files:** `tests/test_tui_cells.py`, `tests/golden/tui/`.
 
-Re-wrap transcript on terminal width change (Codex `transcript_reflow.rs`).
+---
 
-#### 15. Visual regression tests
+### P2 — Nice parity / docs
 
-Snapshot tests for TUI cells: user message, patch, exec, approval, streaming. Codex uses `insta`; Textual may need custom capture or golden-string tests.
+| Item | Notes |
+|------|--------|
+| `docs/tui-styles.md` | ✅ Shipped — semantic colors for TUI |
+| `docs/tui-composer.md` | Paste burst + Enter/newline state machine (mirror Codex `tui-chat-composer.md`) |
+| Reasoning cell polish | Collapsed-by-default, shimmer optional |
+| MCP/web/read distinct icons | Header differentiation in `cells/tool.py` |
+| Frame budget | Throttle status row ticks if needed on slow terminals |
 
-#### 16. MCP / web search / read_file cells
+### Shipped (do not re-open)
 
-Distinct icons/headers per tool type.
-
-#### 17. Composer enhancements
-
-`@file` / `@skill` mentions, multiline input, Shift+Enter, mode chip in input border.
-
-#### 18. Reasoning display
-
-If model returns reasoning (already captured in loop), optionally show collapsed "thinking" block.
-
-#### 19. Parallel tool round UX
-
-When multiple read tools run in parallel, show grouped progress — not N identical lines.
-
-#### 20. Error / sandbox cells
-
-Red styled blocks for `sandbox.blocked`, failed tools (Codex red = failures per `styles.md`).
+- ~~Flat RichLog~~ → typed cells + incremental controller
+- ~~Full-log `clear()` on every event~~
+- ~~Missing `tool.completed` / plan / compaction handlers~~
+- ~~No patch cells~~ → `PatchCell` + `diff_render`
+- ~~No working row~~ → `status_row.py`
+- ~~No `fileChange` on resume~~ → in `thread_transcript_from_store`
+- ~~No Ctrl+T overlay~~ → `overlay.py`
+- ~~No golden tests~~ → `tests/golden/tui/` (extend, don’t restart)
 
 ---
 
 ## Suggested implementation phases
 
-### Phase UI-1 (P0 core) — ~1 week
+### Phase UI-1 — Core transcript ✅ (done)
 
-1. Introduce typed `TranscriptCell` model (replace flat `TranscriptLine` for new content)
-2. Incremental render (no full `clear()` on delta)
-3. Working status row
-4. Wire `tool.completed` + basic exec/patch cells
-5. `fileChange` in store loader
+Typed cells, incremental sync, tool/patch/exec cells, working row, event wiring, store loader, basic golden tests.
 
-**Exit criteria:** A turn with patch + shell command shows structured cells live and after resume.
+**Exit criteria:** Patch + shell command readable live and after resume — **met**.
 
-### Phase UI-2 (P1 polish) — ~1 week
+### Phase UI-2 — Polish (in progress)
 
-1. User message styling
-2. Approval banner in composer
-3. Markdown for assistant messages (code fences minimum)
-4. Turn-end summary line
+1. Diff v2 (syntax)
+2. Approval banner v2 + patch preview lock
+3. Truncation policy for exec output
+4. Expand `docs/tui-styles.md`
 
-**Exit criteria:** Side-by-side with Codex on a demo turn, transcript is readable without squinting.
+**Exit criteria:** Side-by-side demo turn with Codex — diffs and approvals feel equally trustworthy.
 
-### Phase UI-3 (P2 power) — ~2 weeks
+### Phase UI-3 — Power (queued)
 
-1. Transcript overlay
-2. Resize reflow
-3. Snapshot/golden tests
-4. Composer `@` mentions + mode chip
+1. Resize reflow policy + tests
+2. Composer `@file` / `@skill` popups
+3. `request_user_input` TUI overlay
+4. Golden suite expansion (narrow width, footer modes)
 
-**Exit criteria:** Long session usable; visual regressions caught in CI.
+**Exit criteria:** Long session + resize + structured mid-turn questions without leaving TUI.
 
 ---
 
@@ -286,10 +253,11 @@ Red styled blocks for `sandbox.blocked`, failed tools (Codex red = failures per 
 
 | Quick (days) | Big (weeks) |
 |--------------|-------------|
-| Wire missing events + `fileChange` in store loader | Full `HistoryCell` architecture |
-| Working spinner row | Markdown + syntax-highlighted diffs |
-| Incremental RichLog append | Transcript overlay + reflow |
-| Patch summary from `diff_preview` event data | Visual regression suite |
+| More golden files (plan, compaction, narrow width) | Diff v2 with syntax + theme backgrounds |
+| `docs/tui-styles.md` from existing theme tokens | Full resize scrollback reflow |
+| Truncation header on exec cells | Composer mentions v2 popups |
+| Approval footer locks input on pending | `request_user_input` overlay |
+| Pygments only inside patch hunks | Buffer-level insta tests (if ever move off Textual) |
 
 ---
 
@@ -305,6 +273,8 @@ Red styled blocks for `sandbox.blocked`, failed tools (Codex red = failures per 
 | Footer / composer | `codex-rs/tui/src/bottom_pane/` |
 | Transcript reflow | `codex-rs/tui/src/transcript_reflow.rs` |
 | Style guide | `codex-rs/tui/styles.md` |
+| Composer state machine (narrative) | `docs/tui-chat-composer.md` (in Codex repo) |
+| Output truncation | `codex-rs/utils/output-truncation/` |
 
 ---
 
@@ -314,26 +284,42 @@ Red styled blocks for `sandbox.blocked`, failed tools (Codex red = failures per 
 |---------|------|
 | Main TUI app | `agent/tui/app.py` |
 | Event → state | `agent/tui/view_model.py` |
+| Transcript sync | `agent/tui/transcript_controller.py`, `transcript_pane.py` |
+| Streaming holdback | `agent/tui/streaming_controller.py`, `table_holdback.py` |
+| Cell types | `agent/tui/cells/base.py` |
+| Cell render | `agent/tui/cells/*.py` |
+| Diff | `agent/tui/diff_render.py`, `diff_palette.py`, `cells/patch.py` |
+| Composer draft | `agent/tui/composer_draft.py` |
+| Markdown | `agent/tui/markdown_render.py` |
+| Status / footer | `agent/tui/status_row.py`, `footer_state.py`, `context_usage.py` |
+| Composer | `agent/tui/composer.py`, `composer_chrome.py`, `paste_burst.py` |
+| Overlay | `agent/tui/overlay.py` |
+| Resize reflow | `agent/tui/transcript_reflow.py` |
+| Mentions | `agent/tui/mention_popup.py` (bindings + `composer_draft.py`) |
+| Output truncation | `agent/tui/output_truncation.py` |
 | Theme | `agent/tui/theme.py` |
 | Slash commands | `agent/tui/slash_commands.py` |
-| Context footer | `agent/tui/context_usage.py` |
 | Turn runner | `agent/tui/runner.py` |
+| Approval / user input overlays | `agent/tui/approval_overlay.py`, `user_input_overlay.py` |
+| Golden tests | `tests/test_tui_cells.py`, `tests/golden/tui/` |
 | CLI diff preview (reuse) | `agent/output_handler.py` |
 | Event payloads | `agent/events.py` |
-| Thread store items | `agent/models.py`, thread JSONL schema |
+| Thread store items | `agent/models.py` |
 
 ---
 
 ## Out of scope (for this plan)
 
 - ChatGPT OAuth / Plus billing
-- Cloud agent UI
-- Desktop app wrapper
+- Cloud agent UI / desktop wrapper
+- Voice / realtime TUI / multi-agent swarms UI
 - Matching Codex enterprise features (see [enterprise.md](enterprise.md))
 
 ---
 
 ## Related docs
 
-- [codex-comparison.md](codex-comparison.md) — parity matrix (update when UI items ship)
+- [codex-comparison.md](codex-comparison.md) — harness parity matrix + **TUI-only tier**
+- [action-log.md](action-log.md) — debugging worker/UI freezes
+- [context.md](context.md) — footer context meter
 - [roadmap/README.md](roadmap/README.md) — harness phases 24–28

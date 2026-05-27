@@ -1,3 +1,5 @@
-Approve: run_command: pytest -q?   yes   no   turn   session
+Approve  run_command: pytest -q
+Keys: y yes | n no | a all this turn | A all session (no Enter needed)
+  Patch preview:
      1 +def fix(): pass
      2 -return None

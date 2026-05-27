@@ -49,6 +49,11 @@ class TuiState:
     pending_approval_summary: str | None = None
     pending_approval_diff: str | None = None
     pending_approval_tool: str | None = None
+    pending_user_input_question: str | None = None
+    pending_user_input_options: list[str] = field(default_factory=list)
+    pending_user_input_allow_free_text: bool = True
+    pending_user_input_index: int = 1
+    pending_user_input_total: int = 1
     assistant_buffer: str = ""
     pending_tool_cell_id: str | None = None
     pending_read_batch: list[str] = field(default_factory=list)
@@ -331,6 +336,28 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.pending_approval_tool = tool_name
         state.pending_approval_diff = data.get("diff_preview")
         _set_working(state, "Waiting for your approval…")
+
+    elif etype == "user_input.requested":
+        state.pending_user_input_question = data.get("question", "")
+        opts = data.get("options") or []
+        state.pending_user_input_options = [str(o) for o in opts] if isinstance(opts, list) else []
+        state.pending_user_input_allow_free_text = bool(data.get("allow_free_text", True))
+        state.pending_user_input_index = int(data.get("question_index", 1) or 1)
+        state.pending_user_input_total = int(data.get("question_total", 1) or 1)
+        _set_working(state, "Waiting for your answer…")
+
+    elif etype == "user.input":
+        q = data.get("question", "")
+        a = data.get("answer", "")
+        sel = data.get("selected_option")
+        label = f"[cyan]You answered[/cyan]  {a}"
+        if sel and sel != a:
+            label += f" [dim]({sel})[/dim]"
+        state.transcript.append(SystemCell(text=f"{label}\n[dim]Q: {q}[/dim]"))
+        state.pending_user_input_question = None
+        state.pending_user_input_options = []
+        state.pending_user_input_index = 1
+        state.pending_user_input_total = 1
 
     elif etype == "sandbox.blocked":
         state.transcript.append(

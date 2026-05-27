@@ -85,11 +85,18 @@ class OutputHandler:
             status = event.data.get("status", "ok")
             self._stderr.print(f"[dim][tool done][/dim] {name}: {status}")
             if name == "apply_patch":
-                from agent.tui.diff_render import format_diff_lines
+                from agent.tui.diff_render import format_diff_lines, infer_path_from_diff
 
                 diff = event.data.get("diff_preview") or event.data.get("summary")
                 if diff:
-                    for ln in format_diff_lines(str(diff), max_lines=8):
+                    path = infer_path_from_diff(str(diff))
+                    for ln in format_diff_lines(
+                        str(diff),
+                        max_lines=12,
+                        line_numbers=True,
+                        source_path=path,
+                        hunk_aware=True,
+                    ):
                         self._stderr.print(f"[dim]  {ln}[/dim]")
         elif event.type == "approval.requested":
             summary = event.data.get("summary", "")

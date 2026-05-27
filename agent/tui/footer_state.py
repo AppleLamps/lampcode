@@ -10,6 +10,7 @@ class FooterMode(str, Enum):
     IDLE = "idle"
     WORKING = "working"
     APPROVAL = "approval"
+    USER_INPUT = "user_input"
     LOADING = "loading"
     REVERSE_SEARCH = "reverse_search"
     RESUME_PREVIEW = "resume_preview"
@@ -67,6 +68,14 @@ def format_footer(props: FooterProps) -> str:
         ]
         return _join_hints(hints, max_width=w)
 
+    if props.mode == FooterMode.USER_INPUT:
+        hints = [
+            "[cyan bold]answer required[/cyan bold]",
+            "[dim]Enter[/dim] submit",
+            "[dim]Esc[/dim] cancel",
+        ]
+        return _join_hints(hints, max_width=w)
+
     if props.mode == FooterMode.WORKING:
         hints = [
             "[#58a6ff bold]⠋ working[/]",
@@ -110,6 +119,7 @@ def format_footer(props: FooterProps) -> str:
 def resolve_footer_mode(
     *,
     pending_approval: bool,
+    pending_user_input: bool = False,
     turn_running: bool,
     threads_loading: bool,
     screen_mode: str,
@@ -118,6 +128,8 @@ def resolve_footer_mode(
 ) -> FooterMode:
     if reverse_search_active:
         return FooterMode.REVERSE_SEARCH
+    if pending_user_input:
+        return FooterMode.USER_INPUT
     if pending_approval:
         return FooterMode.APPROVAL
     if turn_running:
