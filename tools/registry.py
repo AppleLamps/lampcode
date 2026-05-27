@@ -8,9 +8,15 @@ from agent.config import Config
 from agent.execution.docker_files import docker_file_tools_enabled
 from agent.mcp.manager import McpManager
 from agent.models import CommandExecutionItem, FileChangeItem, McpToolCallItem, WebSearchItem
+from tools.code_intel import (
+    file_imports,
+    file_outline,
+    find_references,
+    go_to_definition,
+)
 from tools.files import read_file, write_file
 from tools.git_commit import GIT_COMMIT_SCHEMA, git_commit
-from tools.patch import apply_patch
+from tools.patch import APPLY_PATCH_PARAM_DESCRIPTION, apply_patch
 from tools.search import search_repo
 from tools.shell import run_command
 from tools.web_search import format_results_for_model, web_search
@@ -254,6 +260,43 @@ def dispatch_tool(
         )
         return DispatchResult(text=result)
 
+    if name == "file_outline":
+        return DispatchResult(
+            text=file_outline(config.cwd, arguments.get("path", "")),
+        )
+
+    if name == "go_to_definition":
+        return DispatchResult(
+            text=go_to_definition(
+                config.cwd,
+                arguments.get("symbol", ""),
+                path_hint=arguments.get("path_hint"),
+                max_results=int(arguments.get("max_results", 15)),
+            ),
+        )
+
+    if name == "find_references":
+        return DispatchResult(
+            text=find_references(
+                config.cwd,
+                arguments.get("symbol", ""),
+                path=arguments.get("path"),
+                glob=arguments.get("glob"),
+                max_results=int(arguments.get("max_results", 80)),
+                max_output=config.max_tool_output,
+                prefer_ripgrep=config.prefer_ripgrep,
+            ),
+        )
+
+    if name == "file_imports":
+        return DispatchResult(
+            text=file_imports(
+                config.cwd,
+                arguments.get("path", ""),
+                max_results=int(arguments.get("max_results", 40)),
+            ),
+        )
+
     return DispatchResult(text=TOOL_REGISTRY[name].handler(**arguments))
 
 
@@ -354,9 +397,7 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                     "properties": {
                         "patch": {
                             "type": "string",
-                            "description": (
-                                "Patch text using *** Begin Patch / *** End Patch format."
-                            ),
+                            "description": APPLY_PATCH_PARAM_DESCRIPTION,
                         },
                     },
                     "required": ["patch"],
@@ -401,6 +442,109 @@ TOOL_REGISTRY: dict[str, ToolSpec] = {
                         "glob": {"type": "string"},
                     },
                     "required": ["pattern"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "file_outline": ToolSpec(
+        name="file_outline",
+        requires_approval=False,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "file_outline",
+                "description": (
+                    "List functions, classes, and top-level symbols in a file "
+                    "(Python AST; regex for JS/TS/Go/Rust)."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {
+                            "type": "string",
+                            "description": "File path relative to project root.",
+                        },
+                    },
+                    "required": ["path"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "go_to_definition": ToolSpec(
+        name="go_to_definition",
+        requires_approval=False,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "go_to_definition",
+                "description": (
+                    "Find where a symbol is defined. Optional path_hint searches that file first "
+                    "(AST for Python), then the repo."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "path_hint": {
+                            "type": "string",
+                            "description": "Optional file likely containing the definition.",
+                        },
+                        "max_results": {"type": "integer"},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "find_references": ToolSpec(
+        name="find_references",
+        requires_approval=False,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "find_references",
+                "description": (
+                    "Find references to a symbol across the repo (word-boundary search). "
+                    "Prefer over raw search_repo for identifiers."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "symbol": {"type": "string"},
+                        "path": {
+                            "type": "string",
+                            "description": "Optional subdirectory or file to limit search.",
+                        },
+                        "glob": {"type": "string"},
+                        "max_results": {"type": "integer"},
+                    },
+                    "required": ["symbol"],
+                },
+            },
+        },
+        handler=lambda **_: "",
+    ),
+    "file_imports": ToolSpec(
+        name="file_imports",
+        requires_approval=False,
+        schema={
+            "type": "function",
+            "function": {
+                "name": "file_imports",
+                "description": (
+                    "List imports in a file and resolve project-local targets when possible "
+                    "(Python/JS/TS). Use before refactors to see dependency impact."
+                ),
+                "parameters": {
+                    "type": "object",
+                    "properties": {
+                        "path": {"type": "string"},
+                        "max_results": {"type": "integer"},
+                    },
+                    "required": ["path"],
                 },
             },
         },

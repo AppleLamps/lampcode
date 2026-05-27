@@ -12,8 +12,9 @@ _SPINNER_FRAMES = ("⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇"
 class StatusRow:
     """Manages the #status_row widget during agent turns."""
 
-    def __init__(self, widget: Static) -> None:
+    def __init__(self, widget: Static, *, reduced_motion: bool = False) -> None:
         self._widget = widget
+        self._reduced_motion = reduced_motion
         self._running = False
         self._start_time: float = 0.0
         self._frame = 0
@@ -41,7 +42,7 @@ class StatusRow:
             self._widget.display = False
 
     def tick(self) -> None:
-        if self._running:
+        if self._running and not self._reduced_motion:
             self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
             self._update()
 
@@ -49,6 +50,12 @@ class StatusRow:
         if not self._running:
             return
         elapsed = int(time.monotonic() - self._start_time)
+        if self._reduced_motion:
+            self._widget.update(
+                f"[#58a6ff]●[/] [bold]Working[/bold] "
+                f"[dim]({elapsed}s · Ctrl+C to interrupt)[/dim]"
+            )
+            return
         spinner = _SPINNER_FRAMES[self._frame]
         self._widget.update(
             f"[#58a6ff]{spinner}[/] [bold]Working[/bold] "
@@ -58,7 +65,8 @@ class StatusRow:
     def bind_interval(self, app) -> None:
         """Start spinner ticks when the first turn runs (not at app mount)."""
         if self._interval is None:
-            self._interval = app.set_interval(0.1, self.tick)
+            tick_sec = 1.0 if self._reduced_motion else 0.1
+            self._interval = app.set_interval(tick_sec, self.tick)
             if hasattr(app, "_watch_turn_worker"):
                 app.set_interval(1.0, app._watch_turn_worker)
 

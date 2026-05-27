@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from textual.containers import Vertical, VerticalScroll
 
+from agent.tui.cell_render_signature import cell_render_signature
 from agent.tui.cells.base import (
     AssistantMessageCell,
     PatchCell,
@@ -24,10 +25,12 @@ class TranscriptController:
         self._stream = AssistantStreamController()
         self._live_text: str = ""
         self.follow_tail: bool = True
+        self._rendered_signatures: dict[str, tuple] = {}
 
     def reset(self) -> None:
         self._stream.reset()
         self._live_text = ""
+        self._rendered_signatures.clear()
 
     def clear_live_stream_state(self) -> None:
         self._stream.reset()
@@ -46,6 +49,22 @@ class TranscriptController:
             child.remove()
         self.sync(cells_col, state, scroll=scroll)
 
+    def sync_stream_only(
+        self,
+        cells_col: Vertical,
+        state: TuiState,
+        *,
+        scroll: VerticalScroll | None = None,
+        force_scroll: bool = False,
+    ) -> None:
+        """Update only the live assistant stream (O(1) per delta)."""
+        pane = TranscriptPane(cells_col, scroll)
+        self._sync_live_stream(pane, state)
+        pane.scroll_to_end(
+            force=force_scroll or self.follow_tail,
+            follow=self.follow_tail,
+        )
+
     def sync(
         self,
         cells_col: Vertical,
@@ -54,14 +73,33 @@ class TranscriptController:
         scroll: VerticalScroll | None = None,
         force_scroll: bool = False,
     ) -> None:
-        """Incremental sync: mount new cells, update in place, live assistant stream."""
+        """Incremental sync: new/changed cells only, plus live assistant stream."""
         pane = TranscriptPane(cells_col, scroll)
         active_ids = {cell.cell_id for cell in state.transcript}
         pane.prune_orphans(active_ids)
+        self._rendered_signatures = {
+            cid: sig
+            for cid, sig in self._rendered_signatures.items()
+            if cid in active_ids
+        }
         for cell in state.transcript:
-            pane.mount_cell(cell)
+            self._sync_cell_if_dirty(pane, cell)
         self._sync_live_stream(pane, state)
-        pane.scroll_to_end(force=force_scroll or self.follow_tail, follow=self.follow_tail)
+        pane.scroll_to_end(
+            force=force_scroll or self.follow_tail,
+            follow=self.follow_tail,
+        )
+
+    def _sync_cell_if_dirty(self, pane: TranscriptPane, cell) -> None:
+        signature = cell_render_signature(cell)
+        cell_id = cell.cell_id
+        if (
+            self._rendered_signatures.get(cell_id) == signature
+            and pane.has_cell_widget(cell_id)
+        ):
+            return
+        pane.mount_cell(cell)
+        self._rendered_signatures[cell_id] = signature
 
     def finalize_assistant_stream(
         self,
@@ -97,6 +135,7 @@ class TranscriptController:
                 return
             if combined.startswith(last_text) and len(combined) > len(last_text):
                 last.text = combined
+                self._rendered_signatures.pop(last.cell_id, None)
                 return
             if last_text.startswith(combined):
                 return
@@ -120,17 +159,21 @@ class TranscriptController:
             if cell_dom_id(cell.cell_id) != widget_dom_id:
                 continue
             if isinstance(
-                cell, (ToolExecCell, PatchCell, PlanCell, ToolGroupCell, ReasoningCell)
+                cell,
+                (ToolExecCell, PatchCell, PlanCell, ToolGroupCell, ReasoningCell),
             ):
                 cell.expanded = not cell.expanded
+                self._rendered_signatures.pop(cell.cell_id, None)
                 return True
         return False
 
     def toggle_last_expandable(self, state: TuiState) -> str | None:
         for cell in reversed(state.transcript):
             if isinstance(
-                cell, (ToolExecCell, PatchCell, PlanCell, ToolGroupCell, ReasoningCell)
+                cell,
+                (ToolExecCell, PatchCell, PlanCell, ToolGroupCell, ReasoningCell),
             ):
                 cell.expanded = not cell.expanded
+                self._rendered_signatures.pop(cell.cell_id, None)
                 return cell.cell_id
         return None

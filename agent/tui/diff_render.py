@@ -10,6 +10,10 @@ from agent.tui.diff_palette import (
     DiffPalette,
     format_diff_row,
 )
+from agent.tui.terminal_syntax_theme import (
+    syntax_highlight_enabled,
+    syntax_theme_for_palette,
+)
 
 _CHANGE_PREFIX = {"add": "A", "update": "M", "delete": "D", "overwrite": "M"}
 
@@ -62,6 +66,9 @@ def reset_diff_palette_cache() -> None:
     """For tests."""
     global _PALETTE
     _PALETTE = None
+    from agent.tui.terminal_syntax_theme import reset_syntax_theme_cache
+
+    reset_syntax_theme_cache()
 
 
 def format_file_summary(files: list[tuple[str, str]]) -> str:
@@ -122,6 +129,8 @@ def _line_kind(line: str) -> DiffLineKind:
 def _highlight_hunk_content_lines(
     hunk_lines: list[str],
     lexer: str,
+    *,
+    palette: DiffPalette,
 ) -> dict[int, str]:
     indexed: list[tuple[int, str, str]] = []
     for idx, line in enumerate(hunk_lines):
@@ -133,7 +142,7 @@ def _highlight_hunk_content_lines(
         return {}
 
     block = "\n".join(body for _, _, body in indexed)
-    highlighted = _highlight_code(block, lexer)
+    highlighted = _highlight_code(block, lexer, palette=palette)
     if not highlighted:
         return {}
 
@@ -144,8 +153,16 @@ def _highlight_hunk_content_lines(
     return {idx: markup for (idx, _, _), markup in zip(indexed, split, strict=False)}
 
 
-def _highlight_code(body: str, lexer: str | None) -> str | None:
+def _highlight_code(
+    body: str,
+    lexer: str | None,
+    *,
+    palette: DiffPalette | None = None,
+) -> str | None:
     if not lexer or not body.strip():
+        return None
+    pal = palette or _palette()
+    if not syntax_highlight_enabled(pal):
         return None
     try:
         from rich.syntax import Syntax
@@ -155,7 +172,7 @@ def _highlight_code(body: str, lexer: str | None) -> str | None:
         text = Syntax(
             body,
             lexer,
-            theme="monokai",
+            theme=syntax_theme_for_palette(pal),
             line_numbers=False,
             word_wrap=False,
             background_color="default",
@@ -195,7 +212,7 @@ def _render_physical_line(
     ):
         body = hunk_markup[local_idx]
     elif syntax_highlight and lexer and body.strip():
-        inner = _highlight_code(body, lexer)
+        inner = _highlight_code(body, lexer, palette=palette)
         if inner:
             body = inner
 
@@ -255,7 +272,7 @@ def format_diff_lines(
             result.append("")
         hunk_markup = None
         if hunk_aware and syntax_highlight and lexer:
-            hunk_markup = _highlight_hunk_content_lines(hunk, lexer)
+            hunk_markup = _highlight_hunk_content_lines(hunk, lexer, palette=pal)
         for local_idx, line in enumerate(hunk):
             result.append(
                 _render_physical_line(

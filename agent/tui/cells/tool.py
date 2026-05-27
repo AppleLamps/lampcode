@@ -9,6 +9,10 @@ _TOOL_ICONS: dict[str, str] = {
     "write_file": "✎",
     "search_repo": "🔍",
     "web_search": "🌐",
+    "file_outline": "◎",
+    "go_to_definition": "⇢",
+    "find_references": "⇄",
+    "file_imports": "⤴",
 }
 
 

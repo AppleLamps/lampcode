@@ -75,6 +75,13 @@ class TranscriptPane:
             if wid and wid not in expected:
                 child.remove()
 
+    def has_cell_widget(self, cell_id: str) -> bool:
+        try:
+            self._cells.query_one(f"#{cell_dom_id(cell_id)}", Static)
+            return True
+        except NoMatches:
+            return False
+
     def mount_cell(self, cell: TranscriptCell) -> Static:
         wid = cell_dom_id(cell.cell_id)
         markup = render_cell(cell)

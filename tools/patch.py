@@ -5,6 +5,49 @@ from pathlib import Path
 
 from agent.paths import resolve_path_within_cwd
 
+# Shared with agent/context.py (system prompt) and tools/registry.py (tool schema).
+APPLY_PATCH_FORMAT_DOCS = """
+## apply_patch format
+
+Wrap every patch in `*** Begin Patch` … `*** End Patch`.
+
+File operations (one or more per patch):
+- `*** Update File: <path>` — edit an existing file using hunks
+- `*** Add File: <path>` — create a file; body lines start with `+`
+- `*** Delete File: <path>` — remove a file
+
+**Update hunks:** Start each hunk with a line containing only `@@`. Within a hunk:
+- Leading space + text = unchanged context (must match the file when present)
+- `-` + text = line to remove
+- `+` + text = line to add
+
+Example (update):
+```
+*** Begin Patch
+*** Update File: calc.py
+@@
+-    return a - b
++    return a + b
+*** End Patch
+```
+
+Example (add):
+```
+*** Begin Patch
+*** Add File: new.py
++line1
+*** End Patch
+```
+
+Do not use unified-diff `---` / `+++` headers inside this DSL. Use `read_file` when context lines are needed to locate the edit.
+""".strip()
+
+APPLY_PATCH_PARAM_DESCRIPTION = (
+    "Patch between *** Begin Patch and *** End Patch. "
+    "Use *** Update File:/*** Add File:/*** Delete File: headers. "
+    "Updates: separate hunks with @@; prefix lines with space (context), - (remove), or + (add)."
+)
+
 
 @dataclass
 class PatchResult:

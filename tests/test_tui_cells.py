@@ -24,6 +24,32 @@ from agent.tui.diff_render import strip_rich_markup
 
 _GOLDEN_DIR = Path(__file__).parent / "golden" / "tui"
 
+_PATCH_DIFF_SAMPLE = (
+    "--- a/src/auth.py\n"
+    "+++ b/src/auth.py\n"
+    "@@ -10,7 +10,8 @@ def authenticate(user):\n"
+    "     check_rate_limit(user)\n"
+    "-    return None\n"
+    "+    return validate(user)\n"
+)
+
+_ASSISTANT_MARKDOWN_SAMPLE = """# Fix authentication
+
+**Plan:** tighten session checks.
+
+1. Update `authenticate`
+2. Add regression tests
+
+| Check | Status |
+|-------|--------|
+| login | pass |
+
+```python
+def authenticate(user):
+    return validate(user)
+```
+"""
+
 
 def _plain_at_width(cell, width: int = 200) -> str:
     rendered = render_cell(cell)
@@ -298,6 +324,54 @@ def test_golden_patch_cell_narrow() -> None:
                 status="completed",
             ),
             width=52,
+        ),
+    )
+
+
+def test_golden_patch_cell_width_80() -> None:
+    _assert_golden(
+        "patch_cell_80.txt",
+        _plain_at_width(
+            PatchCell(
+                files=[FileChange(path="src/auth.py", change_type="update")],
+                diff_text=_PATCH_DIFF_SAMPLE,
+                status="completed",
+            ),
+            width=80,
+        ),
+    )
+
+
+def test_golden_patch_cell_width_120() -> None:
+    _assert_golden(
+        "patch_cell_120.txt",
+        _plain_at_width(
+            PatchCell(
+                files=[FileChange(path="src/auth.py", change_type="update")],
+                diff_text=_PATCH_DIFF_SAMPLE,
+                status="completed",
+            ),
+            width=120,
+        ),
+    )
+
+
+def test_golden_assistant_markdown_width_80() -> None:
+    _assert_golden(
+        "assistant_markdown_80.txt",
+        _plain_at_width(
+            AssistantMessageCell(text=_ASSISTANT_MARKDOWN_SAMPLE),
+            width=80,
+        ),
+    )
+
+
+def test_golden_assistant_markdown_width_120() -> None:
+    _assert_golden(
+        "assistant_markdown_120.txt",
+        _plain_at_width(
+            AssistantMessageCell(text=_ASSISTANT_MARKDOWN_SAMPLE),
+            width=120,
         ),
     )
 

@@ -51,10 +51,20 @@ Minimal project config (`agent init` creates this):
 
 ```toml
 model = "minimax/minimax-m2.7"
-approval_mode = "auto"
+approval_mode = "interactive"   # scaffold default; use "auto" for unattended runs
 max_tool_rounds = 25
 sandbox_mode = "workspace-write"
 exec_policy = "untrusted"
+
+[memories]
+enabled = true
+path = ".agent-cli/memories.json"
+
+[web_search]
+enabled = true
+
+[harness]
+post_patch_test = "pytest -q"   # auto-detected when possible (npm/cargo/go)
 
 [openrouter]
 primary_model = "minimax/minimax-m2.7"
@@ -216,7 +226,9 @@ agent tools list --cwd examples/demo-project
 
 Built-in: `read_file`, `search_repo`, `apply_patch`, `write_file`, `run_command`, optional `web_search`, `git_commit` (git repos only), MCP tools.
 
-Project rules: `AGENTS.md` / `agents.md` / `.agents/AGENTS.md` injected into the system prompt.
+**Code navigation** (read-only, parallel-friendly): `file_outline`, `go_to_definition`, `find_references`, `file_imports` — see [docs/code-navigation.md](docs/code-navigation.md).
+
+Project rules: `AGENTS.md` / `agents.md` / `.agents/AGENTS.md` injected into the system prompt. **Project context** (README, manifests, CI snippet, repo map) is auto-injected separately.
 
 ## Interactive TUI
 
@@ -295,10 +307,11 @@ pytest   # 1000+ tests
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.9.4 (TUI diff palette + composer drafts), v2.9.2 (TUI launch + polish), and v2.9.1 (OpenRouter API parity).
+See [CHANGELOG.md](CHANGELOG.md) for v2.10.0 (code navigation + project context + harness prompts), v2.9.4 (TUI diff palette + composer drafts), and earlier releases.
 
 ## Further reading
 
+- [Code navigation](docs/code-navigation.md) — outline, definitions, references, imports, project context
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
 - [TUI UX plan](docs/ui-plan.md) — Codex-style transcript roadmap
 - [TUI style guide](docs/tui-styles.md) — diff colors, approval chrome, composer behavior

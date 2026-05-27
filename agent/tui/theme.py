@@ -170,7 +170,7 @@ Screen {
 }
 
 #bottom_chrome.approval-active #mode_badge {
-    border-color: #e3b341;
+    border: solid #e3b341;
     color: #e3b341;
 }
 

@@ -232,6 +232,10 @@ def run_turn(
     effective_allowed = allowed_tools
     if plan_mode:
         effective_allowed = list(config.plan_mode.allowed_tools)
+        from agent.plan_mode import build_plan_system_append
+
+        plan_append = build_plan_system_append(effective_allowed)
+        system_prompt_append = f"{system_prompt_append}\n{plan_append}".strip()
     memories_text = (
         inject_memories_prompt(user_text, config.memories, cwd=str(config.cwd))
         if config.memories.enabled

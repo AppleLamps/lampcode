@@ -225,7 +225,15 @@ class MemoriesSettings:
 @dataclass
 class PlanModeSettings:
     allowed_tools: list[str] = field(
-        default_factory=lambda: ["read_file", "search_repo", "request_user_input"]
+        default_factory=lambda: [
+            "read_file",
+            "search_repo",
+            "file_outline",
+            "go_to_definition",
+            "find_references",
+            "file_imports",
+            "request_user_input",
+        ]
     )
 
 

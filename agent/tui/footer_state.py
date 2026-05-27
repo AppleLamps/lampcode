@@ -27,6 +27,7 @@ class FooterProps:
     reverse_search_match: str = ""
     resume_preview: str = ""
     terminal_width: int = 120
+    reduced_motion: bool = False
 
 
 def _join_hints(parts: list[str], *, max_width: int) -> str:
@@ -77,8 +78,13 @@ def format_footer(props: FooterProps) -> str:
         return _join_hints(hints, max_width=w)
 
     if props.mode == FooterMode.WORKING:
+        working_label = (
+            "[#58a6ff bold]working[/]"
+            if props.reduced_motion
+            else "[#58a6ff bold]⠋ working[/]"
+        )
         hints = [
-            "[#58a6ff bold]⠋ working[/]",
+            working_label,
             "[dim]Ctrl+C[/dim] cancel",
             "[dim]/model /plan[/dim]",
             "[dim]Ctrl+T[/dim] transcript",
@@ -87,6 +93,8 @@ def format_footer(props: FooterProps) -> str:
         return _join_hints(hints, max_width=w)
 
     if props.mode == FooterMode.LOADING:
+        if props.reduced_motion:
+            return "[dim]Loading sessions…[/dim]"
         return "[dim]⠋ Loading sessions…[/dim]"
 
     if props.mode == FooterMode.RESUME_PREVIEW:

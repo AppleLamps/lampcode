@@ -1,0 +1,6 @@
+┌─
+▸ parallel reads (3)  ▾ expanded
+  └ read_file  src/a.py
+  └ read_file  src/b.py
+  └ read_file  src/c.py
+└─

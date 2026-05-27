@@ -8,7 +8,7 @@ Living plan for making `agent tui` feel like Codex during an actual coding turn.
 
 ---
 
-## Current state (as of v2.9.4)
+## Current state (as of v2.10.0)
 
 ### Architecture
 
@@ -23,7 +23,8 @@ AgentEvent (worker thread)
 
 | Component | Path | Role |
 |-----------|------|------|
-| Main app | `agent/tui/app.py` | Layout, worker thread, bindings (`Ctrl+T`, `e` expand, `Ctrl+C` cancel) |
+| Main app | `agent/tui/app.py` | Thin shell: compose, bindings, shared state |
+| Mode controllers | `agent/tui/controllers/` | `HomeController`, `ChatController`, `TurnController` |
 | Event bridge | `agent/tui/messages.py` | `AgentEventMessage` — worker must not `call_from_thread` per event |
 | View model | `agent/tui/view_model.py` | `AgentEvent` → cells; `thread_transcript_from_store()` for resume |
 | Transcript sync | `agent/tui/transcript_controller.py` | Incremental mount/update; `rebuild_all()` on session load / expand |
@@ -119,7 +120,7 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 | Patch/diff readability | ✅ Syntax + theme-aware backgrounds | ⚠️ Colored unified diff + line numbers; **no syntax highlight** |
 | Exec output truncation | ✅ Token/byte policy + “show more” | ⚠️ Expand/collapse on long cells; not full Codex truncation policy |
 | Working / busy state | ✅ Status widget + motion modes | ✅ `status_row.py` + `WorkingCell` |
-| Markdown in replies | ✅ Full pipeline | ⚠️ `markdown_render.py` (common MD); not full Codex markdown stack |
+| Markdown in replies | ✅ Full pipeline | ✅ Rich `Markdown` + terminal `code_theme`; golden at 80/120 cols |
 | Context in footer | ✅ | ✅ `context_usage.py` |
 | Approvals discoverable | ✅ Dedicated overlay | ⚠️ Banner + transcript cell; composer still shared with chat input |
 | Plan / compaction cells | ✅ | ✅ Live + resume from store |
@@ -128,11 +129,13 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 | Resize / reflow | ✅ Rebuilds terminal scrollback from cells | ⚠️ Widget resync on resize; **no Codex-style scrollback repair** |
 | Composer `@` mentions | ✅ Popups + bindings | ✅ Popup + Tab/↑/↓ + draft bindings on reload (`.agent-cli/composer-drafts/`) |
 | `request_user_input` UI | ✅ Full bottom-pane overlay | ✅ Modal overlay (`user_input_overlay.py`) + handler queue |
-| Visual regression tests | ✅ insta @ buffer width | ⚠️ 8 golden text files; narrow width / footer not covered |
-| Frame rate / reduced motion | ✅ 120 FPS cap, shimmer, a11y | ❌ Textual defaults |
+| Visual regression tests | ✅ insta @ buffer width | ⚠️ ~25 string goldens (cells, footer modes, composer meta, streaming table); pilot turn flows |
+| Frame rate / reduced motion | ✅ 120 FPS cap, shimmer, a11y | ✅ `[tui] reduced_motion` / `AGENT_TUI_REDUCED_MOTION` (static status + footer) |
 | Product extras | Voice, multi-agent, rate-limit card | ❌ Out of scope unless prioritized |
 
 **Bottom line:** Structure and daily-turn UX are at Codex parity; remaining gaps are **syntect-level syntax theming**, **terminal scrollback repair on resize**, and **golden/regression breadth** — not missing cell types or composer mention drafts.
+
+**Streaming sync (v2.9.5):** `agent.delta` uses `sync_stream_only()` (live stream widget only); other events use signature-based dirty cell sync in `TranscriptController` + `cell_render_signature.py`.
 
 ---
 
@@ -140,13 +143,13 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 
 ### P0 — Highest perception impact
 
-#### Diff v2 (syntax + theme-aware hunks) — ✅ palette; ⚠️ syntax engine (v2.9.4)
+#### Diff v2 (syntax + theme-aware hunks) — ✅ palette + adaptive syntax (v2.9.5)
 
-**Today:** `diff_palette.py` (Codex `diff_render.rs` colors: truecolor `#213A2B` / `#4A221D`, light pastels, 256/16 fallbacks, `COLORFGBG` theme detect) + `diff_render.py` hunk separators, per-hunk Rich `Syntax` highlight, `infer_path_from_diff`.
+**Today:** `diff_palette.py` (Codex colors) + `terminal_syntax_theme.py` maps dark/light/16-color terminals to `github-dark` / `github-light` / `ansi_*` for Rich Syntax; 16-color diffs skip in-hunk syntax to preserve contrast.
 
-**Still open:** Full Codex syntect/terminal palette quantization (we use Rich Syntax + monokai, not per-terminal theme tables).
+**Still open:** Full Codex syntect per-terminal quantization (Rust-side); we use Pygments via Rich.
 
-**Files:** `agent/tui/diff_palette.py`, `agent/tui/diff_render.py`, `agent/tui/cells/patch.py`.
+**Files:** `agent/tui/diff_palette.py`, `agent/tui/diff_render.py`, `agent/tui/terminal_syntax_theme.py`, `agent/tui/cells/patch.py`.
 
 ---
 
@@ -188,13 +191,13 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 
 ---
 
-#### Snapshot breadth
+#### Snapshot breadth — ✅ expanded (v2.9.5)
 
-**Today:** 8 golden files under `tests/golden/tui/`.
+**Today:** `tests/golden/tui/` — cell renders (incl. 80/120 cols), footer modes (approval/working/user-input/reverse-search), composer meta (idle/working/approval), streaming table holdback/complete, grouped reads; `tests/test_tui_turn_flow.py` pilot flows.
 
-**Add:** narrow terminal (60 cols), approval footer, streaming partial table, grouped read tools, compaction cell, plan cell — follow Codex insta culture at string-golden level first.
+**Still open:** Codex-scale hundreds of insta snapshots; scrollback repair without full widget rebuild.
 
-**Files:** `tests/test_tui_cells.py`, `tests/golden/tui/`.
+**Files:** `tests/test_tui_cells.py`, `tests/test_tui_goldens_chrome.py`, `tests/test_tui_turn_flow.py`, `tests/golden/tui/`.
 
 ---
 
@@ -205,8 +208,9 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 | `docs/tui-styles.md` | ✅ Shipped — semantic colors for TUI |
 | `docs/tui-composer.md` | Paste burst + Enter/newline state machine (mirror Codex `tui-chat-composer.md`) |
 | Reasoning cell polish | Collapsed-by-default, shimmer optional |
-| MCP/web/read distinct icons | Header differentiation in `cells/tool.py` |
+| MCP/web/read distinct icons | ✅ Code-nav icons in `cells/tool.py` (`◎` `⇢` `⇄` `⤴`) |
 | Frame budget | Throttle status row ticks if needed on slow terminals |
+| Reduced motion | ✅ `[tui] reduced_motion` or `AGENT_TUI_REDUCED_MOTION=1` — static status row + footer |
 
 ### Shipped (do not re-open)
 
@@ -282,7 +286,8 @@ Typed cells, incremental sync, tool/patch/exec cells, working row, event wiring,
 
 | Concern | Path |
 |---------|------|
-| Main TUI app | `agent/tui/app.py` |
+| Main TUI app (shell) | `agent/tui/app.py` |
+| Mode controllers | `agent/tui/controllers/home_controller.py`, `chat_controller.py`, `turn_controller.py` |
 | Event → state | `agent/tui/view_model.py` |
 | Transcript sync | `agent/tui/transcript_controller.py`, `transcript_pane.py` |
 | Streaming holdback | `agent/tui/streaming_controller.py`, `table_holdback.py` |

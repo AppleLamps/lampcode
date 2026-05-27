@@ -34,6 +34,15 @@ pip install agent-cli[tokenizer]
 
 For a plain-text trace of each turn (tools, compaction, errors), see [action-log.md](action-log.md).
 
+## System prompt context
+
+Beyond token metering, the model receives:
+
+- **Project rules** — `AGENTS.md` (and variants) via `load_project_rules()`
+- **Project context** — README, build manifests, CI snippet, test layout, repo map (`agent/project_context.py`) — see [code-navigation.md](code-navigation.md)
+- **Skills** — selected `SKILL.md` bodies when keywords/@mentions match
+- **Memories** — opt-in scored inject from `[memories]` when enabled
+
 ## Artifacts
 
 Large tool outputs spill to `.agent-cli/artifacts/<thread_id>/<item_id>.txt`. Thread items keep a short inline summary plus the artifact path.

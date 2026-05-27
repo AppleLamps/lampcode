@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.9.4 (TUI diff palette + composer drafts).  
+**Current release:** v2.10.0 (code navigation tools + project context + harness prompts).  
 **Daily loop:** `agent` → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later
 
 **Read this doc in two layers:**
@@ -21,6 +21,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | `run` / non-interactive loop | ✅ | `agent run` |
 | Interactive session | ✅ | `agent` (default TUI) + `agent repl` + `agent tui` |
 | Core tools: shell + patch + read/list | ✅ | `run_command`, `apply_patch`, `read_file`, `search_repo`, `write_file` |
+| Code navigation (lightweight) | ✅ | `file_outline`, `go_to_definition`, `find_references`, `file_imports` — not full LSP ([code-navigation.md](code-navigation.md)) |
 | Approvals (exec/patch) | ✅ | `y` / `n` / `a` (turn) / `A` (session); `--auto-approve` |
 | Sandbox modes | ✅ | `read-only` / `workspace-write` / `danger-full-access` (heuristic + optional kernel — see Tier 2) |
 | Thread persistence + resume | ✅ | JSONL threads; `--resume-last`, `--resume` picker, REPL `/resume` (Phase 25) |
@@ -61,7 +62,11 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **Unified exec (PTY + stdin)** | ✅ | Opt-in `[shell] enabled`; stdin + output caps + yield_ms (Phase 24); pipe-persistent Windows + Unix |
 | **Background / dev servers** | ⚠️ partial | `run_command` + `background: true` detaches locally; Codex also yields from PTY without a separate flag |
 | **Orchestration (approval cache + sandbox retry)** | ✅ | Session approval cache; one sandbox escalation retry after approved denial (Phase 24) |
-| **Parallel read-only tools** | ✅ | `read_file` / `search_repo` / `web_search` batched per round (Phase 24) |
+| **Parallel read-only tools** | ✅ | `read_file` / `search_repo` / `web_search` / code-nav tools batched per round (Phase 24 + v2.10) |
+| **apply_patch DSL in prompt** | ✅ | System prompt + tool schema document `*** Begin Patch` format (v2.10) |
+| **Plan mode prompt tag** | ✅ | `<proposed_plan>` append when `--plan` (v2.10) |
+| **Rich project context** | ✅ | README + manifests + CI + repo map via `project_context.py` (v2.10) |
+| **Safer init defaults** | ✅ | `interactive` approvals, memories + web search on, auto `post_patch_test` (v2.10) |
 | **`request_user_input` tool** | ✅ | Structured mid-turn questions; REPL/TTY + `AGENT_INPUT_ANSWERS` (Phase 22) |
 | **`request_permissions` (mid-turn escalation)** | ✅ | Approval gate + session flags; auto-deny in read-only review (Phase 22) |
 | **Thread fork** | ✅ | `agent threads fork`; `forked_from` in JSONL |
@@ -70,7 +75,7 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | **`agent apply` (last patch)** | ✅ | `agent apply --dry-run` from thread history (Phase 25) |
 | **Ephemeral runs** | ✅ | `agent run --ephemeral`; REPL `/ephemeral on` (Phase 25) |
 | **Turn notifications** | ✅ | `[notify] command` on completion (Phase 25) |
-| **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `<proposed_plan>` + `plan.proposed` event (Phase 28) |
+| **Plan / collaboration modes** | ✅ | `agent run --plan`, REPL `/plan`; `<proposed_plan>` in system prompt + `plan.proposed` event (Phase 28, prompt v2.10) |
 | **Run replay bundle** | ✅ | `agent runs export --format bundle`; redacted config (Phase 28) |
 | **Doctor JSON** | ✅ | `agent doctor --json` harness diagnostics (Phase 28) |
 | **REPL `@skill` tab completion** | ✅ | readline completer when available (Phase 21) |
@@ -166,15 +171,15 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 
 | Capability | Status | Gap vs Codex |
 |------------|--------|----------------|
-| Patch diff v2 (syntax + theme backgrounds) | ✅ palette; ⚠️ syntax | `diff_palette.py` Codex truecolor/256/16 + hunk Rich Syntax; not full syntect tables |
+| Patch diff v2 (syntax + theme backgrounds) | ✅ | `diff_palette.py` + `terminal_syntax_theme.py` (github-dark/light, ansi_*); 16-color skips in-hunk syntax |
 | Exec output truncation policy | ✅ | `output_truncation.py` — byte middle-trunc + `Total output lines: N` |
 | Approval UX (dedicated overlay / locked composer) | ✅ | `ApprovalOverlayScreen` + composer blocked while modals open; inline y/n/a/A when banner only |
 | Resize reflow | ⚠️ partial | Debounced `rebuild_all` on width change; Codex also repairs terminal scrollback |
 | Composer `@file` / `@skill` popups | ✅ | Mention popup + Tab/↑/↓; draft bindings in `.agent-cli/composer-drafts/` |
 | `request_user_input` TUI overlay | ✅ | Modal overlay + `questions[]` batch wizard `(n/N)` |
-| Markdown depth | ⚠️ partial | `markdown_render.py`; not full Codex markdown pipeline |
-| Snapshot / regression breadth | ⚠️ partial | 8 golden strings; Codex has hundreds of insta buffer snapshots |
-| Frame budget / reduced motion | ❌ | Codex `FrameRateLimiter`, motion modes |
+| Markdown depth | ✅ Rich MD | `markdown_render.py` → Rich `Markdown` + adaptive code themes; goldens at 80/120 cols |
+| Snapshot / regression breadth | ⚠️ partial | ~25 string goldens + pilot turn flows; Codex has hundreds of insta snapshots |
+| Frame budget / reduced motion | ⚠️ partial | `[tui] reduced_motion` / env disables spinner; no FPS cap yet |
 | Rate-limit / account status strip | ❌ | Codex status card (ChatGPT quotas); we show OpenRouter cost/model in footer instead |
 
 ### TUI Tier C — Skip unless product pivots

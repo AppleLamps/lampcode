@@ -11,6 +11,10 @@ def test_registry_has_core_tools() -> None:
         "write_file",
         "apply_patch",
         "search_repo",
+        "file_outline",
+        "go_to_definition",
+        "find_references",
+        "file_imports",
         "request_user_input",
         "request_permissions",
     }

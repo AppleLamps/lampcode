@@ -1,0 +1,10 @@
+┌─
+✎ apply_patch (completed)
+  M src/auth.py
+     1 --- a/src/auth.py
+     2 +++ b/src/auth.py
+     3 @@ -10,7 +10,8 @@ def authenticate(user):
+     4      check_rate_limit(user)
+     5 -    return None
+     6 +    return validate(user)
+└─

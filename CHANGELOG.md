@@ -1,5 +1,27 @@
 # Changelog
 
+## [2.10.0] — 2026-05-27
+
+Harness intelligence, safer defaults, and TUI performance polish.
+
+### Added
+
+- **Code navigation tools:** `file_outline`, `go_to_definition`, `find_references`, `file_imports` (`tools/code_intel.py`); documented in [docs/code-navigation.md](docs/code-navigation.md).
+- **Richer project context:** `agent/project_context.py` — README, build manifests, CI snippet, test layout, shallow repo map, skill names (~12 KB budget).
+- **System prompt:** `apply_patch` DSL examples, plan-mode `<proposed_plan>` append, code-navigation guidance; Windows `search_repo` fix.
+- **Init scaffold:** `approval_mode = interactive`, memories + web search enabled, auto `post_patch_test` detection.
+- **TUI:** `cell_render_signature.py` + `sync_stream_only()` for incremental transcript updates; `controllers/` (home/chat/turn); `terminal_syntax_theme.py`; expanded golden tests and `[tui] reduced_motion`.
+
+### Changed
+
+- **Plan mode** default tools include code-navigation read tools.
+- **Parallel read tools** batch includes `file_outline`, `go_to_definition`, `find_references`, `file_imports`.
+- **Assistant markdown** via Rich `Markdown` + adaptive syntax themes (`markdown_render.py`).
+
+### Tests
+
+- `tests/test_code_intel.py`, `tests/test_project_context.py`, `tests/test_prompt_docs.py`, `tests/test_tui_controllers.py`, `tests/test_tui_goldens_chrome.py`, `tests/test_tui_turn_flow.py`, `tests/test_transcript_incremental_sync.py`, and related suites.
+
 ## [2.9.4] — 2026-05-26
 
 TUI polish: Codex-level diff colors, composer drafts, modal input lock.

@@ -15,17 +15,26 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.9.4 — TUI diff palette + composer drafts)
+## Current state (v2.10.0 — code navigation + project context)
 
-Phase 28 shipped as **v2.9.0**; OpenRouter improvements as **v2.9.1**; TUI launch as **v2.9.2**; diff palette + mention drafts as **v2.9.4**. Before doing new work, verify:
+Phase 28 shipped as **v2.9.0**; TUI polish through **v2.9.4**; harness intelligence as **v2.10.0**. Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q               # expect ~1145 passed, 2 skipped, 0 failed
-git log --oneline -15   # expect v2.9.4 after v2.9.2 TUI launch
+pytest -q
+git log --oneline -5    # expect v2.10.0 at HEAD
 ```
 
-**Bottom line:** You're on **v2.9.4**. Next TUI polish: syntect-level diff syntax, golden snapshot breadth — **[ui-plan.md](ui-plan.md)** Tier B. Enterprise / Phase 29+ otherwise.
+**Bottom line:** You're on **v2.10.0**. Built-in `file_outline` / `go_to_definition` / `find_references` / `file_imports`; richer `load_project_context()`; safer `agent init` defaults. Full LSP still optional (MCP). TUI backlog: **[ui-plan.md](ui-plan.md)** Tier B.
+
+### v2.10.0 — Code navigation + project context
+
+- **`tools/code_intel.py`:** `file_outline`, `go_to_definition`, `find_references`, `file_imports`
+- **`agent/project_context.py`:** README, manifests, CI, test layout, repo map, skills list
+- **Prompts:** `apply_patch` DSL, plan `<proposed_plan>`, `CODE_NAVIGATION_DOCS`; Windows `search_repo`
+- **Scaffold:** interactive approvals, memories + web search on, auto `post_patch_test`
+- **TUI:** incremental transcript sync, controllers split, syntax themes, goldens — see [ui-plan.md](ui-plan.md)
+- **Docs:** [code-navigation.md](code-navigation.md)
 
 ### v2.9.4 — TUI diff palette + composer drafts
 
@@ -88,7 +97,7 @@ git log --oneline -15   # expect v2.9.4 after v2.9.2 TUI launch
 - **Unified exec v1:** stdin, output caps, yield_ms, session meta on shell tool
 - **Approval cache + sandbox retry:** skip duplicate prompts; one escalation retry after approved denial
 - **Compaction v2:** AGENTS-aware summaries, compact hooks, multi-compact warning
-- **Parallel read-only tools:** batched `read_file` / `search_repo` / `web_search` per round
+- **Parallel read-only tools:** batched `read_file` / `search_repo` / `web_search` / code-nav tools per round
 
 ### Phase 23 (v2.4.0)
 

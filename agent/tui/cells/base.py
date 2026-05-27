@@ -107,6 +107,7 @@ class ToolGroupCell(TranscriptCell):
     tool_names: list[str] = field(default_factory=list)
     args_briefs: list[str] = field(default_factory=list)
     status: Literal["running", "completed"] = "running"
+    expanded: bool = False
 
 
 @dataclass

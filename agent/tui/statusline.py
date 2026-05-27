@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import subprocess
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -42,6 +43,46 @@ DEFAULT_STATUSLINE: list[StatuslineItem] = [
 @dataclass
 class StatuslineSettings:
     items: list[StatuslineItem] = field(default_factory=lambda: list(DEFAULT_STATUSLINE))
+
+
+@dataclass
+class TuiSettings:
+    """Chrome preferences loaded from `[tui]` in config.toml."""
+
+    statusline: StatuslineSettings = field(default_factory=StatuslineSettings)
+    reduced_motion: bool = False
+
+
+def _env_reduced_motion() -> bool:
+    return os.environ.get("AGENT_TUI_REDUCED_MOTION", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def load_tui_settings(path: Path | None = None) -> TuiSettings:
+    """Load statusline items and accessibility flags from config + env."""
+    statusline = load_statusline_settings(path)
+    reduced_motion = _env_reduced_motion()
+    from agent.paths import default_config_path
+
+    config_path = path or default_config_path()
+    if config_path.is_file():
+        try:
+            import tomllib
+        except ModuleNotFoundError:
+            return TuiSettings(statusline=statusline, reduced_motion=reduced_motion)
+        try:
+            with config_path.open("rb") as f:
+                data = tomllib.load(f)
+            tui = data.get("tui", {})
+            if isinstance(tui, dict) and bool(tui.get("reduced_motion", False)):
+                reduced_motion = True
+        except (OSError, ValueError):
+            pass
+    return TuiSettings(statusline=statusline, reduced_motion=reduced_motion)
 
 
 def load_statusline_settings(path: Path | None = None) -> StatuslineSettings:

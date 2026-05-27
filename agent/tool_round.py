@@ -3,7 +3,17 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor
 from typing import Callable
 
-PARALLEL_READ_TOOLS = frozenset({"read_file", "search_repo", "web_search"})
+PARALLEL_READ_TOOLS = frozenset(
+    {
+        "read_file",
+        "search_repo",
+        "web_search",
+        "file_outline",
+        "go_to_definition",
+        "find_references",
+        "file_imports",
+    }
+)
 
 
 def can_parallelize_tool_round(tool_names: list[str]) -> bool:

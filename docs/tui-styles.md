@@ -26,8 +26,14 @@ Semantic colors for the interactive transcript. Matches the spirit of Codex `cod
 - `+` additions: green gutter; truecolor dark bg `#213A2B` (Codex), light `#dafbe1`
 - `-` deletions: red gutter; truecolor dark bg `#4A221D` (Codex), light `#ffebe9`
 - 256-color and 16-color fallbacks follow `agent/tui/diff_palette.py` (Codex `diff_render.rs` indices)
+- In-hunk syntax: `terminal_syntax_theme.py` → `github-dark` / `github-light` (truecolor/256); disabled on 16-color terminals
 - `@@` / `+++` / `---`: cyan
 - Context: dim or syntax-highlighted body
+
+## Assistant markdown
+
+- Rendered with Rich `Markdown` (`markdown_render.py` → `assistant_markdown_renderable`)
+- Code fences use the same terminal-adaptive Pygments theme as patch diffs
 
 ## Avoid
 

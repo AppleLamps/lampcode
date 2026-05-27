@@ -1,0 +1,20 @@
+
+Agent
+
+                               Fix authentication                               
+
+Plan: tighten session checks.                                                   
+
+ 1 Update authenticate                                                          
+ 2 Add regression tests                                                         
+
+               
+ Check  Status 
+ ───────────── 
+ login  pass   
+               
+
+                                                                                
+ def authenticate(user):                                                        
+     return validate(user)                                                      
+                                                                                

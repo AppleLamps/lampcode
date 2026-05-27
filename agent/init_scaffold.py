@@ -2,12 +2,13 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from agent.project_context import detect_post_patch_test
 
 INIT_CONFIG_TEMPLATE = """profile = "interactive"
 model = "minimax/minimax-m2.7"
 model_profile = "deep"
 sandbox_mode = "workspace-write"
-approval_mode = "auto"
+approval_mode = "interactive"
 
 [project]
 name = "{name}"
@@ -22,9 +23,17 @@ model = "minimax/minimax-m2.7"
 max_tool_rounds = 40
 reasoning_effort = "high"
 
-# [memories]
-# enabled = false
-# max_inject = 5
+[memories]
+enabled = true
+max_inject = 5
+path = ".agent-cli/memories.json"
+
+[web_search]
+enabled = true
+provider = "duckduckgo"
+
+[harness]
+{harness_lines}
 
 # [action_log]
 # enabled = true
@@ -44,15 +53,13 @@ reasoning_effort = "high"
 # [budget]
 # max_cost_usd_per_turn = 0.50
 
-# [harness]
-# post_patch_test = "pytest -q"
-
 # [shell]
 # enabled = false
 # backend = "auto"  # auto | pipes | conpty | pty
 
 # [tui]
 # statusline = ["model", "mode", "sandbox", "approvals", "context", "branch", "session"]
+# reduced_motion = true   # static working indicator (or set AGENT_TUI_REDUCED_MOTION=1)
 
 # [.agent-cli/exec-policy.toml]
 # [allow_prefixes]
@@ -61,20 +68,36 @@ reasoning_effort = "high"
 
 AGENTS_MD_TEMPLATE = """# Project rules
 
-- Run tests after code changes.
-- Prefer small, focused commits with clear messages.
-- Keep changes minimal and explain tradeoffs in commit messages.
+- Run tests after code changes. When `[harness] post_patch_test` is set, tests run automatically after successful `apply_patch` calls.
+- Prefer `apply_patch` for edits; use `file_outline`, `go_to_definition`, `find_references`, and `file_imports` before refactors (plus `read_file` / `search_repo` as needed).
+- Prefer small, focused commits with clear messages when using git.
+- Keep changes minimal and explain tradeoffs in the final summary.
 """
 
 SKILL_TEMPLATE = """---
 name: project-default
-description: Default project skill scaffold
+description: Default project skill scaffold — testing, layout, and conventions for this repo
 ---
 
 # Project skill
 
-Add project-specific guidance here.
+Document how to run tests, where main packages live, and any project-specific conventions.
 """
+
+
+def _harness_config_lines(cwd: Path) -> str:
+    cmd = detect_post_patch_test(cwd)
+    if cmd:
+        escaped = cmd.replace("\\", "\\\\").replace('"', '\\"')
+        return f'post_patch_test = "{escaped}"'
+    return '# post_patch_test = "pytest -q"  # auto-detected when tests/ or package.json test script exists'
+
+
+def _build_init_config(name: str, cwd: Path) -> str:
+    return INIT_CONFIG_TEMPLATE.format(
+        name=name,
+        harness_lines=_harness_config_lines(cwd),
+    )
 
 
 def ensure_workspace_ready(cwd: Path) -> None:
@@ -95,7 +118,7 @@ def init_project(cwd: Path, *, name: str | None = None, yes: bool = False) -> di
 
     config_path = base / "config.toml"
     if not config_path.is_file() or yes:
-        config_path.write_text(INIT_CONFIG_TEMPLATE.format(name=project_name), encoding="utf-8")
+        config_path.write_text(_build_init_config(project_name, cwd), encoding="utf-8")
         result["config"] = str(config_path)
     elif config_path.is_file():
         result["skipped_config"] = "config.toml exists — use --yes to overwrite"

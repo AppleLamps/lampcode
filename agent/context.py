@@ -18,8 +18,22 @@ from agent.models import (
     UserMessageItem,
     WebSearchItem,
 )
+from agent.project_context import load_project_context
 from agent.skills.discovery import Skill
 from agent.skills.injector import build_skills_prompt
+from tools.patch import APPLY_PATCH_FORMAT_DOCS
+
+CODE_NAVIGATION_DOCS = """
+## Code navigation
+
+Built-in navigation (not a full IDE LSP, but faster than guessing):
+- `file_outline` — symbols in one file (Python AST; regex for JS/TS/Go/Rust)
+- `go_to_definition` — where a symbol is defined (`path_hint` optional)
+- `find_references` — usages across the repo (word-boundary search)
+- `file_imports` — imports in a file with resolved project-local paths
+
+Use these before large refactors. Fall back to `search_repo` for arbitrary patterns. When unsure which test covers a symbol, `find_references` in `tests/` or use `file_outline` on likely test files.
+""".strip()
 
 
 @dataclass
@@ -54,24 +68,6 @@ def load_project_rules(cwd: Path, max_chars: int = 8000) -> tuple[str, ProjectRu
     if len(content) > max_chars:
         content = content[: max_chars - 20] + "\n[... truncated ...]"
     return f"# Project Rules\n\n{content}\n", rules
-
-
-def load_project_context(cwd: Path, max_bytes: int = 8192) -> str:
-    parts: list[str] = []
-    for name in ("README.md",):
-        path = cwd / name
-        if path.is_file():
-            try:
-                content = path.read_text(encoding="utf-8", errors="replace")
-                if len(content.encode("utf-8")) > max_bytes:
-                    content = content.encode("utf-8")[:max_bytes].decode(
-                        "utf-8", errors="ignore"
-                    )
-                    content += "\n\n[... truncated ...]"
-                parts.append(f"## {name}\n\n{content}")
-            except OSError:
-                continue
-    return "\n\n".join(parts)
 
 
 def build_system_prompt(
@@ -119,7 +115,7 @@ Command execution: **local host** — shell commands run on your machine in the 
             prompt += """
 Shell on Windows: commands run via `cmd.exe` (not bash). Do **not** use Unix-only tools (`find`, `ls`, `grep`, `head`, `/dev/null`, `2>/dev/null`).
 Use Windows equivalents first, e.g. `dir`, `dir /s /b *.html`, PowerShell `Get-ChildItem -Recurse -Filter *.html`, `type` or `Get-Content` for files.
-Prefer `read_file` / `search_files` over shell when exploring the repo.
+Prefer `read_file` / `search_repo` over shell when exploring the repo.
 **Dev servers** (`python -m http.server`, `npm run dev`, `vite`, etc.) are started **in the background automatically** so you can keep talking to the user. Tell them the URL/port. Use `background: false` only if you must wait for a one-shot command that looks like a server.
 """
     if repo_root:
@@ -136,6 +132,7 @@ Rules:
 - Run relevant tests or commands to verify your work when appropriate.
 - Dev servers start in the background by default (`[execution] auto_background_servers`, default true).
 """
+    prompt += f"\n\n{APPLY_PATCH_FORMAT_DOCS}\n\n{CODE_NAVIGATION_DOCS}\n"
     if repo_root:
         prompt += """
 - When using git, prefer small commits with clear messages via the `git_commit` tool after completing a logical unit of work.
