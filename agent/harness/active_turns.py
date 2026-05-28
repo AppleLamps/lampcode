@@ -41,11 +41,16 @@ class ActiveTurnRegistry:
     def cancel(self, thread_id: str) -> bool:
         with self._lock:
             token = self._tokens.get(thread_id)
-            turn_id = self._turn_ids.get(thread_id)
         if token is None:
             return False
         token.cancel()
         return True
+
+    def cancel_all(self) -> None:
+        with self._lock:
+            tokens = list(self._tokens.values())
+        for token in tokens:
+            token.cancel()
 
     def active_turn_id(self, thread_id: str) -> str | None:
         with self._lock:

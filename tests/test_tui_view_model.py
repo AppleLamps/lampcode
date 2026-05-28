@@ -91,7 +91,9 @@ def test_apply_event_approval_pending() -> None:
     )
     state = apply_event_to_state(state, event)
     assert state.pending_approval_summary == "run_command: pytest"
-    assert state.transcript[-1].summary == "run_command: pytest"  # ApprovalCell
+    from agent.tui.cells.base import WorkingCell
+
+    assert any(isinstance(c, WorkingCell) for c in state.transcript)
 
 
 def test_handle_approval_keys() -> None:

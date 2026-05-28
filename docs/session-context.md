@@ -158,6 +158,10 @@ git log --oneline -5    # expect v2.11.0 at HEAD
 - **Memories v1** — `agent memories list|add|delete|search`; opt-in `[memories] enabled`
 - **`agent runs export --format jsonl-v2`** — normalized replay from run logs
 
+**Module layout (refactor)**
+- Turn execution: `agent/loop.py` (facade) → `agent/turn/lifecycle.py`, `agent/turn/state_machine.py`, `agent/turn/tools/*`
+- Serve HTTP: `agent/serve/server.py` (routing shell) → `agent/serve/context.py`, `agent/serve/http_response.py`, `agent/serve/routes/*`, `agent/serve/router.py`
+
 **Docs**
 - `README.md` — solo-first quickstart
 - `docs/openrouter.md` — OpenRouter config, fallbacks, reasoning, structured output

@@ -181,10 +181,18 @@ def test_spawn_worker_loop_wait_workers(tmp_path: Path) -> None:
         with self._lock:
             self._running = max(0, self._running - 1)
 
+    results_iter = iter(stream_results)
+
+    def _next_completion(*args, **kwargs):
+        try:
+            return next(results_iter)
+        except StopIteration:
+            return CompletionResult("Done.", [], "stop", None)
+
     with patch("agent.loop.OpenRouterClient") as mock_client_cls, patch.object(
         WorkerRegistry, "_run_worker", fast_worker
     ):
-        mock_client_cls.return_value.stream_completion.side_effect = stream_results
+        mock_client_cls.return_value.stream_completion.side_effect = _next_completion
         run_turn(parent, "parallel", config, store, events=EventEmitter())
 
     loaded = store.load_thread(parent.id)

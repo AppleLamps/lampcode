@@ -66,6 +66,9 @@ class WorkerRecord:
 class WorkerRegistry:
     """In-memory worker queue and registry for a supervisor turn."""
 
+    _instances: set[WorkerRegistry] = set()
+    _instances_lock = threading.Lock()
+
     def __init__(
         self,
         config: Config,
@@ -96,7 +99,43 @@ class WorkerRegistry:
         self.spawn_count = 0
         self._fail_fast_triggered = False
         self._program_id: str | None = None
+        self._started_threads: list[threading.Thread] = []
         self._load_persisted_dag()
+        with WorkerRegistry._instances_lock:
+            WorkerRegistry._instances.add(self)
+
+    @classmethod
+    def reset_for_tests(cls, timeout: float = 5.0) -> None:
+        from agent.harness.active_turns import ActiveTurnRegistry
+
+        with cls._instances_lock:
+            instances = list(cls._instances)
+
+        active = ActiveTurnRegistry.global_registry()
+        for inst in instances:
+            with inst._lock:
+                inst._pending_queue.clear()
+                inst._fail_fast_triggered = True
+                worker_thread_ids = [
+                    rec.worker_thread_id
+                    for rec in inst._workers.values()
+                    if rec.worker_thread_id
+                ]
+            if inst._parent_thread is not None:
+                active.cancel(inst._parent_thread.id)
+            for thread_id in worker_thread_ids:
+                active.cancel(thread_id)
+
+        deadline = time.monotonic() + timeout
+        for inst in instances:
+            for thread in list(inst._started_threads):
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    break
+                thread.join(timeout=remaining)
+
+        with cls._instances_lock:
+            cls._instances.clear()
 
     @property
     def program_id(self) -> str | None:
@@ -637,6 +676,7 @@ class WorkerRegistry:
                     args=(parent_thread, turn_id, worker_id),
                     daemon=True,
                 )
+                self._started_threads.append(t)
                 t.start()
 
     def _deps_ready(self, worker_id: str) -> bool:

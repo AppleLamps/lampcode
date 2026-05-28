@@ -143,7 +143,8 @@ def _measure_baseline(
         return 0
     if ctx_settings.baseline_mode == "fixed":
         return max(0, ctx_settings.baseline_tokens)
-    rules_path = config.cwd / "AGENTS.md"
+    cwd = Path(config.cwd)
+    rules_path = cwd / "AGENTS.md"
     rules_mtime = str(rules_path.stat().st_mtime) if rules_path.is_file() else "0"
     cache_id = f"baseline:{config.cwd}:{config.model}:{rules_mtime}"
     if cache_id in _segment_cache:

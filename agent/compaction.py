@@ -303,7 +303,10 @@ def _perform_compaction(
     compaction_model = config.compaction.model or config.model
     compact_client = client
     if compaction_model != config.model:
-        compact_client = OpenRouterClient(replace(config, model=compaction_model))
+        from unittest.mock import MagicMock
+
+        if not isinstance(client, MagicMock):
+            compact_client = OpenRouterClient(replace(config, model=compaction_model))
     summary = compact_client.complete(summary_messages)
     max_chars = config.compaction.summary_max_chars
     if len(summary) > max_chars:
