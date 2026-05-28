@@ -17,6 +17,7 @@ from agent.tui.context_usage import format_token_count
 
 StatuslineItem = Literal[
     "model",
+    "cost",
     "profile",
     "mode",
     "sandbox",
@@ -31,6 +32,7 @@ StatuslineItem = Literal[
 
 DEFAULT_STATUSLINE: list[StatuslineItem] = [
     "model",
+    "cost",
     "mode",
     "sandbox",
     "approvals",
@@ -111,6 +113,7 @@ def load_statusline_settings(path: Path | None = None) -> StatuslineSettings:
         return StatuslineSettings()
     allowed: set[str] = {
         "model",
+        "cost",
         "profile",
         "mode",
         "sandbox",
@@ -162,12 +165,15 @@ class StatuslineContext:
     memories_pending: int = 0
     routing_note: str = ""
     context_snapshot: Any = None
+    session_cost_usd: float | None = None
+    last_turn_fallback: bool = False
 
 
 def build_statusline_segments(ctx: StatuslineContext, settings: StatuslineSettings) -> list[str]:
     from agent.tui.formatting import (
         context_bar,
         format_approval_label,
+        format_cost_line,
         truncate_session_title,
     )
 
@@ -175,6 +181,13 @@ def build_statusline_segments(ctx: StatuslineContext, settings: StatuslineSettin
     for item in settings.items:
         if item == "model":
             segments.append(f"[dim]model[/dim] [bold]{ctx.model_short}[/bold]")
+        elif item == "cost":
+            cost_line = format_cost_line(
+                session_cost_usd=ctx.session_cost_usd,
+                last_turn_fallback=ctx.last_turn_fallback,
+            )
+            if cost_line:
+                segments.append(cost_line)
         elif item == "profile" and ctx.profile:
             segments.append(f"[dim]profile[/dim] [bold]{ctx.profile}[/bold]")
         elif item == "mode":

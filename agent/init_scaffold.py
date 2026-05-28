@@ -58,7 +58,7 @@ provider = "duckduckgo"
 # backend = "auto"  # auto | pipes | conpty | pty
 
 # [tui]
-# statusline = ["model", "mode", "sandbox", "approvals", "context", "branch", "session"]
+# statusline = ["model", "cost", "mode", "sandbox", "approvals", "context", "branch", "session"]
 # reduced_motion = true   # static working indicator (or set AGENT_TUI_REDUCED_MOTION=1)
 
 # [mcp_servers.lsp]

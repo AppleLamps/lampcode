@@ -41,6 +41,8 @@ def format_composer_meta(
     memories_pending: int = 0,
     statusline_settings=None,
     context_snapshot=None,
+    session_cost_usd: float | None = None,
+    last_turn_fallback: bool = False,
 ) -> str:
     from agent.context_meter import build_context_snapshot
 
@@ -60,6 +62,8 @@ def format_composer_meta(
         memories_pending=memories_pending,
         routing_note=routing_note,
         context_snapshot=snap,
+        session_cost_usd=session_cost_usd,
+        last_turn_fallback=last_turn_fallback,
     )
     line = format_statusline(ctx, settings)
     if turn_running:

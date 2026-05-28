@@ -77,6 +77,14 @@ def test_statusline_settings_from_toml(tmp_path: Path) -> None:
     assert settings.items == ["model", "branch", "cwd"]
 
 
+def test_statusline_cost_item_from_toml(tmp_path: Path) -> None:
+    cfg = tmp_path / ".agent-cli" / "config.toml"
+    cfg.parent.mkdir(parents=True)
+    cfg.write_text('[tui]\nstatusline = ["model", "cost", "context"]\n', encoding="utf-8")
+    settings = load_statusline_settings(cfg)
+    assert settings.items == ["model", "cost", "context"]
+
+
 def test_thread_resume_preview_last_user_message() -> None:
     thread = Thread(
         id="t1",

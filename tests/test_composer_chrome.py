@@ -7,9 +7,11 @@ from agent.models import Thread, Turn, UserMessageItem, utc_now_iso
 from agent.tui.composer_chrome import format_composer_meta, format_mode_badge
 from agent.tui.statusline import StatuslineSettings
 from agent.tui.footer_state import FooterMode, FooterProps, format_footer
+from agent.models import Usage
 from agent.tui.formatting import (
     context_bar,
     format_approval_label,
+    format_cost_line,
     truncate_session_title,
 )
 from agent.tui.context_usage import format_token_count
@@ -43,6 +45,46 @@ def test_format_composer_meta_includes_model_and_sandbox() -> None:
     assert "deep" in text
     assert "sandbox" in text
     assert "approvals" in text
+
+
+def test_format_cost_line_session_and_fallback() -> None:
+    assert format_cost_line(session_cost_usd=0.0424) is not None
+    assert "$0.0424" in format_cost_line(session_cost_usd=0.0424)  # type: ignore[arg-type]
+    fb = format_cost_line(session_cost_usd=0.01, last_turn_fallback=True)
+    assert fb is not None
+    assert "fallback" in fb
+    assert format_cost_line(session_cost_usd=0) is None
+    assert format_cost_line(session_cost_usd=None) is None
+
+
+def test_format_composer_meta_includes_session_cost() -> None:
+    config = Config(cwd=Path("."), model="openrouter/owl-alpha", openrouter_api_key="x")
+    thread = Thread(
+        id="t1",
+        cwd=".",
+        model="openrouter/owl-alpha",
+        created_at=utc_now_iso(),
+        turns=[
+            Turn(
+                items=[UserMessageItem(text="hi")],
+                usage=Usage(estimated_cost_usd=0.0123, fallback_used=True),
+            )
+        ],
+    )
+    settings = StatuslineSettings(items=["model", "cost", "mode"])
+    text = format_composer_meta(
+        config=config,
+        model_short="owl",
+        profile=None,
+        plan_mode=False,
+        thread=thread,
+        include_context=False,
+        statusline_settings=settings,
+        session_cost_usd=0.0123,
+        last_turn_fallback=True,
+    )
+    assert "$0.0123" in text
+    assert "fallback" in text
 
 
 def test_format_composer_meta_with_thread_turns() -> None:

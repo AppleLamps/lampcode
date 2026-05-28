@@ -37,6 +37,20 @@ def context_bar(*, used_pct: int, width: int = 12) -> str:
     return f"[{color}]{'█' * filled}[/][dim]{'░' * empty}[/]"
 
 
+def format_cost_line(
+    *,
+    session_cost_usd: float | None,
+    last_turn_fallback: bool = False,
+) -> str | None:
+    """Session/thread cost for the composer statusline (matches /cost and resume picker)."""
+    if session_cost_usd is None or session_cost_usd <= 0:
+        return None
+    line = f"[dim]cost[/dim] [bold]${session_cost_usd:.4f}[/bold]"
+    if last_turn_fallback:
+        line += " [yellow]fallback[/yellow]"
+    return line
+
+
 def format_context_line(snapshot) -> str:
     """Hybrid context display from ContextSnapshot."""
     bar = context_bar(used_pct=snapshot.used_pct)

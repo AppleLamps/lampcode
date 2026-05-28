@@ -303,6 +303,8 @@ class ChatController:
             format_mode_badge(plan_mode=self._app._slash.plan_mode)
         )
         context_snapshot = None
+        session_cost_usd: float | None = None
+        last_turn_fallback = False
         if include_context and self._app._thread is not None:
             from agent.context_meter import build_context_snapshot
 
@@ -311,6 +313,13 @@ class ChatController:
                 self._app._thread,
                 ctx_settings=self._app._config.context,
             )
+        if self._app._thread is not None:
+            summary = thread_cost_summary(self._app._thread)
+            raw_cost = summary.get("estimated_cost_usd")
+            if raw_cost:
+                session_cost_usd = float(raw_cost)
+            if self._app._thread.turns:
+                last_turn_fallback = bool(self._app._thread.turns[-1].usage.fallback_used)
         self._app.query_one("#composer_meta", Static).update(
             format_composer_meta(
                 config=self._app._config,
@@ -326,6 +335,8 @@ class ChatController:
                 memories_pending=self._app._memories_pending_count(),
                 statusline_settings=self._app._tui_settings.statusline,
                 context_snapshot=context_snapshot,
+                session_cost_usd=session_cost_usd,
+                last_turn_fallback=last_turn_fallback,
             )
         )
         footer_mode = resolve_footer_mode(

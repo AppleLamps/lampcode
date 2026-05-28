@@ -162,6 +162,7 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 | Turn summary (model, cost, stats) | ✅ | `TurnSummaryCell` |
 | Approvals in session | ✅ | `ApprovalCell` + composer banner; `y` / `n` / `a` / `A` |
 | Context % in footer | ✅ | `context_usage.py` |
+| Session cost in composer statusline | ✅ | `[tui] statusline` item `cost` (thread total; `/cost` for detail) |
 | Transcript overlay | ✅ | `Ctrl+T` → `overlay.py` |
 | Resume transcript from thread store | ✅ | `thread_transcript_from_store()` — messages, exec, patches, plan, MCP, web search, workers |
 | Non-blocking UI events | ✅ | `AgentEventMessage` / `post_message` (see [action-log.md](action-log.md)) |
@@ -202,7 +203,7 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 | Diff / exec visual fidelity | ⚠️ Partial (Pygments syntax; not full syntect) |
 | Composer / mid-turn structured UI | ✅ Good (popups, drafts, overlays) |
 | Terminal engineering (reflow, snapshots) | ⚠️ Partial (debounced rebuild; no scrollback repair) |
-| OpenRouter footer (model, cost, routing) | ✅ Differentiator vs Codex |
+| OpenRouter footer (model, cost, routing) | ✅ Differentiator vs Codex — `cost` + `model` on `#composer_meta` statusline |
 
 ---
 

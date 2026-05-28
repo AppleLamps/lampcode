@@ -32,6 +32,17 @@ pip install agent-cli[tokenizer]
 - TUI: `/context` or `/context --json`
 - CLI: `agent context [--thread ID] [--json]`
 
+## Composer statusline
+
+The line above the input (`#composer_meta`) is configurable via `[tui] statusline` in config. Defaults include **`cost`** (session/thread total from turn usage, same basis as `/cost`) and **`context`**. Omit `cost` if you prefer a shorter bar:
+
+```toml
+[tui]
+statusline = ["model", "mode", "sandbox", "approvals", "context", "session", "turns"]
+```
+
+Use `/statusline` in the TUI to list current items; `/cost` for a full thread cost breakdown.
+
 For a plain-text trace of each turn (tools, compaction, errors), see [action-log.md](action-log.md).
 
 ## System prompt context
