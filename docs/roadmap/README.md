@@ -12,11 +12,23 @@ Step-by-step implementation plans for solo harness work after **v2.7.0 / Phase 2
 | 27 | v2.8.0 | Terminal & embed | [phase-27.md](phase-27.md) |
 | 28 | v2.9.0 | Observability & trust | [phase-28.md](phase-28.md) |
 
+## After Phase 28 (current product)
+
+Phases 24–28 are **complete**. Subsequent solo releases:
+
+| Version | Theme |
+|---------|--------|
+| v2.9.1–2.9.4 | OpenRouter parity, default TUI, diff palette, composer drafts |
+| v2.10.0 | Code navigation, project context, TUI controllers + incremental sync |
+| v2.11.0 | LSP MCP (`agent lsp-mcp`), `ide_lsp` completions |
+
+**Current docs:** [docs/README.md](../README.md), [CHANGELOG.md](../../CHANGELOG.md), [session-context.md](../session-context.md).
+
 ## Before starting any phase
 
 ```powershell
 cd e:\lampcode\agent-cli
-pytest -q                    # must be green (953+ passed, 1 skipped)
+pytest -q                    # must be green (1200+ collected at v2.11.0)
 git log --oneline -5         # confirm prior phase release commit on master
 ```
 
@@ -30,7 +42,7 @@ git log --oneline -5         # confirm prior phase release commit on master
 
 ## TUI UX (post Phase 28)
 
-Transcript and cell rendering parity with Codex TUI — see **[ui-plan.md](../ui-plan.md)** (UI-1 / UI-2 / UI-3 phases).
+Transcript and cell rendering parity with Codex TUI — see **[ui-plan.md](../ui-plan.md)**. UI-1 / UI-2 / UI-3 are largely **shipped** (v2.9.3–v2.10.0); remaining work is scrollback repair and broader goldens.
 
 ## Codex reference map
 

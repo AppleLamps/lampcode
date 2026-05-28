@@ -40,6 +40,22 @@ Textual is included in core dependencies — `agent` opens the TUI by default.
 
 Precedence: CLI flags → env → `~/.agent-cli/config.toml` → `{cwd}/.agent-cli/config.toml` → defaults.
 
+Put **LSP MCP** in global config once so every repo gets `mcp__lsp__*` without re-scaffolding:
+
+```toml
+# ~/.agent-cli/config.toml
+[mcp_servers.lsp]
+command = "agent"
+args = ["lsp-mcp"]
+enabled = true
+require_approval = false
+
+[plan_mode]
+allow_mcp_servers = ["lsp"]
+```
+
+See [docs/code-navigation.md](docs/code-navigation.md) and the [docs index](docs/README.md).
+
 ```powershell
 $env:OPENROUTER_API_KEY = "sk-or-v1-..."
 agent config show
@@ -65,6 +81,8 @@ enabled = true
 
 [harness]
 post_patch_test = "pytest -q"   # auto-detected when possible (npm/cargo/go)
+# lsp_diagnostics_after_patch = true   # optional; needs [mcp_servers.lsp]
+# max_parallel_read_tools = 4
 
 [openrouter]
 primary_model = "minimax/minimax-m2.7"
@@ -226,7 +244,12 @@ agent tools list --cwd examples/demo-project
 
 Built-in: `read_file`, `search_repo`, `apply_patch`, `write_file`, `run_command`, optional `web_search`, `git_commit` (git repos only), MCP tools.
 
-**Code navigation** (read-only, parallel-friendly): `file_outline`, `go_to_definition`, `find_references`, `file_imports` — see [docs/code-navigation.md](docs/code-navigation.md).
+**Code navigation:** Built-in `file_outline`, `go_to_definition`, `find_references`, `file_imports`. **LSP (Pyright + TS):** enable `[mcp_servers.lsp]` and use `mcp__lsp__*` tools — see [docs/code-navigation.md](docs/code-navigation.md).
+
+```powershell
+pip install pyright
+agent lsp-mcp --workspace .   # standalone MCP server
+```
 
 Project rules: `AGENTS.md` / `agents.md` / `.agents/AGENTS.md` injected into the system prompt. **Project context** (README, manifests, CI snippet, repo map) is auto-injected separately.
 
@@ -302,16 +325,18 @@ python -m pytest -q
 ## Tests
 
 ```powershell
-pytest   # 1000+ tests
+pytest              # 1200+ tests
+pytest -m lsp       # optional; needs pyright + typescript-language-server on PATH
 ```
 
 ## Release notes
 
-See [CHANGELOG.md](CHANGELOG.md) for v2.10.0 (code navigation + project context + harness prompts), v2.9.4 (TUI diff palette + composer drafts), and earlier releases.
+See [CHANGELOG.md](CHANGELOG.md) for v2.11.0 (LSP MCP), v2.10.0 (code navigation + project context), and earlier releases.
 
 ## Further reading
 
-- [Code navigation](docs/code-navigation.md) — outline, definitions, references, imports, project context
+- [Documentation index](docs/README.md) — all guides, release timeline, config patterns
+- [Code navigation](docs/code-navigation.md) — LSP MCP, built-in outline/defs/refs, project context
 - [Codex comparison](docs/codex-comparison.md) — parity matrix
 - [TUI UX plan](docs/ui-plan.md) — Codex-style transcript roadmap
 - [TUI style guide](docs/tui-styles.md) — diff colors, approval chrome, composer behavior

@@ -61,6 +61,12 @@ provider = "duckduckgo"
 # statusline = ["model", "mode", "sandbox", "approvals", "context", "branch", "session"]
 # reduced_motion = true   # static working indicator (or set AGENT_TUI_REDUCED_MOTION=1)
 
+# [mcp_servers.lsp]
+# command = "agent"
+# args = ["lsp-mcp"]
+# enabled = true
+# require_approval = false
+
 # [.agent-cli/exec-policy.toml]
 # [allow_prefixes]
 # prefixes = ["pytest -q", "git status"]

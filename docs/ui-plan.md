@@ -8,7 +8,7 @@ Living plan for making `agent tui` feel like Codex during an actual coding turn.
 
 ---
 
-## Current state (as of v2.10.0)
+## Current state (as of v2.11.0)
 
 ### Architecture
 
@@ -84,7 +84,7 @@ Rendering is centralized in `agent/tui/cells/__init__.py` (`render_cell`).
 - Non-blocking event delivery + turn worker watchdog (clears zombie “Working…”)
 - Human-readable [action-log.md](action-log.md) for freeze diagnosis
 - `Ctrl+T` transcript overlay; `e` / click to expand long tool output and diffs
-- Tab completes `@path` file mentions in composer (no popup picker yet)
+- `@file` / `@skill` mention popup (Tab / ↑ / ↓); drafts in `.agent-cli/composer-drafts/`
 - Golden string tests for core cells (`tests/golden/tui/*.txt`, `tests/test_tui_cells.py`) — includes plan, compaction
 - Style guide: [tui-styles.md](tui-styles.md)
 
@@ -117,19 +117,19 @@ Codex treats chat as a **typed transcript of `HistoryCell`s**, with buffer-level
 | Typed transcript cells | ✅ `HistoryCell` | ✅ `TranscriptCell` + per-type renderers |
 | Incremental render (no full clear) | ✅ | ✅ `TranscriptController.sync()` |
 | Streaming holdback (fence/table) | ✅ | ✅ `AssistantStreamController` + `table_holdback` |
-| Patch/diff readability | ✅ Syntax + theme-aware backgrounds | ⚠️ Colored unified diff + line numbers; **no syntax highlight** |
-| Exec output truncation | ✅ Token/byte policy + “show more” | ⚠️ Expand/collapse on long cells; not full Codex truncation policy |
+| Patch/diff readability | ✅ Syntax + theme-aware backgrounds | ✅ Palette + Pygments in-hunk syntax (`terminal_syntax_theme.py`); not full Rust syntect quantization |
+| Exec output truncation | ✅ Token/byte policy + “show more” | ✅ `output_truncation.py` middle-trunc + line limits; expand on `e` |
 | Working / busy state | ✅ Status widget + motion modes | ✅ `status_row.py` + `WorkingCell` |
 | Markdown in replies | ✅ Full pipeline | ✅ Rich `Markdown` + terminal `code_theme`; golden at 80/120 cols |
 | Context in footer | ✅ | ✅ `context_usage.py` |
-| Approvals discoverable | ✅ Dedicated overlay | ⚠️ Banner + transcript cell; composer still shared with chat input |
+| Approvals discoverable | ✅ Dedicated overlay | ✅ `ApprovalOverlayScreen` + composer `read_only` during modals |
 | Plan / compaction cells | ✅ | ✅ Live + resume from store |
 | Resume fidelity | ✅ | ✅ Broad store loader (see table above) |
 | Transcript overlay | ✅ | ✅ `Ctrl+T` |
 | Resize / reflow | ✅ Rebuilds terminal scrollback from cells | ⚠️ Widget resync on resize; **no Codex-style scrollback repair** |
 | Composer `@` mentions | ✅ Popups + bindings | ✅ Popup + Tab/↑/↓ + draft bindings on reload (`.agent-cli/composer-drafts/`) |
 | `request_user_input` UI | ✅ Full bottom-pane overlay | ✅ Modal overlay (`user_input_overlay.py`) + handler queue |
-| Visual regression tests | ✅ insta @ buffer width | ⚠️ ~25 string goldens (cells, footer modes, composer meta, streaming table); pilot turn flows |
+| Visual regression tests | ✅ insta @ buffer width | ⚠️ ~27 string goldens in `tests/golden/tui/` + pilot turn flows; Codex has hundreds |
 | Frame rate / reduced motion | ✅ 120 FPS cap, shimmer, a11y | ✅ `[tui] reduced_motion` / `AGENT_TUI_REDUCED_MOTION` (static status + footer) |
 | Product extras | Voice, multi-agent, rate-limit card | ❌ Out of scope unless prioritized |
 
@@ -233,23 +233,17 @@ Typed cells, incremental sync, tool/patch/exec cells, working row, event wiring,
 
 **Exit criteria:** Patch + shell command readable live and after resume — **met**.
 
-### Phase UI-2 — Polish (in progress)
+### Phase UI-2 — Polish ✅ (shipped v2.9.3–v2.10.0)
 
-1. Diff v2 (syntax)
-2. Approval banner v2 + patch preview lock
-3. Truncation policy for exec output
-4. Expand `docs/tui-styles.md`
+Diff palette + adaptive syntax, approval overlay, exec truncation, `docs/tui-styles.md`, incremental `sync_stream_only()`.
 
-**Exit criteria:** Side-by-side demo turn with Codex — diffs and approvals feel equally trustworthy.
+**Remaining:** Full Codex syntect quantization; scrollback repair on resize.
 
-### Phase UI-3 — Power (queued)
+### Phase UI-3 — Power ✅ (mostly shipped v2.9.3–v2.9.5)
 
-1. Resize reflow policy + tests
-2. Composer `@file` / `@skill` popups
-3. `request_user_input` TUI overlay
-4. Golden suite expansion (narrow width, footer modes)
+Resize debounce + `rebuild_all`, composer mention popups + drafts, `request_user_input` overlay, expanded goldens.
 
-**Exit criteria:** Long session + resize + structured mid-turn questions without leaving TUI.
+**Remaining:** Codex-scale snapshot suite; optional `docs/tui-composer.md`; terminal scrollback repair.
 
 ---
 
@@ -257,11 +251,10 @@ Typed cells, incremental sync, tool/patch/exec cells, working row, event wiring,
 
 | Quick (days) | Big (weeks) |
 |--------------|-------------|
-| More golden files (plan, compaction, narrow width) | Diff v2 with syntax + theme backgrounds |
-| `docs/tui-styles.md` from existing theme tokens | Full resize scrollback reflow |
-| Truncation header on exec cells | Composer mentions v2 popups |
-| Approval footer locks input on pending | `request_user_input` overlay |
-| Pygments only inside patch hunks | Buffer-level insta tests (if ever move off Textual) |
+| More golden files (new cell types, edge widths) | Terminal scrollback repair (`transcript_reflow` parity) |
+| `docs/tui-composer.md` state-machine doc | Buffer-level insta tests (if ever move off Textual) |
+| Reasoning cell collapsed-by-default | Full Codex syntect per-terminal theme quantization |
+| MCP/web tool icon polish | FPS cap / shimmer parity |
 
 ---
 

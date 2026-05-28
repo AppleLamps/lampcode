@@ -3294,6 +3294,24 @@ def mcp_server_cmd() -> None:
     run_stdio_server()
 
 
+@app.command("lsp-mcp")
+def lsp_mcp_cmd(
+    workspace: str = typer.Option(
+        ".",
+        "--workspace",
+        "-w",
+        help="Workspace root passed to language servers",
+    ),
+) -> None:
+    """Run stdio MCP server exposing LSP navigation tools (Pyright, typescript-language-server)."""
+    import os
+
+    os.environ["WORKSPACE_ROOT"] = str(Path(workspace).resolve())
+    from agent.lsp_mcp.server import run_stdio_server
+
+    run_stdio_server()
+
+
 @app.command("tui")
 def tui_cmd(
     cwd: Optional[Path] = typer.Option(None, "--cwd", help="Project directory"),

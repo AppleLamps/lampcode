@@ -235,6 +235,7 @@ class PlanModeSettings:
             "request_user_input",
         ]
     )
+    allow_mcp_servers: list[str] = field(default_factory=lambda: ["lsp"])
 
 
 @dataclass
@@ -246,6 +247,7 @@ class BudgetSettings:
 class HarnessSettings:
     max_parallel_read_tools: int = 4
     post_patch_test: str = ""
+    lsp_diagnostics_after_patch: bool = False
 
 
 @dataclass
@@ -729,6 +731,7 @@ def load_harness_settings(
     return HarnessSettings(
         max_parallel_read_tools=int(merged.get("max_parallel_read_tools", 4)),
         post_patch_test=str(merged.get("post_patch_test", "")),
+        lsp_diagnostics_after_patch=bool(merged.get("lsp_diagnostics_after_patch", False)),
     )
 
 
@@ -828,11 +831,17 @@ def load_plan_mode_settings(
     if not isinstance(project_p, dict):
         project_p = {}
     merged = {**user_p, **project_p}
-    default_tools = ["read_file", "search_repo", "request_user_input"]
-    allowed = merged.get("allowed_tools", default_tools)
+    defaults = PlanModeSettings()
+    allowed = merged.get("allowed_tools", defaults.allowed_tools)
     if not isinstance(allowed, list):
-        allowed = default_tools
-    return PlanModeSettings(allowed_tools=[str(t) for t in allowed])
+        allowed = defaults.allowed_tools
+    allow_mcp = merged.get("allow_mcp_servers", defaults.allow_mcp_servers)
+    if not isinstance(allow_mcp, list):
+        allow_mcp = defaults.allow_mcp_servers
+    return PlanModeSettings(
+        allowed_tools=[str(t) for t in allowed],
+        allow_mcp_servers=[str(s) for s in allow_mcp],
+    )
 
 
 def load_isolation_settings(path: Path | None = None) -> IsolationSettings:

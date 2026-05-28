@@ -19,6 +19,8 @@ With `[execution] auto_background_servers = true` (default), commands like `pyth
 
 ## Tool lifecycle lines
 
+LSP MCP tools appear as `mcp__lsp__lsp_definition` (etc.) with the same pending → executing → done sequence when `[mcp_servers.lsp]` is connected.
+
 For each tool the harness emits up to three lines:
 
 | Line | Meaning |
@@ -83,3 +85,9 @@ Set `mirror_to_project = false` to only keep logs under `dir`.
 ## TUI event delivery
 
 The interactive UI drains agent events on the main Textual thread via `post_message` (see `agent/tui/messages.py`). The turn worker must **not** call `call_from_thread` per event — that blocks the worker on `future.result()` while the UI renders transcript and context chrome, which can freeze tool execution and leave stale “Working…” state.
+
+## Related
+
+- [ui-plan.md](ui-plan.md) — transcript architecture (v2.11.0)
+- [code-navigation.md](code-navigation.md) — LSP MCP tool names in logs
+- [docs/README.md](README.md) — documentation index

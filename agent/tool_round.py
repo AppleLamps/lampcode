@@ -16,8 +16,14 @@ PARALLEL_READ_TOOLS = frozenset(
 )
 
 
+def is_parallel_read_tool(name: str) -> bool:
+    if name in PARALLEL_READ_TOOLS:
+        return True
+    return name.startswith("mcp__lsp__")
+
+
 def can_parallelize_tool_round(tool_names: list[str]) -> bool:
-    return bool(tool_names) and all(name in PARALLEL_READ_TOOLS for name in tool_names)
+    return bool(tool_names) and all(is_parallel_read_tool(name) for name in tool_names)
 
 
 def run_parallel_tool_dispatches(

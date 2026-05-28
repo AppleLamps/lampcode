@@ -1,6 +1,6 @@
 # OpenRouter integration
 
-agent-cli uses the [OpenRouter](https://openrouter.ai) chat completions API (`/chat/completions`) with streaming, tool calling, retries, and optional native model routing.
+agent-cli (v2.11.0) uses the [OpenRouter](https://openrouter.ai) chat completions API (`/chat/completions`) with streaming, tool calling, retries, and optional native model routing. See also [docs/README.md](README.md) for the full doc index.
 
 ## Authentication
 

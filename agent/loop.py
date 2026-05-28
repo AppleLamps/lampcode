@@ -230,11 +230,16 @@ def run_turn(
     )
 
     effective_allowed = allowed_tools
+    effective_allow_mcp: list[str] | None = None
     if plan_mode:
         effective_allowed = list(config.plan_mode.allowed_tools)
+        effective_allow_mcp = list(config.plan_mode.allow_mcp_servers)
         from agent.plan_mode import build_plan_system_append
 
-        plan_append = build_plan_system_append(effective_allowed)
+        plan_append = build_plan_system_append(
+            effective_allowed,
+            allow_mcp_servers=effective_allow_mcp,
+        )
         system_prompt_append = f"{system_prompt_append}\n{plan_append}".strip()
     memories_text = (
         inject_memories_prompt(user_text, config.memories, cwd=str(config.cwd))
@@ -251,12 +256,19 @@ def run_turn(
     if prompt_hook.context_append:
         system_prompt_append = f"{system_prompt_append}\n{prompt_hook.context_append}".strip()
 
+    from agent.context import build_lsp_mcp_append
+
+    lsp_append = build_lsp_mcp_append(mcp_manager)
+    if lsp_append:
+        system_prompt_append = f"{system_prompt_append}\n{lsp_append}".strip()
+
     client = OpenRouterClient(config)
     tools = get_tool_schemas(
         mcp_manager,
         config,
         allow_spawn=config.multi_agent.enabled,
         allowed_tools=effective_allowed,
+        allow_mcp_servers=effective_allow_mcp,
     )
     if not session.tool_warn_emitted:
         from agent.providers.openrouter import ModelsCache, tool_support_warning
@@ -374,6 +386,7 @@ def run_turn(
                 user_text=user_text,
                 budget_tracker=budget_tracker,
                 allowed_tools=effective_allowed,
+                allow_mcp_servers=effective_allow_mcp,
                 read_only_review=read_only_review,
                 plan_mode=plan_mode,
                 hooks_runner=hooks_runner,
@@ -494,6 +507,7 @@ def _run_loop(
     user_text: str = "",
     budget_tracker: "SwarmBudgetTracker | None" = None,
     allowed_tools: list[str] | None = None,
+    allow_mcp_servers: list[str] | None = None,
     read_only_review: bool = False,
     plan_mode: bool = False,
     hooks_runner: "HooksRunner | None" = None,
@@ -732,6 +746,7 @@ def _run_loop(
                 emitter=emitter,
                 cancel=cancel,
                 allowed_tools=allowed_tools,
+                allow_mcp_servers=allow_mcp_servers,
                 turn_state=turn_state,
                 session=session,
                 hooks_runner=hooks_runner,
@@ -753,7 +768,11 @@ def _run_loop(
             arguments = parse_tool_arguments(raw_args)
             source = "mcp" if mcp_manager.is_mcp_tool(tool_name) else "builtin"
 
-            if allowed_tools is not None and tool_name not in allowed_tools:
+            from agent.tool_access import is_tool_allowed
+
+            if not is_tool_allowed(
+                tool_name, allowed_tools, allow_mcp_servers=allow_mcp_servers
+            ):
                 emitter.tool_pending(
                     thread.id, turn.id, tool_name, arguments, source=source
                 )
@@ -1217,6 +1236,19 @@ def _run_loop(
                 hook_output = _run_post_patch_test(config.harness.post_patch_test, config.cwd)
                 if hook_output:
                     messages[-1]["content"] = f"{result_text}\n\n[post_patch_test]\n{hook_output}"
+            if (
+                tool_name == "apply_patch"
+                and tracking_items
+                and tracking_items[0].status == "completed"
+                and config.harness.lsp_diagnostics_after_patch
+                and not plan_mode
+                and not read_only_review
+            ):
+                diag = _run_lsp_diagnostics_after_patch(
+                    mcp_manager, config, tracking_items[0].path
+                )
+                if diag:
+                    messages[-1]["content"] = f"{messages[-1]['content']}\n\n[lsp_diagnostics]\n{diag}"
 
     turn.status = "failed"
     fail_item = AgentMessageItem(
@@ -1587,6 +1619,7 @@ def _run_parallel_read_tool_round(
     emitter: EventEmitter,
     cancel: CancelToken,
     allowed_tools: list[str] | None,
+    allow_mcp_servers: list[str] | None = None,
     turn_state: TurnApprovalState,
     session: HarnessSession,
     hooks_runner,
@@ -1600,9 +1633,13 @@ def _run_parallel_read_tool_round(
         tool_call_id = tc["id"]
         raw_args = tc["function"].get("arguments", "")
         arguments = parse_tool_arguments(raw_args)
-        source = "builtin"
+        source = "mcp" if mcp_manager.is_mcp_tool(tool_name) else "builtin"
 
-        if allowed_tools is not None and tool_name not in allowed_tools:
+        from agent.tool_access import is_tool_allowed
+
+        if not is_tool_allowed(
+            tool_name, allowed_tools, allow_mcp_servers=allow_mcp_servers
+        ):
             emitter.tool_pending(thread.id, turn.id, tool_name, arguments, source=source)
             emitter.tool_completed(thread.id, turn.id, tool_name, "blocked", source=source)
             messages.append(
@@ -2032,6 +2069,24 @@ def brief_args(tool_name: str, arguments: dict) -> str:
     if tool_name.startswith("mcp__"):
         return str(arguments)[:80]
     return str(arguments)
+
+
+def _run_lsp_diagnostics_after_patch(
+    mcp_manager: McpManager,
+    config: Config,
+    path: str,
+) -> str:
+    tool_name = "mcp__lsp__lsp_diagnostics"
+    if not mcp_manager.is_mcp_tool(tool_name):
+        return ""
+    output, exit_code, _err = mcp_manager.call_tool(
+        tool_name,
+        {"path": path},
+        max_output=config.max_tool_output,
+    )
+    if exit_code != 0:
+        return ""
+    return output.strip()[:4000]
 
 
 def _run_post_patch_test(command: str, cwd: Path) -> str:

@@ -39,6 +39,14 @@ When you have a concrete implementation plan ready for the user to approve, incl
 Keep investigating with read-only tools until the plan is actionable. Outside the tag, briefly note open questions or assumptions."""
 
 
-def build_plan_system_append(allowed_tools: list[str]) -> str:
+def build_plan_system_append(
+    allowed_tools: list[str],
+    *,
+    allow_mcp_servers: list[str] | None = None,
+) -> str:
     tools = ", ".join(f"`{t}`" for t in allowed_tools) if allowed_tools else "(none)"
-    return PLAN_MODE_SYSTEM_APPEND.format(allowed_tools=tools)
+    text = PLAN_MODE_SYSTEM_APPEND.format(allowed_tools=tools)
+    if allow_mcp_servers:
+        mcp = ", ".join(f"`mcp__{s}__*`" for s in allow_mcp_servers)
+        text += f"\n\nRead-only MCP tools are also allowed: {mcp}."
+    return text

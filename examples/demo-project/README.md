@@ -1,6 +1,6 @@
 # Demo Project
 
-Intentionally broken `calc.add` for testing the agent harness golden path.
+Intentionally broken `calc.add` for testing the agent harness golden path. Optional: enable `[mcp_servers.lsp]` in `~/.agent-cli/config.toml` for Pyright-backed navigation — see [docs/code-navigation.md](../../docs/code-navigation.md).
 
 ```powershell
 cd examples/demo-project

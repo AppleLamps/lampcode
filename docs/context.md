@@ -40,8 +40,12 @@ Beyond token metering, the model receives:
 
 - **Project rules** — `AGENTS.md` (and variants) via `load_project_rules()`
 - **Project context** — README, build manifests, CI snippet, test layout, repo map (`agent/project_context.py`) — see [code-navigation.md](code-navigation.md)
+- **Code navigation guidance** — prefer `mcp__lsp__*` when LSP MCP is connected; built-in `file_outline` / `go_to_definition` / etc. as fallback (`agent/context.py`)
+- **`apply_patch` DSL** and **plan mode** `<proposed_plan>` when `--plan` is active
 - **Skills** — selected `SKILL.md` bodies when keywords/@mentions match
 - **Memories** — opt-in scored inject from `[memories]` when enabled
+
+**Plan mode tools:** read-only builtins plus MCP servers listed in `[plan_mode] allow_mcp_servers` (default `["lsp"]`). Write tools and other MCP servers are excluded unless configured.
 
 ## Artifacts
 

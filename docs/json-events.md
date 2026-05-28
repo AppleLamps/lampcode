@@ -1,6 +1,6 @@
 # JSON event stream (`agent run --json`)
 
-Normalized JSONL events emitted on stdout during `agent run --json`. Each line is one JSON object with:
+Normalized JSONL events emitted on stdout during `agent run --json` (v2.11.0 harness). Each line is one JSON object with:
 
 | Field | Type | Description |
 |-------|------|-------------|

@@ -1,5 +1,26 @@
 # Changelog
 
+## [2.11.0] — 2026-05-27
+
+LSP navigation via MCP (Pyright + typescript-language-server).
+
+### Added
+
+- **`agent lsp-mcp`:** Stdio MCP server with `lsp_definition`, `lsp_references`, `lsp_document_symbols`, `lsp_hover`, `lsp_workspace_symbol`, `lsp_diagnostics`, `lsp_rename`.
+- **`agent/lsp/`:** Shared JSON-RPC LSP client, document sync, formatters.
+- **Plan mode:** `[plan_mode] allow_mcp_servers = ["lsp"]` includes `mcp__lsp__*` tools.
+- **Harness:** Optional `[harness] lsp_diagnostics_after_patch`; doctor LSP probe; init scaffold `[mcp_servers.lsp]` snippet.
+- **`ide_lsp`:** Real completions via shared LSP client on `agent serve` `/ide/completions`.
+
+### Docs
+
+- [docs/code-navigation.md](docs/code-navigation.md) — LSP MCP setup and tool precedence.
+- [docs/README.md](docs/README.md) — documentation index; global vs project config patterns.
+
+### Tests
+
+- `tests/test_lsp_client.py`, `tests/test_lsp_mcp.py`, `tests/test_tool_access.py`; optional `@pytest.mark.lsp` integration — **1217+** pytest cases collected.
+
 ## [2.10.0] — 2026-05-27
 
 Harness intelligence, safer defaults, and TUI performance polish.

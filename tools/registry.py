@@ -48,6 +48,7 @@ def get_tool_schemas(
     *,
     allow_spawn: bool = False,
     allowed_tools: list[str] | None = None,
+    allow_mcp_servers: list[str] | None = None,
 ) -> list[dict[str, Any]]:
     schemas = [spec.schema for spec in TOOL_REGISTRY.values()]
     if config:
@@ -63,9 +64,14 @@ def get_tool_schemas(
         schemas.extend(MULTI_AGENT_TOOL_SCHEMAS)
     if mcp_manager:
         schemas.extend(mcp_manager.get_tool_schemas())
-    if allowed_tools is not None:
-        allowed = set(allowed_tools)
-        schemas = [s for s in schemas if s.get("function", {}).get("name") in allowed]
+    if allowed_tools is not None or allow_mcp_servers:
+        from agent.tool_access import filter_tool_schemas
+
+        schemas = filter_tool_schemas(
+            schemas,
+            allowed_tools,
+            allow_mcp_servers=allow_mcp_servers,
+        )
     return schemas
 
 

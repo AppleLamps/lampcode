@@ -469,11 +469,11 @@ def test_usage_model_fields_serialize() -> None:
 
 
 def test_ide_lsp_probe() -> None:
-    from agent.ide_lsp import probe_python_lsp, fetch_completions_stub
+    from agent.ide_lsp import fetch_completions, probe_python_lsp
 
     probe = probe_python_lsp()
     assert isinstance(probe.available, bool)
-    assert isinstance(fetch_completions_stub(path="a.py", line=1, col=0), list)
+    assert isinstance(fetch_completions(path="a.py", line=1, col=0), list)
 
 
 def test_load_openrouter_settings_merge(tmp_path: Path) -> None:
@@ -562,11 +562,8 @@ reasoning_effort = "high"
     assert cfg.reasoning_effort == "high"
 
 
-def test_ide_completions_stub() -> None:
-    from agent.ide_lsp import fetch_completions_stub, probe_python_lsp
+def test_ide_completions_without_server(tmp_path: Path) -> None:
+    from agent.ide_lsp import fetch_completions
 
-    probe = probe_python_lsp()
-    items = fetch_completions_stub(path="main.py", line=1, col=0)
+    items = fetch_completions(path="main.py", line=1, col=0, cwd=tmp_path)
     assert isinstance(items, list)
-    if probe.available:
-        assert items

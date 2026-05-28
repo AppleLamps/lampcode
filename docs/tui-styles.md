@@ -2,6 +2,8 @@
 
 Semantic colors for the interactive transcript. Matches the spirit of Codex `codex-rs/tui/styles.md`.
 
+**Architecture:** typed `TranscriptCell` model, incremental `TranscriptController.sync()`, mode controllers under `agent/tui/controllers/`. Roadmap and gaps: [ui-plan.md](ui-plan.md) (v2.11.0).
+
 ## Text roles
 
 | Role | Rich / CSS | Use for |

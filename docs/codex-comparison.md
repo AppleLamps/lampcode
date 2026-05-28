@@ -2,7 +2,7 @@
 
 Living parity matrix for the **OpenRouter harness** — not “match everything Codex ships,” but **match the daily solo loop** while keeping enterprise/cloud extras in [enterprise.md](enterprise.md).
 
-**Current release:** v2.10.0 (code navigation tools + project context + harness prompts).  
+**Current release:** v2.11.0 (LSP MCP: Pyright + typescript-language-server).  
 **Daily loop:** `agent` → run in repo → sandboxed tools → patch → rerun commands → compact when long → resume later
 
 **Read this doc in two layers:**
@@ -21,7 +21,8 @@ These should feel solid in real use. If all pass, you're ~80% of Codex-as-harnes
 | `run` / non-interactive loop | ✅ | `agent run` |
 | Interactive session | ✅ | `agent` (default TUI) + `agent repl` + `agent tui` |
 | Core tools: shell + patch + read/list | ✅ | `run_command`, `apply_patch`, `read_file`, `search_repo`, `write_file` |
-| Code navigation (lightweight) | ✅ | `file_outline`, `go_to_definition`, `find_references`, `file_imports` — not full LSP ([code-navigation.md](code-navigation.md)) |
+| Code navigation (built-in) | ✅ | `file_outline`, `go_to_definition`, `find_references`, `file_imports` |
+| LSP navigation (MCP) | ✅ | `agent lsp-mcp` → `mcp__lsp__*` (Pyright + TS); plan mode `allow_mcp_servers` ([code-navigation.md](code-navigation.md)) |
 | Approvals (exec/patch) | ✅ | `y` / `n` / `a` (turn) / `A` (session); `--auto-approve` |
 | Sandbox modes | ✅ | `read-only` / `workspace-write` / `danger-full-access` (heuristic + optional kernel — see Tier 2) |
 | Thread persistence + resume | ✅ | JSONL threads; `--resume-last`, `--resume` picker, REPL `/resume` (Phase 25) |
@@ -165,7 +166,7 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 | Resume transcript from thread store | ✅ | `thread_transcript_from_store()` — messages, exec, patches, plan, MCP, web search, workers |
 | Non-blocking UI events | ✅ | `AgentEventMessage` / `post_message` (see [action-log.md](action-log.md)) |
 | Expand long output / diffs | ✅ | `e` key, click expandable cells |
-| Basic visual regression | ✅ | `tests/golden/tui/*.txt` (8 fixtures) |
+| Basic visual regression | ✅ | `tests/golden/tui/*.txt` (~27 fixtures) |
 
 ### TUI Tier B — Polish gaps (worth chasing)
 
@@ -178,7 +179,7 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 | Composer `@file` / `@skill` popups | ✅ | Mention popup + Tab/↑/↓; draft bindings in `.agent-cli/composer-drafts/` |
 | `request_user_input` TUI overlay | ✅ | Modal overlay + `questions[]` batch wizard `(n/N)` |
 | Markdown depth | ✅ Rich MD | `markdown_render.py` → Rich `Markdown` + adaptive code themes; goldens at 80/120 cols |
-| Snapshot / regression breadth | ⚠️ partial | ~25 string goldens + pilot turn flows; Codex has hundreds of insta snapshots |
+| Snapshot / regression breadth | ⚠️ partial | ~27 string goldens + pilot turn flows; Codex has hundreds of insta snapshots |
 | Frame budget / reduced motion | ⚠️ partial | `[tui] reduced_motion` / env disables spinner; no FPS cap yet |
 | Rate-limit / account status strip | ❌ | Codex status card (ChatGPT quotas); we show OpenRouter cost/model in footer instead |
 
@@ -198,9 +199,9 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 |------|-------------|
 | Transcript architecture | ✅ Strong (cells + incremental sync) |
 | Daily turn readability | ✅ Good (patch/exec/plan/working) |
-| Diff / exec visual fidelity | ⚠️ Behind Codex |
-| Composer / mid-turn structured UI | ⚠️ Behind Codex |
-| Terminal engineering (reflow, snapshots) | ⚠️ Behind Codex |
+| Diff / exec visual fidelity | ⚠️ Partial (Pygments syntax; not full syntect) |
+| Composer / mid-turn structured UI | ✅ Good (popups, drafts, overlays) |
+| Terminal engineering (reflow, snapshots) | ⚠️ Partial (debounced rebuild; no scrollback repair) |
 | OpenRouter footer (model, cost, routing) | ✅ Differentiator vs Codex |
 
 ---
@@ -220,7 +221,10 @@ Evaluates `agent` / `agent tui` only. Codex reference: `codex-rs/tui/` (read-onl
 | Review merge-base | ✅ Custom prompt + merge-base diff (Phase 27) |
 | Orchestration | ✅ Approval cache + sandbox retry (Phase 24) |
 | Compaction quality | ✅ AGENTS-aware + multi-compact warning (Phase 24) |
-| Parallel reads | ✅ Read-only tool batching (Phase 24) |
+| Parallel reads | ✅ Read-only batching: reads, search, web, code_intel, `mcp__lsp__*` (Phase 24 + v2.10–2.11) |
+| LSP MCP navigation | ✅ v2.11.0 — [code-navigation.md](code-navigation.md) |
+| Built-in code navigation | ✅ v2.10.0 — `file_outline`, defs, refs, imports |
+| Rich project context | ✅ v2.10.0 — `project_context.py` |
 | Resume picker / apply | ✅ Phase 25 |
 | Ephemeral + notify | ✅ Phase 25 |
 | Memories | ⚠️ v2 scoring + inject (Phase 25) |

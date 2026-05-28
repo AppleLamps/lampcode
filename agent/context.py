@@ -26,14 +26,27 @@ from tools.patch import APPLY_PATCH_FORMAT_DOCS
 CODE_NAVIGATION_DOCS = """
 ## Code navigation
 
-Built-in navigation (not a full IDE LSP, but faster than guessing):
+When **LSP MCP tools** are available (`mcp__lsp__lsp_definition`, `mcp__lsp__lsp_references`, `mcp__lsp__lsp_document_symbols`, …), prefer them for Python and TypeScript/JavaScript — they use Pyright / typescript-language-server.
+
+Built-in fallback (always available):
 - `file_outline` — symbols in one file (Python AST; regex for JS/TS/Go/Rust)
 - `go_to_definition` — where a symbol is defined (`path_hint` optional)
 - `find_references` — usages across the repo (word-boundary search)
 - `file_imports` — imports in a file with resolved project-local paths
 
-Use these before large refactors. Fall back to `search_repo` for arbitrary patterns. When unsure which test covers a symbol, `find_references` in `tests/` or use `file_outline` on likely test files.
+Use these before large refactors. Fall back to `search_repo` for arbitrary patterns.
 """.strip()
+
+
+def build_lsp_mcp_append(mcp_manager: object | None) -> str:
+    if mcp_manager is None:
+        return ""
+    tool_map = getattr(mcp_manager, "tool_map", None) or {}
+    lsp_tools = sorted(n for n in tool_map if n.startswith("mcp__lsp__"))
+    if not lsp_tools:
+        return ""
+    names = ", ".join(f"`{t}`" for t in lsp_tools)
+    return f"Connected LSP tools: {names}. Prefer these for Python/TS navigation."
 
 
 @dataclass

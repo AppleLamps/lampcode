@@ -124,6 +124,19 @@ def build_doctor_report(config: Config | None = None) -> list[dict[str, str]]:
     enabled_mcp = sum(1 for s in mcp_cfg.servers.values() if s.enabled)
     checks.append(row("mcp_servers", "ok", f"enabled={enabled_mcp}"))
 
+    from agent.lsp.servers import probe_python_lsp, probe_typescript_lsp
+
+    py_lsp = probe_python_lsp()
+    ts_lsp = probe_typescript_lsp()
+    lsp_cfg = mcp_cfg.servers.get("lsp")
+    lsp_status = "ok" if py_lsp.available or ts_lsp.available else "warn"
+    lsp_detail = (
+        f"pyright={'yes' if py_lsp.available else 'no'}, "
+        f"tsserver={'yes' if ts_lsp.available else 'no'}, "
+        f"mcp_lsp={'configured' if lsp_cfg and lsp_cfg.enabled else 'not configured'}"
+    )
+    checks.append(row("lsp", lsp_status, lsp_detail))
+
     skills_cfg = load_skills_config(config_path)
     skill_count = len(
         discover_skills(

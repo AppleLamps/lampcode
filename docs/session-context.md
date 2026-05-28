@@ -15,19 +15,28 @@ I'm building **agent-cli** — a **Python coding-agent harness** powered by **Op
 
 ---
 
-## Current state (v2.10.0 — code navigation + project context)
+## Current state (v2.11.0)
 
-Phase 28 shipped as **v2.9.0**; TUI polish through **v2.9.4**; harness intelligence as **v2.10.0**. Before doing new work, verify:
+Before doing new work, verify:
 
 ```powershell
 cd e:\lampcode\agent-cli
 pytest -q
-git log --oneline -5    # expect v2.10.0 at HEAD
+git log --oneline -5    # expect v2.11.0 at HEAD
 ```
 
-**Bottom line:** You're on **v2.10.0**. Built-in `file_outline` / `go_to_definition` / `find_references` / `file_imports`; richer `load_project_context()`; safer `agent init` defaults. Full LSP still optional (MCP). TUI backlog: **[ui-plan.md](ui-plan.md)** Tier B.
+**Bottom line:** **v2.11.0** adds LSP MCP on top of **v2.10.0** harness intelligence and **v2.9.x** TUI polish. Enable LSP in `~/.agent-cli/config.toml` or project config; built-in `code_intel` remains fallback. TUI remaining gaps: **[ui-plan.md](ui-plan.md)** (scrollback repair, snapshot breadth). Doc index: **[docs/README.md](README.md)**.
 
-### v2.10.0 — Code navigation + project context
+### v2.11.0 — LSP MCP
+
+- **`agent lsp-mcp`** stdio MCP server; **`[mcp_servers.lsp]`** → `mcp__lsp__*` (7 tools: definition, references, symbols, hover, workspace symbol, diagnostics, rename)
+- **Language servers:** Pyright (Python), typescript-language-server (TS/JS)
+- **Plan mode:** `[plan_mode] allow_mcp_servers = ["lsp"]` (default)
+- **Harness:** optional `[harness] lsp_diagnostics_after_patch`; parallel `mcp__lsp__*` reads in tool rounds
+- **Shared client:** `agent/lsp/`; **`ide_lsp`** real completions on `agent serve` `/ide/completions`
+- **Docs:** [code-navigation.md](code-navigation.md), [CHANGELOG.md](../CHANGELOG.md)
+
+### v2.10.0 — Code navigation + project context (previous release)
 
 - **`tools/code_intel.py`:** `file_outline`, `go_to_definition`, `find_references`, `file_imports`
 - **`agent/project_context.py`:** README, manifests, CI, test layout, repo map, skills list
@@ -154,9 +163,10 @@ git log --oneline -5    # expect v2.10.0 at HEAD
 - `docs/openrouter.md` — OpenRouter config, fallbacks, reasoning, structured output
 - `docs/enterprise.md` — Phases 6–18 (serve/OIDC/RBAC/DAG/scheduler)
 - `docs/codex-comparison.md` — harness vs official Codex (Phase 22 scorecard)
-- `CHANGELOG.md` — v2.9.1 / v2.9.0 / … release notes
+- `CHANGELOG.md` — v2.11.0 / v2.10.0 / … release notes
+- `docs/README.md` — documentation index and config patterns
 
-**Tests:** 1008 passed, 2 skipped (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`)
+**Tests:** 1217+ collected (`pytest -q`); 2 skipped typical (Windows AppContainer when `AGENT_TEST_APPCONTAINER≠1`); optional `pytest -m lsp`
 
 **Recent commits (reference):**
 - Phase 20: golden-path, repl/tui, openrouter-ux, docs, test-fixes (5 commits)
@@ -226,13 +236,21 @@ Target release: **v2.9.0** with tests for each feature + full pytest green. ✅
 
 ---
 
-## Phase 29 direction (planned — see roadmap)
+## Post–Phase 28 releases (shipped)
 
-Candidates from Phase 28 exit notes:
+| Version | Highlights |
+|---------|------------|
+| v2.9.1–2.9.4 | OpenRouter native fallback, default TUI launch, diff palette, composer drafts |
+| v2.10.0 | Built-in code_intel, project_context, prompt DSL, TUI controllers + incremental sync |
+| v2.11.0 | LSP MCP + ide_lsp completions |
+
+## Phase 29 direction (planned)
+
+Candidates:
 
 - **`agent runs import-bundle`** — restore thread from bundle
 - **MCP approval elicitation** — headless approval via MCP client
-- Further Codex terminal parity as needed
+- Further Codex terminal parity (scrollback repair) — see [ui-plan.md](ui-plan.md)
 
 ---
 
@@ -329,7 +347,7 @@ Demo bug: `calc.add(2, 3)` returns `-1` instead of `5`. Agent should patch and p
 
 1. **Implement in `lampcode/agent-cli` only** — Codex repo is reference unless I say otherwise
 2. **Harness-first** — every change should improve the solo dev loop above
-3. **Read before coding:** `README.md`, `docs/codex-comparison.md`, `docs/roadmap/`, `CHANGELOG.md`, this file, relevant `agent/` modules
+3. **Read before coding:** `README.md`, `docs/README.md`, `docs/codex-comparison.md`, `docs/code-navigation.md`, `CHANGELOG.md`, this file, relevant `agent/` modules
 4. **Tests required** — mocked where possible; no flaky globals (approval state, DAG threads); run `pytest -q` before claiming done
 5. **Logical commits** — one concern per commit, not one giant dump
 6. **Docs:** keep README solo-first; enterprise stays in `docs/enterprise.md`

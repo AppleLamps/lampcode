@@ -1,6 +1,8 @@
 # Enterprise features (opt-in)
 
 Team serve, OIDC/RBAC, multi-agent DAG, scheduler, program sync, and related features from Phases 6–18. **Solo devs can ignore this** — use the [README](../README.md) quickstart instead.
+
+**Solo harness features** (LSP MCP, code navigation, TUI) live in the main docs: [docs/README.md](README.md), [code-navigation.md](code-navigation.md), [codex-comparison.md](codex-comparison.md).
 ## Phase 6 — Docker execution + multi-agent supervisor
 
 ### Execution backends
@@ -658,7 +660,9 @@ agent schedule history --job-id nightly-tests
 
 ### IDE v3 — LSP-style diagnostics (lightweight)
 
-Subprocess analyzers (py_compile / ruff / eslint) — no full language server.
+Subprocess analyzers (py_compile / ruff / eslint) for Monaco squiggles on **serve** — separate from the **solo harness LSP MCP** (`agent lsp-mcp`, `mcp__lsp__*`) documented in [code-navigation.md](code-navigation.md).
+
+When serve IDE is enabled, **`GET /ide/completions`** uses the shared **`agent/lsp/`** client (Pyright + typescript-language-server), same as the MCP server — not the subprocess tools below.
 
 ```toml
 [serve.ide.diagnostics]
