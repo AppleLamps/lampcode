@@ -4,7 +4,9 @@ from __future__ import annotations
 import json
 from urllib.parse import parse_qs, unquote, urlparse
 
+from agent.serve.auth import extract_session_token
 from agent.serve.http_response import HttpResponseMixin
+from agent.serve.request_limits import handle_body_error, read_limited_body
 from agent.serve.ide import (
     IdeError,
     file_diff_from_thread,
@@ -135,8 +137,16 @@ class IdeRoutesMixin(HttpResponseMixin):
             self._ide_metric("file", "missing_params")
             self._error(400, "thread_id and path required")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else ""
+        try:
+            body = read_limited_body(
+                self,
+                max_bytes=min(ctx.settings.max_request_body_bytes, ide.max_file_bytes + 4096),
+                default=b"",
+            ).decode("utf-8")
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
         try:
             payload = json.loads(body) if body.startswith("{") else {"content": body}
         except json.JSONDecodeError:

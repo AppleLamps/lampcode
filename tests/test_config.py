@@ -60,8 +60,15 @@ def test_file_config_defaults() -> None:
     assert cfg.max_tool_rounds == 25
 
 
-def test_config_default_approval_is_auto(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_config_default_approval_is_interactive(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.delenv("AGENT_APPROVAL_MODE", raising=False)
     cfg = Config.resolve(cwd=tmp_path)
+    assert cfg.approval_mode == "interactive"
+    assert not cfg.auto_approve
+
+
+def test_config_explicit_auto_approval_still_works(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("AGENT_APPROVAL_MODE", raising=False)
+    cfg = Config.resolve(cwd=tmp_path, auto_approve=True)
     assert cfg.approval_mode == "auto"
     assert cfg.auto_approve

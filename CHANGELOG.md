@@ -1,5 +1,25 @@
 # Changelog
 
+## [2.12.0] — 2026-05-29
+
+Hardening and scalability: safer execution defaults, serve auth/limits, thread store locking.
+
+### Added
+
+- **Execution hardening:** Docker `--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, non-root `--user`; local unisolated / `danger-full-access` + auto-approve warnings.
+- **Serve hardening:** `allow_query_tokens = false` by default; `max_request_body_bytes`; `redact_thread_responses`; CORS origin allowlist; session cookie `Secure` with TLS.
+- **Thread store:** File locks, atomic rewrites, `.meta.json` sidecars for metadata-only listing; `agent/store_lock.py`.
+- **Tests:** `tests/test_serve_hardening.py`, `tests/test_store_scalability.py`.
+- **Docs:** README serve/execution sections; `implementation_plan.md`.
+
+### Changed
+
+- **TUI composer:** Session cost in status line (golden updates).
+
+### Tests
+
+- **1232** pytest cases (1219 baseline + 13 new).
+
 ## [2.11.0] — 2026-05-27
 
 LSP navigation via MCP (Pyright + typescript-language-server).

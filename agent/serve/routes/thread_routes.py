@@ -1,7 +1,6 @@
 """Thread, turn, approval, and SSE routes for agent serve."""
 from __future__ import annotations
 
-import json
 import time
 from pathlib import Path
 from typing import Any
@@ -14,6 +13,7 @@ from agent.metrics import MetricsCollector
 from agent.multi_agent.checkpoint import CheckpointStore
 from agent.serve.approvals import ApprovalRegistry, map_api_decision
 from agent.serve.http_response import HttpResponseMixin, thread_to_dict
+from agent.serve.request_limits import handle_body_error, read_limited_json
 from agent.serve.turn_runner import TurnRunner
 from agent.execution.sync.service import resolve_sync_path
 
@@ -33,11 +33,13 @@ class ThreadRoutesMixin(HttpResponseMixin):
         if not self._get_ctx().settings.enable_control:
             self._error(403, "Control disabled")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=self._get_ctx().settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         rel_path = data.get("path", "")
@@ -62,11 +64,13 @@ class ThreadRoutesMixin(HttpResponseMixin):
         if not ctx.settings.enable_turn_start:
             self._error(403, "Turn start disabled (enable_turn_start=false)")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=ctx.settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         prompt = (data.get("prompt") or "").strip()
@@ -100,11 +104,13 @@ class ThreadRoutesMixin(HttpResponseMixin):
         if not ctx.settings.enable_control:
             self._error(403, "Control disabled")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=ctx.settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         decision = data.get("decision", "")

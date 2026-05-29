@@ -45,6 +45,11 @@ def test_build_docker_run_argv_defaults(tmp_path: Path) -> None:
     assert "--network" in argv
     idx = argv.index("--network")
     assert argv[idx + 1] == "none"
+    assert "--read-only" in argv
+    assert "--cap-drop=ALL" in argv
+    assert "--security-opt=no-new-privileges" in argv
+    assert "--user" in argv
+    assert argv[argv.index("--user") + 1] == "65532:65532"
     assert "python:3.12-slim" in argv
 
 
@@ -160,3 +165,17 @@ def test_registry_docker_run_mocked(tmp_path: Path) -> None:
     assert result.command_item is not None
     assert result.command_item.backend == "docker"
     assert "4" in result.text
+
+
+def test_local_execution_metadata_unisolated(tmp_path: Path) -> None:
+    from agent.execution.local import LocalExecutionBackend
+    from agent.sandbox.policy import SandboxMode
+
+    cfg = _config(cwd=tmp_path, sandbox_mode=SandboxMode.DANGER_FULL_ACCESS)
+    cfg.isolation.enabled = False
+    cfg.sandbox_kernel.enabled = False
+    cfg.sandbox_profiles.enabled = False
+    backend = LocalExecutionBackend(cfg)
+    result = backend.run(tmp_path, "echo ok", timeout=10)
+    assert result.meta["isolated"] is False
+    assert result.meta["unisolated_local"] is True

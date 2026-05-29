@@ -280,6 +280,10 @@ class DockerExecutionSettings:
     binary: str = "docker"
     platform: str = ""
     file_tools_in_container: bool = False
+    read_only_rootfs: bool = True
+    user: str = "65532:65532"
+    cap_drop_all: bool = True
+    security_opt_no_new_privileges: bool = True
 
 
 @dataclass
@@ -355,6 +359,9 @@ class ExecutionSettings:
     command_timeout_sec: int = 120
     auto_background_servers: bool = True
     auto_pull: bool = False
+    prefer_hardened_backend: bool = False
+    warn_on_unisolated_local: bool = True
+    require_interactive_for_danger_full_access: bool = True
     docker: DockerExecutionSettings = field(default_factory=DockerExecutionSettings)
     ssh: SshExecutionSettings = field(default_factory=SshExecutionSettings)
     docker_image_override: str | None = None
@@ -520,12 +527,16 @@ class ServeSettings:
     auth_token: str = ""
     auth_mode: str = "bearer"
     allow_remote_bind: bool = False
+    allow_query_tokens: bool = False
     enable_control: bool = True
     enable_turn_start: bool = False
     max_concurrent_turns: int = 2
     approval_timeout_sec: int = 300
     stream_buffer_size: int = 256
     cors: bool = False
+    cors_allowed_origins: list[str] = field(default_factory=list)
+    max_request_body_bytes: int = 1_048_576
+    redact_thread_responses: bool = True
     session_ttl_sec: int = 28800
     session_persist: bool = True
     tls: ServeTlsSettings = field(default_factory=ServeTlsSettings)
@@ -924,10 +935,21 @@ def load_execution_settings(path: Path | None = None) -> ExecutionSettings:
         command_timeout_sec=int(exe.get("command_timeout_sec", 120)),
         auto_background_servers=bool(exe.get("auto_background_servers", True)),
         auto_pull=bool(exe.get("auto_pull", False)),
+        prefer_hardened_backend=bool(exe.get("prefer_hardened_backend", False)),
+        warn_on_unisolated_local=bool(exe.get("warn_on_unisolated_local", True)),
+        require_interactive_for_danger_full_access=bool(
+            exe.get("require_interactive_for_danger_full_access", True)
+        ),
         docker=DockerExecutionSettings(
             binary=str(docker_raw.get("binary", "docker")),
             platform=str(docker_raw.get("platform", "")),
             file_tools_in_container=bool(docker_raw.get("file_tools_in_container", False)),
+            read_only_rootfs=bool(docker_raw.get("read_only_rootfs", True)),
+            user=str(docker_raw.get("user", "65532:65532")),
+            cap_drop_all=bool(docker_raw.get("cap_drop_all", True)),
+            security_opt_no_new_privileges=bool(
+                docker_raw.get("security_opt_no_new_privileges", True)
+            ),
         ),
         ssh=SshExecutionSettings(
             host=str(ssh_raw.get("host", "")),
@@ -1239,18 +1261,25 @@ def load_serve_settings(path: Path | None = None) -> ServeSettings:
         revoke_on_events=[str(x) for x in revoke_events],
         revoke_all_subject_sessions=bool(webhooks_raw.get("revoke_all_subject_sessions", True)),
     )
+    cors_origins = serve.get("cors_allowed_origins", serve.get("allowed_origins", []))
+    if not isinstance(cors_origins, list):
+        cors_origins = []
     return ServeSettings(
         host=str(serve.get("host", "127.0.0.1")),
         port=int(serve.get("port", 8765)),
         auth_token=str(serve.get("auth_token", auth_raw.get("legacy_token", ""))),
         auth_mode=auth_mode,
         allow_remote_bind=bool(serve.get("allow_remote_bind", False)),
+        allow_query_tokens=bool(serve.get("allow_query_tokens", auth_raw.get("allow_query_tokens", False))),
         enable_control=bool(serve.get("enable_control", True)),
         enable_turn_start=bool(serve.get("enable_turn_start", False)),
         max_concurrent_turns=int(serve.get("max_concurrent_turns", 2)),
         approval_timeout_sec=int(serve.get("approval_timeout_sec", 300)),
         stream_buffer_size=int(serve.get("stream_buffer_size", 256)),
         cors=bool(serve.get("cors", False)),
+        cors_allowed_origins=[str(x) for x in cors_origins],
+        max_request_body_bytes=int(serve.get("max_request_body_bytes", 1_048_576)),
+        redact_thread_responses=bool(serve.get("redact_thread_responses", True)),
         session_ttl_sec=session_ttl,
         session_persist=bool(serve.get("session_persist", True)),
         tls=ServeTlsSettings(

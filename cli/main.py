@@ -142,6 +142,26 @@ app.add_typer(memories_app, name="memories")
 console = stderr_console
 
 
+def _warn_unsafe_execution(config: Config, *, machine_output: bool = False) -> None:
+    if machine_output:
+        return
+    if (
+        config.execution.backend == "local"
+        and config.execution.warn_on_unisolated_local
+        and not config.use_isolation
+        and not config.sandbox_kernel.enabled
+        and not config.sandbox_profiles.enabled
+    ):
+        console.print(
+            "[yellow]Warning:[/yellow] local command execution is not OS-isolated; "
+            "use --execution-backend docker/ssh or enable kernel/profile isolation for stronger containment."
+        )
+    if config.sandbox_mode.value == "danger-full-access" and config.auto_approve:
+        console.print(
+            "[yellow]Warning:[/yellow] danger-full-access with auto approval can execute destructive commands without prompts."
+        )
+
+
 @app.callback(invoke_without_command=True)
 def cli_entry(
     ctx: typer.Context,
@@ -330,6 +350,8 @@ def run(
     warn = tool_support_warning(config.model, models_cache or None)
     if warn and not jsonl_events and not json_output:
         console.print(f"[yellow]Warning:[/yellow] {warn}")
+
+    _warn_unsafe_execution(config, machine_output=jsonl_events or json_output)
 
     repo_root = detect_repo_root(config.cwd)
     if not skip_git_check and repo_root is None:

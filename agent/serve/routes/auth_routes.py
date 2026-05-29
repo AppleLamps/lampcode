@@ -1,7 +1,6 @@
 """Authentication and authorization routes for agent serve."""
 from __future__ import annotations
 
-import json
 import secrets
 from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
@@ -11,6 +10,8 @@ from agent.serve.dashboard import render_login_html
 from agent.serve.http_response import HttpResponseMixin
 from agent.serve.oidc import oidc_mode_active
 from agent.serve.policy_gate import enforce_login_policy, enforce_request_policy
+from agent.serve.request_limits import handle_body_error, read_limited_body, read_limited_json
+from agent.serve.sessions import SessionStore
 from agent.auth.webhooks.revoke import revoke_for_event, verify_signature
 from agent.auth.webhooks.oidc_events import parse_oidc_event
 from agent.metrics import MetricsCollector
@@ -46,11 +47,13 @@ class AuthRoutesMixin(HttpResponseMixin):
         if not ctx.oidc_client or not ctx.session_store:
             self._error(404, "OIDC not configured")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=ctx.settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         device_code = (data.get("device_code") or "").strip()
@@ -112,11 +115,13 @@ class AuthRoutesMixin(HttpResponseMixin):
         if not any(x in mode for x in ("session", "both", "bearer", "oidc")):
             self._error(404, "Token auth disabled")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=ctx.settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         token = (data.get("token") or extract_bearer_token(dict(self.headers)) or "").strip()
@@ -160,8 +165,12 @@ class AuthRoutesMixin(HttpResponseMixin):
         if not wh.enabled:
             self._error(404, "Webhooks disabled")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = read_limited_body(self, max_bytes=ctx.settings.max_request_body_bytes, default=b"")
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
         secret = os.environ.get(wh.shared_secret_env, "")
         sig = self.headers.get("X-Agent-Signature") or self.headers.get("x-agent-signature") or ""
         if not verify_signature(body, sig, secret):
@@ -169,8 +178,8 @@ class AuthRoutesMixin(HttpResponseMixin):
             self._error(401, "Invalid signature")
             return
         try:
-            payload = json.loads(body.decode("utf-8") or "{}")
-        except json.JSONDecodeError:
+            payload = __import__("json").loads(body.decode("utf-8") or "{}")
+        except (__import__("json").JSONDecodeError, UnicodeDecodeError):
             self._error(400, "Invalid JSON")
             return
         event = parse_oidc_event(payload)
@@ -245,7 +254,10 @@ class AuthRoutesMixin(HttpResponseMixin):
             MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "success")
             self.send_response(302)
             self.send_header("Location", "/")
-            self.send_header("Set-Cookie", f"agent_session={rec.session_id}; Path=/; HttpOnly; SameSite=Lax")
+            cookie = f"agent_session={rec.session_id}; Path=/; HttpOnly; SameSite=Lax"
+            if ctx.settings.tls.enabled:
+                cookie += "; Secure"
+            self.send_header("Set-Cookie", cookie)
             self.end_headers()
         except Exception:
             MetricsCollector.global_collector().inc_labeled("agent_auth_oidc_login_total", "failure")
@@ -284,6 +296,7 @@ class AuthRoutesMixin(HttpResponseMixin):
                 default_role=ctx.settings.rbac.default_role,
                 session_store=ctx.session_store,
                 method=getattr(self, "command", "GET"),
+                allow_query_tokens=ctx.settings.allow_query_tokens,
             )
             self.principal = result.principal
             if not result.authorized:

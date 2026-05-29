@@ -22,7 +22,7 @@ from agent.events import EventEmitter
 from agent.serve.auth import extract_query_token, extract_session_token
 from agent.serve.context import ServeContext
 from agent.serve.dashboard import render_dashboard_html, render_login_html
-from agent.serve.http_response import HttpResponseMixin, thread_to_dict
+from agent.serve.http_response import HttpResponseMixin, thread_to_dict, thread_to_redacted_dict, wants_full_thread_response
 
 _thread_to_dict = thread_to_dict  # compat for tests
 from agent.serve.routes import (
@@ -84,6 +84,13 @@ class AgentHttpHandler(
     def do_POST(self) -> None:
         self._dispatch("POST")
 
+    def do_OPTIONS(self) -> None:
+        self.send_response(204)
+        self._apply_cors_headers()
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, PUT, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Authorization, Content-Type, X-Agent-Signature")
+        self.end_headers()
+
     def do_GET_inner(self) -> None:
         parsed = urlparse(self.path)
         path = unquote(parsed.path.rstrip("/")) or "/"
@@ -109,10 +116,13 @@ class AgentHttpHandler(
         if path == "/auth/me":
             p = self.principal
             rec = None
-            if p and self._get_ctx().session_store:
-                sid = extract_session_token(dict(self.headers)) or extract_query_token(self.path)
+            ctx = self._get_ctx()
+            if p and ctx.session_store:
+                sid = extract_session_token(dict(self.headers))
+                if not sid and ctx.settings.allow_query_tokens:
+                    sid = extract_query_token(self.path)
                 if sid:
-                    rec = self._get_ctx().session_store.get_session(sid)
+                    rec = ctx.session_store.get_session(sid)
             self._json_response(
                 {
                     "name": p.name if p else "anonymous",
@@ -189,7 +199,7 @@ class AgentHttpHandler(
                     )
                 )
                 return
-            threads = ctx.store.list_threads()
+            threads = ctx.store.list_thread_meta()
             active = sum(
                 1 for t in threads if ActiveTurnRegistry.global_registry().is_active(t.id)
             )
@@ -198,7 +208,7 @@ class AgentHttpHandler(
             return
 
         if path == "/threads":
-            threads = self._get_ctx().store.list_threads()
+            threads = self._get_ctx().store.list_thread_meta()
             data = [
                 {
                     "id": t.id,
@@ -251,7 +261,10 @@ class AgentHttpHandler(
                     )
                 )
                 return
-            self._json_response(thread_to_dict(thread))
+            if ctx.settings.redact_thread_responses and not wants_full_thread_response(self):
+                self._json_response(thread_to_redacted_dict(thread))
+            else:
+                self._json_response(thread_to_dict(thread))
             return
 
         if path.startswith("/runs/"):
@@ -376,6 +389,11 @@ def serve(
 
     bind_host = host or cfg.host
     bind_port = port or cfg.port
+    remote_bind = bind_host not in ("127.0.0.1", "localhost", "::1")
+    if remote_bind and not cfg.allow_remote_bind:
+        raise ValueError(
+            "Refusing to bind agent serve to a non-local address without serve.allow_remote_bind=true"
+        )
     server = ThreadingHTTPServer((bind_host, bind_port), Handler)
 
     scheme = "http"

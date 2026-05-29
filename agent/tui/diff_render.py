@@ -290,5 +290,6 @@ def format_diff_lines(
 
 
 def strip_rich_markup(text: str) -> str:
-    """Remove Rich markup tags for golden test comparison."""
+    """Remove Rich markup tags and ANSI escapes for golden test comparison."""
+    text = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", text)
     return re.sub(r"\[[^\]]+\]", "", text)

@@ -57,6 +57,7 @@ def authorize_request(
     default_role: str = "viewer",
     session_store=None,
     method: str = "GET",
+    allow_query_tokens: bool = False,
 ) -> tuple[bool, str | None]:
     """Legacy API: Return (authorized, error_message)."""
     result = authorize_request_v2(
@@ -70,6 +71,7 @@ def authorize_request(
         default_role=default_role,
         session_store=session_store,
         method=method,
+        allow_query_tokens=allow_query_tokens,
     )
     return result.authorized, result.error
 
@@ -86,6 +88,7 @@ def authorize_request_v2(
     default_role: str = "viewer",
     session_store=None,
     method: str = "GET",
+    allow_query_tokens: bool = False,
 ) -> AuthResult:
     clean_path = path.split("?")[0].rstrip("/") or "/"
     if public_paths and clean_path in public_paths:
@@ -106,7 +109,9 @@ def authorize_request_v2(
             principal = session_store.principal_from_session(session_id)
 
     if principal is None and mode in ("bearer", "both", "oidc+bearer", "oidc+both"):
-        token = extract_bearer_token(headers) or extract_query_token(path)
+        token = extract_bearer_token(headers)
+        if token is None and allow_query_tokens:
+            token = extract_query_token(path)
         if token:
             principal = resolve_principal_from_token(
                 token,

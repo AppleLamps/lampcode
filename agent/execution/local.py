@@ -116,6 +116,11 @@ class LocalExecutionBackend:
             if profile_result.applied and not exec_meta.get("isolation_level"):
                 exec_meta["isolation_level"] = "profile"
 
+        if not exec_meta.get("isolation_level"):
+            exec_meta["isolated"] = False
+            exec_meta["unisolated_local"] = True
+            exec_meta["isolation_level"] = "none"
+
         start = time.monotonic()
         try:
             if argv:

@@ -46,6 +46,16 @@ def build_docker_run_argv(
     if config.execution.docker.platform:
         argv.extend(["--platform", config.execution.docker.platform])
 
+    docker_settings = config.execution.docker
+    if docker_settings.read_only_rootfs:
+        argv.append("--read-only")
+    if docker_settings.cap_drop_all:
+        argv.append("--cap-drop=ALL")
+    if docker_settings.security_opt_no_new_privileges:
+        argv.append("--security-opt=no-new-privileges")
+    if docker_settings.user:
+        argv.extend(["--user", docker_settings.user])
+
     network = config.execution.network
     argv.extend(["--network", network])
 

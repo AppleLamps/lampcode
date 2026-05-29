@@ -84,6 +84,19 @@ post_patch_test = "pytest -q"   # auto-detected when possible (npm/cargo/go)
 # lsp_diagnostics_after_patch = true   # optional; needs [mcp_servers.lsp]
 # max_parallel_read_tools = 4
 
+[execution]
+# Defaults to local execution for compatibility. Use docker/ssh for stronger isolation.
+backend = "local"
+network = "none"
+
+[execution.docker]
+# Docker commands run with a read-only rootfs, dropped capabilities,
+# no-new-privileges, and a non-root user by default.
+read_only_rootfs = true
+cap_drop_all = true
+security_opt_no_new_privileges = true
+user = "65532:65532"
+
 [openrouter]
 primary_model = "minimax/minimax-m2.7"
 fallback_models = ["openai/gpt-4.1", "google/gemini-2.5-pro-preview"]
@@ -166,11 +179,11 @@ See [docs/codex-comparison.md](docs/codex-comparison.md) for Codex parity detail
 
 ## Sandbox & exec policy
 
-Heuristic checks before shell/MCP/file tools — **not OS-level isolation** (kernel/AppContainer opt-in in [enterprise.md](docs/enterprise.md)).
+Heuristic checks before shell/MCP/file tools — **not OS-level isolation** (kernel/AppContainer opt-in in [enterprise.md](docs/enterprise.md)). The default approval mode is `interactive`; `--auto-approve` or `approval_mode = "auto"` are explicit opt-ins. The CLI warns when local execution is unisolated or when `danger-full-access` is combined with auto approval.
 
 | Mode | Behavior |
 |------|----------|
-| `danger-full-access` | Default |
+| `danger-full-access` | No sandbox restrictions; explicit high-risk mode |
 | `read-only` | Blocks writes and network-like shell |
 | `workspace-write` | Writes only under thread `cwd` |
 
@@ -193,6 +206,32 @@ agent review "security focus" --uncommitted --json
 ```
 
 `exec_policy`: `prompt` | `untrusted` (allow-list + read/test auto) | `never` (CI + `--auto-approve`).
+
+For command isolation, prefer Docker or SSH:
+
+```powershell
+agent run "run tests" --execution-backend docker
+```
+
+Docker uses hardened flags by default (`--read-only`, `--cap-drop=ALL`, `--security-opt=no-new-privileges`, `--user 65532:65532`) while keeping the workspace mount writable or read-only according to the sandbox mode.
+
+## Serve hardening
+
+`agent serve` binds to `127.0.0.1` by default and refuses non-local binds unless `--allow-remote-bind` / `serve.allow_remote_bind = true` is set. Query-string tokens (`?token=` / `?session=`) are disabled by default; use bearer/session headers instead, or explicitly set `serve.allow_query_tokens = true` for legacy clients.
+
+```toml
+[serve]
+host = "127.0.0.1"
+auth_mode = "bearer"
+allow_remote_bind = false
+allow_query_tokens = false
+max_request_body_bytes = 1048576
+redact_thread_responses = true
+cors = true
+cors_allowed_origins = ["https://dashboard.example"]
+```
+
+When CORS is enabled, the server echoes only configured origins; it does not emit wildcard CORS for session/OIDC flows. OIDC session cookies include `Secure` when TLS is enabled. Thread JSON responses redact command output, file contents, diffs, and large message bodies by default; an admin can request full output with `?full=1`.
 
 Opt-in persistent shell (`[shell] enabled = true`) supports `stdin`, output caps (`max_output_chars`), and partial returns (`yield_ms`). Read-only tools dispatch in parallel within a model round when configured via `[harness] max_parallel_read_tools`.
 
@@ -222,6 +261,8 @@ agent threads checkpoint-status <id>
 ```
 
 Fork lineage stored as `forked_from` in JSONL metadata.
+
+Thread storage remains JSONL-compatible. New writes also maintain `<thread_id>.meta.json` sidecar metadata, use lock files around append/rewrite operations, and use atomic replacement for rewrites so thread lists and prefix lookup can stay metadata-only without loading full transcripts.
 
 ## Run recording
 

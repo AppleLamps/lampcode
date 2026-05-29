@@ -1,20 +1,37 @@
 from __future__ import annotations
 
 import json
+import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from agent.models import Item, Thread, Turn, new_id, parse_item, utc_now_iso
+from agent.store_lock import acquire_file_lock
 
 
 def default_store_dir() -> Path:
     return Path.home() / ".agent-cli" / "threads"
 
 
+@dataclass
+class ThreadStoreSettings:
+    lock_timeout_sec: float = 5.0
+    metadata_sidecar: bool = True
+    compact_on_rewrite: bool = True
+
+
 class ThreadStore:
-    def __init__(self, base_dir: Path | None = None, *, persistent: bool = True) -> None:
+    def __init__(
+        self,
+        base_dir: Path | None = None,
+        *,
+        persistent: bool = True,
+        settings: ThreadStoreSettings | None = None,
+    ) -> None:
         self.persistent = persistent
         self.base_dir = base_dir or default_store_dir()
+        self.settings = settings or ThreadStoreSettings()
         if self.persistent:
             self.base_dir.mkdir(parents=True, exist_ok=True)
 
@@ -26,6 +43,9 @@ class ThreadStore:
 
     def thread_path(self, thread_id: str) -> Path:
         return self.base_dir / f"{thread_id}.jsonl"
+
+    def thread_meta_path(self, thread_id: str) -> Path:
+        return self.base_dir / f"{thread_id}.meta.json"
 
     def _thread_meta(self, thread: Thread) -> dict[str, Any]:
         return {
@@ -44,21 +64,11 @@ class ThreadStore:
             return
         path = self.thread_path(thread.id)
         thread.touch()
-        records: list[dict[str, Any]] = []
-
-        if path.exists():
-            records = self._read_records(path)
-            records = [
-                r
-                for r in records
-                if r.get("record_type") not in ("meta",)
-            ]
-
-        meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
-        with path.open("w", encoding="utf-8") as f:
-            f.write(json.dumps(meta) + "\n")
-            for record in records:
-                f.write(json.dumps(record) + "\n")
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            if not path.exists():
+                self._write_records_atomic(path, [{"record_type": "meta", "thread": self._thread_meta(thread)}])
+            else:
+                self.write_thread_meta(thread)
 
     def append_item(self, thread: Thread, turn_id: str, item: Item) -> None:
         if not self.persistent:
@@ -70,9 +80,11 @@ class ThreadStore:
             "turn_id": turn_id,
             "item": item.model_dump(),
         }
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-        self._update_meta_timestamp(thread)
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            if not path.exists():
+                self._append_record(path, {"record_type": "meta", "thread": self._thread_meta(thread)})
+            self._append_record(path, record)
+            self.write_thread_meta(thread)
 
     def append_turn(self, thread: Thread, turn: Turn) -> None:
         if not self.persistent:
@@ -83,17 +95,20 @@ class ThreadStore:
             "record_type": "turn",
             "turn": turn.model_dump(),
         }
-        with path.open("a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
-        self._update_meta_timestamp(thread)
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            if not path.exists():
+                self._append_record(path, {"record_type": "meta", "thread": self._thread_meta(thread)})
+            self._append_record(path, record)
+            self.write_thread_meta(thread)
 
     def create_thread(self, thread: Thread) -> None:
         if not self.persistent:
             return
         path = self.thread_path(thread.id)
         meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
-        with path.open("w", encoding="utf-8") as f:
-            f.write(json.dumps(meta) + "\n")
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            self._write_records_atomic(path, [meta])
+            self.write_thread_meta(thread)
 
     def load_thread(self, thread_id: str) -> Thread:
         path = self.thread_path(thread_id)
@@ -105,7 +120,11 @@ class ThreadStore:
         if not meta:
             raise ValueError(f"Corrupt thread file (missing meta): {thread_id}")
 
-        thread_data = meta["thread"]
+        sidecar_thread = None
+        meta_path = self.thread_meta_path(thread_id)
+        if self.settings.metadata_sidecar and meta_path.exists():
+            sidecar_thread = self._read_thread_meta_from_sidecar(meta_path)
+        thread_data = sidecar_thread.model_dump() if sidecar_thread is not None else meta["thread"]
         thread = Thread(
             id=thread_data["id"],
             cwd=thread_data["cwd"],
@@ -152,6 +171,11 @@ class ThreadStore:
     def read_thread_meta(self, thread_id: str) -> Thread:
         """Load thread header only (first meta record) — fast for pickers and startup."""
         path = self.thread_path(thread_id)
+        meta_path = self.thread_meta_path(thread_id)
+        if self.settings.metadata_sidecar and meta_path.exists():
+            thread = self._read_thread_meta_from_sidecar(meta_path)
+            if thread is not None:
+                return thread
         if not path.exists():
             raise FileNotFoundError(f"Thread not found: {thread_id}")
         thread = self._read_thread_meta_from_path(path)
@@ -183,18 +207,47 @@ class ThreadStore:
         except (OSError, json.JSONDecodeError, KeyError, TypeError):
             return None
 
+    def _read_thread_meta_from_sidecar(self, path: Path) -> Thread | None:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8"))
+            thread_data = data.get("thread", data)
+            return Thread(
+                id=thread_data["id"],
+                cwd=thread_data["cwd"],
+                model=thread_data["model"],
+                repo_root=thread_data.get("repo_root"),
+                forked_from=thread_data.get("forked_from"),
+                title=thread_data.get("title"),
+                created_at=thread_data["created_at"],
+                updated_at=thread_data["updated_at"],
+                turns=[],
+            )
+        except (OSError, json.JSONDecodeError, KeyError, TypeError):
+            return None
+
     def list_thread_meta(self) -> list[Thread]:
         """List threads using only each file's meta line (no turn/item parse)."""
         threads: list[Thread] = []
-        for path in sorted(
-            self.base_dir.glob("*.jsonl"),
-            key=lambda p: p.stat().st_mtime,
-            reverse=True,
-        ):
-            thread = self._read_thread_meta_from_path(path)
+        paths = list(self.base_dir.glob("*.jsonl"))
+        paths.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for path in paths:
+            thread = None
+            meta_path = self.thread_meta_path(path.stem)
+            if self.settings.metadata_sidecar and meta_path.exists():
+                thread = self._read_thread_meta_from_sidecar(meta_path)
+            if thread is None:
+                thread = self._read_thread_meta_from_path(path)
             if thread is not None:
                 threads.append(thread)
-        return threads
+        return sorted(threads, key=lambda t: t.updated_at, reverse=True)
+
+    def find_matches_by_prefix(self, thread_id_or_prefix: str, *, meta_only: bool = True) -> list[Thread]:
+        threads = self.list_thread_meta() if meta_only else self.list_threads()
+        return [
+            thread
+            for thread in threads
+            if thread.id == thread_id_or_prefix or thread.id.startswith(thread_id_or_prefix)
+        ]
 
     def list_threads(self) -> list[Thread]:
         threads: list[Thread] = []
@@ -219,7 +272,11 @@ class ThreadStore:
         path = self.thread_path(thread_id)
         if not path.exists():
             raise FileNotFoundError(f"Thread not found: {thread_id}")
-        path.unlink()
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            path.unlink()
+            meta_path = self.thread_meta_path(thread_id)
+            if meta_path.exists():
+                meta_path.unlink()
         try:
             from agent.multi_agent.dag_state import clear_dag_state_for_thread
 
@@ -234,24 +291,20 @@ class ThreadStore:
         path = self.thread_path(thread.id)
         thread.touch()
         meta = {"record_type": "meta", "thread": self._thread_meta(thread)}
-        with path.open("w", encoding="utf-8") as f:
-            f.write(json.dumps(meta) + "\n")
-            for turn in thread.turns:
-                f.write(
-                    json.dumps({"record_type": "turn", "turn": turn.model_dump()})
-                    + "\n"
+        records = [meta]
+        for turn in thread.turns:
+            records.append({"record_type": "turn", "turn": turn.model_dump()})
+            for item in turn.items:
+                records.append(
+                    {
+                        "record_type": "item",
+                        "turn_id": turn.id,
+                        "item": item.model_dump(),
+                    }
                 )
-                for item in turn.items:
-                    f.write(
-                        json.dumps(
-                            {
-                                "record_type": "item",
-                                "turn_id": turn.id,
-                                "item": item.model_dump(),
-                            }
-                        )
-                        + "\n"
-                    )
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            self._write_records_atomic(path, records)
+            self.write_thread_meta(thread)
 
     def find_latest_for_cwd(self, cwd: str) -> Thread | None:
         target = str(Path(cwd).resolve())
@@ -284,10 +337,48 @@ class ThreadStore:
 
     def _update_meta_timestamp(self, thread: Thread) -> None:
         path = self.thread_path(thread.id)
-        records = self._read_records(path)
-        for record in records:
-            if record.get("record_type") == "meta":
-                record["thread"] = self._thread_meta(thread)
-        with path.open("w", encoding="utf-8") as f:
+        with acquire_file_lock(path, timeout_sec=self.settings.lock_timeout_sec):
+            self.write_thread_meta(thread)
+
+    def write_thread_meta(self, thread: Thread) -> None:
+        if not self.persistent or not self.settings.metadata_sidecar:
+            return
+        meta_path = self.thread_meta_path(thread.id)
+        payload = {"record_type": "meta", "thread": self._thread_meta(thread)}
+        self._write_json_atomic(meta_path, payload)
+
+    def _append_record(self, path: Path, record: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+
+    def _write_json_atomic(self, path: Path, payload: dict[str, Any]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
+            json.dump(payload, f)
+            f.write("\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)
+
+    def _write_records_atomic(self, path: Path, records: list[dict[str, Any]]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+        with tmp.open("w", encoding="utf-8") as f:
             for record in records:
                 f.write(json.dumps(record) + "\n")
+            f.flush()
+            try:
+                os.fsync(f.fileno())
+            except OSError:
+                pass
+        os.replace(tmp, path)

@@ -128,7 +128,7 @@ class FileConfig:
 class Config:
     cwd: Path
     model: str
-    approval_mode: ApprovalMode = "auto"
+    approval_mode: ApprovalMode = "interactive"
     max_rounds: int = DEFAULT_MAX_ROUNDS
     command_timeout: int = DEFAULT_COMMAND_TIMEOUT
     max_tool_output: int = DEFAULT_MAX_TOOL_OUTPUT
@@ -282,7 +282,7 @@ class Config:
         elif env_approval in ("auto", "interactive"):
             approval_mode = env_approval  # type: ignore[assignment]
         else:
-            approval_mode = file_cfg.approval_mode or "auto"
+            approval_mode = file_cfg.approval_mode or "interactive"
 
         resolved_max_rounds = max_rounds
         if resolved_max_rounds is None and env_max_rounds:

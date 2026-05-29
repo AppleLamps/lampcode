@@ -1,13 +1,13 @@
 """Metrics, policy, sync, and webhook admin routes."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 from agent.config import Config
 from agent.execution.sync.service import resolve_sync_path
 from agent.metrics import MetricsCollector
 from agent.serve.http_response import HttpResponseMixin
+from agent.serve.request_limits import handle_body_error, read_limited_json
 
 
 class AdminRoutesMixin(HttpResponseMixin):
@@ -15,11 +15,13 @@ class AdminRoutesMixin(HttpResponseMixin):
         if not self._get_ctx().settings.enable_control:
             self._error(403, "Control disabled")
             return
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length).decode("utf-8") if length else "{}"
         try:
-            data = json.loads(body)
-        except json.JSONDecodeError:
+            data = read_limited_json(self, max_bytes=self._get_ctx().settings.max_request_body_bytes)
+        except Exception as exc:
+            if handle_body_error(self, exc):
+                return
+            raise
+        if not isinstance(data, dict):
             self._error(400, "Invalid JSON")
             return
         rel_path = data.get("path", "")
