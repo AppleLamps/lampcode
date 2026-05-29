@@ -1,5 +1,28 @@
 # Changelog
 
+## [2.12.1] — 2026-05-29
+
+TUI performance: smoother streaming and visible tool progress.
+
+### Added
+
+- **Stream coalescing:** Batch `agent.delta` UI updates at ~30fps (`stream_coalesce.py`).
+- **Plain-text live stream:** Markdown rendering only on committed assistant cells.
+- **Tool progress:** `tool.executing` updates status row + `WorkingCell` (e.g. `Reading manifest.json…`).
+- **read_file bounds:** Default 400-line cap with truncation notice; path-outside-cwd returns tool error string.
+
+### Changed
+
+- **Scroll pin:** Auto-scroll during streaming only when the user is already at the bottom.
+
+### Docs
+
+- [docs/ui-plan.md](docs/ui-plan.md) — Phase UI-perf section.
+
+### Tests
+
+- `tests/test_tui_stream_perf.py` — **1240** pytest cases (1232 baseline + 8 new).
+
 ## [2.12.0] — 2026-05-29
 
 Hardening and scalability: safer execution defaults, serve auth/limits, thread store locking.

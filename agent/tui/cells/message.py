@@ -18,12 +18,15 @@ def render_user_message(cell: UserMessageCell) -> str:
     )
 
 
-def assistant_message_visual(text: str) -> Group | Text:
-    """Rich renderable with full markdown processing for Textual Static."""
+def assistant_message_visual(text: str, *, streaming: bool = False) -> Group | Text:
+    """Rich renderable for assistant text in the transcript."""
     if not text.strip():
         return _AGENT_HEADER
+    if streaming:
+        body = Text(text)
+        return Group(_AGENT_HEADER, body)
     return Group(_AGENT_HEADER, assistant_markdown_renderable(text))
 
 
 def render_assistant_message(cell: AssistantMessageCell) -> Group | Text:
-    return assistant_message_visual(cell.text)
+    return assistant_message_visual(cell.text, streaming=cell.streaming)

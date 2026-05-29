@@ -20,17 +20,20 @@ class StatusRow:
         self._frame = 0
         self._interval = None
         self._turn_end_message: str = ""
+        self._detail: str = ""
 
     def start_turn(self) -> None:
         self._running = True
         self._start_time = time.monotonic()
         self._frame = 0
         self._turn_end_message = ""
+        self._detail = ""
         self._widget.display = True
         self._update()
 
     def stop_turn(self, message: str = "") -> None:
         self._running = False
+        self._detail = ""
         if self._interval:
             self._interval.stop()
             self._interval = None
@@ -41,6 +44,12 @@ class StatusRow:
         else:
             self._widget.display = False
 
+    def set_detail(self, detail: str) -> None:
+        """Short inline progress, e.g. tool name while a read is running."""
+        self._detail = detail.strip()
+        if self._running:
+            self._update()
+
     def tick(self) -> None:
         if self._running and not self._reduced_motion:
             self._frame = (self._frame + 1) % len(_SPINNER_FRAMES)
@@ -50,16 +59,17 @@ class StatusRow:
         if not self._running:
             return
         elapsed = int(time.monotonic() - self._start_time)
+        detail = f" · {self._detail}" if self._detail else ""
         if self._reduced_motion:
             self._widget.update(
                 f"[#58a6ff]●[/] [bold]Working[/bold] "
-                f"[dim]({elapsed}s · Ctrl+C to interrupt)[/dim]"
+                f"[dim]({elapsed}s · Ctrl+C to interrupt){detail}[/dim]"
             )
             return
         spinner = _SPINNER_FRAMES[self._frame]
         self._widget.update(
             f"[#58a6ff]{spinner}[/] [bold]Working[/bold] "
-            f"[dim]({elapsed}s · Ctrl+C to interrupt)[/dim]"
+            f"[dim]({elapsed}s · Ctrl+C to interrupt){detail}[/dim]"
         )
 
     def bind_interval(self, app) -> None:

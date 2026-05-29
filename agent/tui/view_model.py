@@ -64,6 +64,7 @@ class TuiState:
     last_user_prompt: str = ""
     turn_active: bool = False
     working_frame: int = 0
+    status_detail: str = ""
 
 
 # Legacy compat
@@ -129,6 +130,37 @@ def _flush_assistant_buffer(state: TuiState) -> None:
 
 def _args_brief(tool_name: str, args: dict) -> str:
     return brief_args(tool_name, args)
+
+
+def _format_bytes(size: int) -> str:
+    if size < 1024:
+        return f"{size} B"
+    if size < 1024 * 1024:
+        return f"{size / 1024:.1f} KB"
+    return f"{size / (1024 * 1024):.1f} MB"
+
+
+def _tool_progress_message(tool_name: str, args: dict) -> str:
+    brief = _args_brief(tool_name, args)
+    if tool_name == "read_file":
+        path = str(args.get("path", brief))
+        name = Path(path).name or path
+        try:
+            resolved = Path(path)
+            if resolved.is_file():
+                return f"Reading {name} ({_format_bytes(resolved.stat().st_size)})"
+        except OSError:
+            pass
+        return f"Reading {name}…"
+    if tool_name == "run_command":
+        cmd = str(args.get("cmd", brief))
+        short = cmd if len(cmd) <= 60 else cmd[:57] + "…"
+        return f"Running {short}"
+    if tool_name == "apply_patch":
+        return "Applying patch…"
+    if tool_name == "search_repo":
+        return f"Searching {brief or 'repo'}…"
+    return f"{tool_name} {brief}".strip()
 
 
 def _find_pending_tool_cell(
@@ -253,6 +285,13 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.transcript.append(cell)
         state.pending_tool_cell_id = cell.cell_id
         _maybe_group_read_tools(state, name, brief)
+
+    elif etype == "tool.executing":
+        name = data.get("tool_name", "")
+        args = data.get("arguments", {}) or {}
+        progress = _tool_progress_message(name, args)
+        _set_working(state, progress)
+        state.status_detail = progress
 
     elif etype == "tool.completed":
         if state.turn_active:

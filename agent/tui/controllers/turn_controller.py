@@ -17,6 +17,7 @@ from agent.tui.cells.base import SystemCell, UserMessageCell
 from agent.tui.messages import AgentEventMessage, WorkerErrorMessage, WorkerFinishedMessage
 from agent.tui.runner import run_turn_in_thread
 from agent.tui.slash_commands import execute_slash_command, parse_slash_command
+from agent.tui.stream_coalesce import STREAM_SYNC_INTERVAL_SEC
 from agent.tui.view_model import (
     TuiState,
     approval_key_to_response,
@@ -32,6 +33,33 @@ if TYPE_CHECKING:
 class TurnController:
     def __init__(self, app: AgentTuiApp) -> None:
         self._app = app
+        self._stream_coalesce_timer = None
+
+    def _cancel_stream_coalesce(self) -> None:
+        timer = self._stream_coalesce_timer
+        self._stream_coalesce_timer = None
+        if timer is not None:
+            try:
+                timer.stop()
+            except Exception:
+                pass
+
+    def _enqueue_event(self, agent_event: AgentEvent) -> None:
+        self._app._event_queue.put(agent_event)
+        if agent_event.type != "agent.delta":
+            self._cancel_stream_coalesce()
+            self._app.post_message(AgentEventMessage())
+            return
+        if self._stream_coalesce_timer is not None:
+            return
+        self._stream_coalesce_timer = self._app.call_later(
+            STREAM_SYNC_INTERVAL_SEC,
+            self._on_stream_coalesce,
+        )
+
+    def _on_stream_coalesce(self) -> None:
+        self._stream_coalesce_timer = None
+        self._app.post_message(AgentEventMessage())
 
     def submit_input(self, raw_text: str) -> None:
         text = raw_text.strip()
@@ -190,8 +218,7 @@ class TurnController:
         self._app._chat.refresh_chrome()
 
         def on_event(agent_event: AgentEvent) -> None:
-            self._app._event_queue.put(agent_event)
-            self._app.post_message(AgentEventMessage())
+            self._enqueue_event(agent_event)
 
         def worker() -> None:
             worker_error: str | None = None
@@ -220,14 +247,30 @@ class TurnController:
         self._app._worker.start()
 
     def drain_event_queue(self) -> None:
+        events: list[AgentEvent] = []
         while True:
             try:
-                event = self._app._event_queue.get_nowait()
+                events.append(self._app._event_queue.get_nowait())
             except queue.Empty:
                 break
-            self.handle_event(event)
+        if not events:
+            return
+        all_deltas = all(event.type == "agent.delta" for event in events)
+        for index, event in enumerate(events):
+            sync = (not all_deltas) or index == len(events) - 1
+            self.handle_event(
+                event,
+                sync=sync,
+                stream_only=all_deltas and sync,
+            )
 
-    def handle_event(self, event: AgentEvent) -> None:
+    def handle_event(
+        self,
+        event: AgentEvent,
+        *,
+        sync: bool = True,
+        stream_only: bool = False,
+    ) -> None:
         if event.type == "tool.pending" and self._app._mode == "chat":
             scroll, cells = self._app._chat.transcript_targets()
             self._app._transcript.finalize_assistant_stream(
@@ -261,12 +304,23 @@ class TurnController:
         if event.type == "approval.requested":
             self._app._chat.open_approval_overlay()
 
-        if event.type == "agent.delta":
-            self._app._chat.sync_transcript(stream_only=True)
-        else:
-            self._app._chat.sync_transcript()
-        include_context = event.type not in ("agent.delta", "agent.reasoning")
-        self._app._chat.refresh_chrome(include_context=include_context)
+        if sync:
+            if stream_only or event.type == "agent.delta":
+                self._app._chat.sync_transcript(stream_only=True)
+            else:
+                self._app._chat.sync_transcript()
+            include_context = event.type not in (
+                "agent.delta",
+                "agent.reasoning",
+                "tool.executing",
+            )
+            self._app._chat.refresh_chrome(include_context=include_context)
+
+        if self._app._status_row:
+            if event.type == "tool.executing":
+                self._app._status_row.set_detail(self._app._state.status_detail)
+            elif event.type in ("tool.completed", "turn.completed", "turn.started"):
+                self._app._status_row.set_detail("")
 
     def watch_turn_worker(self) -> None:
         if not self._app._turn_running:
@@ -280,6 +334,7 @@ class TurnController:
         self.turn_finished()
 
     def turn_finished(self) -> None:
+        self._cancel_stream_coalesce()
         self._app._turn_running = False
         if self._app._reflow.resize_during_stream:
             self._app._chat.schedule_transcript_reflow()

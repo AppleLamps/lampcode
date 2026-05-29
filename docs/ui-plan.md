@@ -247,6 +247,25 @@ Resize debounce + `rebuild_all`, composer mention popups + drafts, `request_user
 
 ---
 
+### Phase UI-perf — Streaming + tool feedback (in progress)
+
+Motivation: users quit sessions that **feel stuck** — jumpy token streaming, silent multi-minute `read_file`, and slow first-turn MCP connect.
+
+| Priority | Fix | Status |
+|----------|-----|--------|
+| P0 | Coalesce `agent.delta` UI sync (~30ms) | ✅ `stream_coalesce.py`, `turn_controller.py` |
+| P0 | Plain text live stream; markdown on commit | ✅ `cells/message.py`, `transcript_pane.py` |
+| P0 | Scroll pin only when user is already at bottom | ✅ `transcript_pane.scroll_to_end` |
+| P0 | `tool.executing` → status row + `WorkingCell` progress | ✅ `view_model.py`, `status_row.py` |
+| P0 | `read_file` default line limit + path escape errors | ✅ `tools/files.py` |
+| P1 | Defer MCP/LSP connect (background / first use) | pending |
+| P1 | Batch recording JSONL for deltas in TUI | pending |
+| P1 | Resume picker meta-only preview (no full `load_thread`) | pending |
+
+**Exit criteria:** A turn with streaming + parallel `read_file` shows smooth text, visible “Reading foo.js…” in the status row, and returns within bounded I/O — no minutes of frozen UI.
+
+---
+
 ## Quick wins vs big lifts
 
 | Quick (days) | Big (weeks) |

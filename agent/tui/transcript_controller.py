@@ -61,8 +61,8 @@ class TranscriptController:
         pane = TranscriptPane(cells_col, scroll)
         self._sync_live_stream(pane, state)
         pane.scroll_to_end(
-            force=force_scroll or self.follow_tail,
-            follow=self.follow_tail,
+            force=force_scroll,
+            follow=self.follow_tail and not force_scroll,
         )
 
     def sync(
@@ -86,8 +86,8 @@ class TranscriptController:
             self._sync_cell_if_dirty(pane, cell)
         self._sync_live_stream(pane, state)
         pane.scroll_to_end(
-            force=force_scroll or self.follow_tail,
-            follow=self.follow_tail,
+            force=force_scroll,
+            follow=self.follow_tail and not force_scroll,
         )
 
     def _sync_cell_if_dirty(self, pane: TranscriptPane, cell) -> None:

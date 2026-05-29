@@ -148,7 +148,7 @@ class ChatController:
                 cells,
                 self._app._state,
                 scroll=scroll,
-                force_scroll=self._app._turn_running,
+                force_scroll=False,
             )
         else:
             self._app._transcript.sync(

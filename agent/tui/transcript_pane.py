@@ -98,13 +98,13 @@ class TranscriptPane:
                 self._cells.mount(widget)
             return widget
 
-    def set_live_stream(self, text: str | None) -> None:
+    def set_live_stream(self, text: str | None, *, streaming: bool = True) -> None:
         if not text:
             live = self._live_widget()
             if live is not None:
                 live.remove()
             return
-        visual = assistant_message_visual(text)
+        visual = assistant_message_visual(text, streaming=streaming)
         live = self._live_widget()
         if live is not None:
             live.update(visual)
@@ -121,18 +121,19 @@ class TranscriptPane:
     def scroll_to_end(self, *, force: bool = False, follow: bool = False) -> None:
         """Scroll transcript to the latest content.
 
-        follow=True keeps the view pinned during streaming (default for new sessions).
-        force=True always scrolls (e.g. while a turn is running).
+        follow=True scrolls only when the user is already near the bottom (streaming pin).
+        force=True always scrolls (e.g. user submitted a message).
         """
         if self._scroll is None:
             return
-        if not force and not follow and not self.is_near_bottom():
+        if not force and not follow:
+            return
+        if follow and not force and not self.is_near_bottom():
             return
 
         def _do_scroll() -> None:
             if self._scroll is None:
                 return
-            # scroll_end after layout so max_scroll_y includes new cells
             self._scroll.scroll_end(animate=False, immediate=True)
             live = self._live_widget()
             if live is not None:

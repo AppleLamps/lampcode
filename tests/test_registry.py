@@ -31,6 +31,17 @@ def test_read_file_dispatch(tmp_path: Path) -> None:
     assert not result.file_items
 
 
+def test_read_file_respects_explicit_limit(tmp_path: Path) -> None:
+    sample = tmp_path / "hello.txt"
+    sample.write_text("line1\nline2\nline3\n")
+    config = Config(cwd=tmp_path, model="test", openrouter_api_key="x")
+    result = dispatch_tool(
+        "read_file", {"path": "hello.txt", "limit": 1}, config
+    )
+    assert "line1" in result.text
+    assert "line2" not in result.text
+
+
 def test_write_file_dispatch(tmp_path: Path) -> None:
     config = Config(cwd=tmp_path, model="test", openrouter_api_key="x")
     result = dispatch_tool(
