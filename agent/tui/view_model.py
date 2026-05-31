@@ -229,9 +229,9 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
 
     elif etype == "turn.started":
         state.status_line = "Turn running..."
+        state.status_detail = "Thinking…"
         state.pending_read_batch = []
         state.turn_active = True
-        _set_working(state, "Thinking…")
 
     elif etype == "turn.completed":
         _remove_working_cells(state)
@@ -239,6 +239,7 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.turn_active = False
         status = data.get("status", "")
         state.status_line = f"Turn {status}"
+        state.status_detail = ""
         state.pending_approval_summary = None
         state.pending_approval_diff = None
         state.pending_approval_tool = None
@@ -290,12 +291,11 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         name = data.get("tool_name", "")
         args = data.get("arguments", {}) or {}
         progress = _tool_progress_message(name, args)
-        _set_working(state, progress)
         state.status_detail = progress
 
     elif etype == "tool.completed":
         if state.turn_active:
-            _set_working(state, "Working on next step…")
+            state.status_detail = "Working on next step…"
         name = data.get("tool_name", "")
         status = data.get("status", "completed")
         mapped_status = status if status in ("completed", "failed", "denied", "blocked") else "completed"
@@ -374,7 +374,7 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.pending_approval_summary = summary
         state.pending_approval_tool = tool_name
         state.pending_approval_diff = data.get("diff_preview")
-        _set_working(state, "Waiting for your approval…")
+        state.status_detail = "Waiting for your approval…"
 
     elif etype == "user_input.requested":
         state.pending_user_input_question = data.get("question", "")
@@ -383,7 +383,7 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.pending_user_input_allow_free_text = bool(data.get("allow_free_text", True))
         state.pending_user_input_index = int(data.get("question_index", 1) or 1)
         state.pending_user_input_total = int(data.get("question_total", 1) or 1)
-        _set_working(state, "Waiting for your answer…")
+        state.status_detail = "Waiting for your answer…"
 
     elif etype == "user.input":
         q = data.get("question", "")
@@ -397,26 +397,28 @@ def apply_event_to_state(state: TuiState, event: AgentEvent) -> TuiState:
         state.pending_user_input_options = []
         state.pending_user_input_index = 1
         state.pending_user_input_total = 1
+        state.status_detail = ""
 
     elif etype == "sandbox.blocked":
         state.transcript.append(
             ErrorCell(
-                message=f"sandbox blocked ({data.get('mode', '')}): {data.get('reason', '')}",
+                message=f"{data.get('reason', '')}",
                 severity="warning",
                 command=data.get("command"),
+                source=f"Sandbox blocked ({data.get('mode', '')})",
             )
         )
 
     elif etype == "error":
         state.transcript.append(
-            ErrorCell(message=data.get("message", ""), severity="error")
+            ErrorCell(message=data.get("message", ""), severity="error", source="Internal error")
         )
 
     elif etype == "isolation.applied":
         state.transcript.append(
             SystemCell(
                 text=(
-                    f"[isolation] pid={data.get('pid')} "
+                    f"[debug] isolation pid={data.get('pid')} "
                     f"stripped_env={data.get('stripped_env_count')}"
                 )
             )

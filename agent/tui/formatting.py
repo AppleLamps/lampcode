@@ -12,6 +12,20 @@ def truncate_session_title(title: str, *, max_len: int = 36) -> str:
     return text[: max_len - 1].rstrip() + "…"
 
 
+def truncate_path_label(path: str, *, max_len: int = 96) -> str:
+    text = path.replace("\\", "/")
+    if len(text) <= max_len:
+        return text
+    parts = [p for p in text.split("/") if p]
+    if len(parts) >= 3:
+        tail = "/".join(parts[-3:])
+        prefix = "/" if text.startswith("/") else ""
+        label = f"{prefix}…/{tail}"
+        if len(label) <= max_len:
+            return label
+    return "…" + text[-(max_len - 1):]
+
+
 def format_approval_label(
     *,
     approval_mode: ApprovalMode,
@@ -66,5 +80,5 @@ def format_context_line(snapshot) -> str:
 
 def format_mode_badge(*, plan_mode: bool) -> str:
     if plan_mode:
-        return "[bold black on #d29922] PLAN [/bold black on #d29922]"
-    return "[bold white on #1f6feb] CODE [/bold white on #1f6feb]"
+        return "[bold #d29922]Plan[/bold #d29922]"
+    return "[bold #58a6ff]Code[/bold #58a6ff]"

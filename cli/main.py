@@ -3318,8 +3318,8 @@ def mcp_server_cmd() -> None:
 
 @app.command("lsp-mcp")
 def lsp_mcp_cmd(
-    workspace: str = typer.Option(
-        ".",
+    workspace: Optional[str] = typer.Option(
+        None,
         "--workspace",
         "-w",
         help="Workspace root passed to language servers",
@@ -3328,7 +3328,8 @@ def lsp_mcp_cmd(
     """Run stdio MCP server exposing LSP navigation tools (Pyright, typescript-language-server)."""
     import os
 
-    os.environ["WORKSPACE_ROOT"] = str(Path(workspace).resolve())
+    root = workspace if workspace is not None else os.environ.get("WORKSPACE_ROOT")
+    os.environ["WORKSPACE_ROOT"] = str(Path(root).resolve() if root else Path.cwd().resolve())
     from agent.lsp_mcp.server import run_stdio_server
 
     run_stdio_server()

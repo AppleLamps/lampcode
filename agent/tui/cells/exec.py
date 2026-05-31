@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from agent.tui.cells.base import ToolExecCell, ToolGroupCell
-from agent.tui.cells.panel import expand_affordance, panel_bottom_border, panel_top_border
-from agent.tui.cells.tool import tool_header
+from agent.tui.cells.panel import expand_affordance
+from agent.tui.cells.tool import row_meta, status_glyph, tool_header
 from agent.tui.output_truncation import format_tool_output_lines
 
 
@@ -25,15 +25,21 @@ def render_tool_exec(cell: ToolExecCell) -> str:
     show_body = cell.expanded or not collapsible or cell.status == "running"
     out_lines = _output_line_count(cell.output)
 
-    lines: list[str] = [panel_top_border()]
+    lines: list[str] = []
     header = tool_header(cell.tool_name, cell.status)
-    affordance = ""
-    if collapsible:
-        affordance = f"  {expand_affordance(expanded=cell.expanded, lines_hidden=out_lines)}"
-    lines.append(f"[bold cyan]{header}[/bold cyan]{affordance}")
-
+    meta: list[str] = []
     if cell.args_brief:
-        lines.append(f"  [dim]args[/dim]  {cell.args_brief}")
+        meta.append(cell.args_brief)
+    if cell.exit_code is not None and cell.status in ("completed", "failed"):
+        dur = f"{cell.duration_ms}ms" if cell.duration_ms else ""
+        meta.append(f"exit {cell.exit_code}" + (f" in {dur}" if dur else ""))
+    if collapsible:
+        meta.append(expand_affordance(expanded=cell.expanded, lines_hidden=out_lines))
+    meta_text = f"  {row_meta(meta)}" if meta else ""
+    lines.append(f"[bold cyan]{header}[/bold cyan]{meta_text}")
+
+    if cell.expanded and cell.args_brief:
+        lines.append(f"  [dim]args[/dim] {cell.args_brief}")
 
     if show_body and cell.output:
         display = format_tool_output_lines(cell.output, expanded=cell.expanded)
@@ -43,14 +49,8 @@ def render_tool_exec(cell: ToolExecCell) -> str:
             else:
                 lines.append(f"  [dim]{ol}[/dim]")
     elif collapsible and out_lines:
-        lines.append(f"  [dim]({out_lines} lines hidden)[/dim]")
+        lines.append(f"  [dim]({out_lines} output lines hidden)[/dim]")
 
-    if cell.exit_code is not None and cell.status in ("completed", "failed"):
-        color = "green" if cell.exit_code == 0 else "red"
-        dur = f" · {cell.duration_ms}ms" if cell.duration_ms else ""
-        lines.append(f"  [{color}]exit {cell.exit_code}{dur}[/{color}]")
-
-    lines.append(panel_bottom_border())
     return "\n".join(lines)
 
 
@@ -59,18 +59,17 @@ def render_tool_group(cell: ToolGroupCell) -> str:
     collapsible = cell.status != "running" and count > 1
     show_body = cell.expanded or not collapsible
 
-    lines: list[str] = [panel_top_border()]
-    header = f"▸ parallel reads ({count})"
-    affordance = ""
+    lines: list[str] = []
+    header = f"{status_glyph(cell.status)} 📄 parallel reads"
+    meta = [f"{count} files"]
     if collapsible:
-        affordance = f"  {expand_affordance(expanded=cell.expanded, lines_hidden=count)}"
-    lines.append(f"[bold cyan]{header}[/bold cyan]{affordance}")
+        meta.append(expand_affordance(expanded=cell.expanded, lines_hidden=count))
+    lines.append(f"[bold cyan]{header}[/bold cyan]  {row_meta(meta)}")
 
     if show_body:
         for name, brief in zip(cell.tool_names, cell.args_briefs, strict=False):
-            lines.append(f"  [dim]└ {name}[/dim]  {brief}")
+            lines.append(f"  [dim]• {name}[/dim]  {brief}")
     elif collapsible:
         lines.append(f"  [dim]({count} files — expand to list)[/dim]")
 
-    lines.append(panel_bottom_border())
     return "\n".join(lines)

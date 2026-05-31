@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any, Callable
 
 from agent.mcp.adapter import (
@@ -109,11 +111,15 @@ class McpManager:
         from mcp import ClientSession, StdioServerParameters
         from mcp.client.stdio import stdio_client
 
-        params = StdioServerParameters(
-            command=cfg.command,
-            args=cfg.args,
-            env=cfg.env or None,
-        )
+        args, env, cwd = self._stdio_launch_options(cfg)
+        params_kwargs: dict[str, Any] = {
+            "command": cfg.command,
+            "args": args,
+            "env": env or None,
+        }
+        if cwd and self._stdio_parameters_accept_cwd(StdioServerParameters):
+            params_kwargs["cwd"] = str(cwd)
+        params = StdioServerParameters(**params_kwargs)
         timeout = self.config.settings.startup_timeout_sec
         transport = stdio_client(params)
         read, write = await asyncio.wait_for(transport.__aenter__(), timeout=timeout)
@@ -134,6 +140,57 @@ class McpManager:
         connected.read_stream = read
         connected.write_stream = write
         return session, tools, connected
+
+    def _stdio_launch_options(
+        self, cfg: McpServerConfig
+    ) -> tuple[list[str], dict[str, str], Path | None]:
+        args = list(cfg.args)
+        env = dict(cfg.env)
+        project_cwd = getattr(self.config, "project_cwd", None)
+        launch_cwd: Path | None = None
+        if project_cwd and self._is_lsp_mcp_server(cfg):
+            launch_cwd = project_cwd
+            env = {**os.environ, **env}
+            workspace = self._normalize_workspace_arg(args, project_cwd)
+            if workspace is None:
+                workspace = project_cwd
+                args.extend(["--workspace", str(project_cwd)])
+            env["WORKSPACE_ROOT"] = str(workspace)
+        return args, env, launch_cwd
+
+    @staticmethod
+    def _is_lsp_mcp_server(cfg: McpServerConfig) -> bool:
+        command_name = Path(cfg.command).name
+        return command_name == "lsp-mcp" or "lsp-mcp" in cfg.args
+
+    @staticmethod
+    def _normalize_workspace_arg(args: list[str], cwd: Path) -> Path | None:
+        for index, arg in enumerate(args):
+            if arg.startswith("--workspace="):
+                value = arg.split("=", 1)[1]
+                workspace = McpManager._resolve_workspace_value(value, cwd)
+                args[index] = f"--workspace={workspace}"
+                return workspace
+            if arg in {"--workspace", "-w"} and index + 1 < len(args):
+                workspace = McpManager._resolve_workspace_value(args[index + 1], cwd)
+                args[index + 1] = str(workspace)
+                return workspace
+        return None
+
+    @staticmethod
+    def _resolve_workspace_value(value: str, cwd: Path) -> Path:
+        workspace = Path(value)
+        if not workspace.is_absolute():
+            workspace = cwd / workspace
+        return workspace.resolve()
+
+    @staticmethod
+    def _stdio_parameters_accept_cwd(params_type: Any) -> bool:
+        fields = getattr(params_type, "model_fields", None)
+        if isinstance(fields, dict):
+            return "cwd" in fields
+        annotations = getattr(params_type, "__annotations__", {})
+        return isinstance(annotations, dict) and "cwd" in annotations
 
     def get_tool_schemas(self) -> list[dict[str, Any]]:
         return [ref.schema for ref in self._tool_map.values()]

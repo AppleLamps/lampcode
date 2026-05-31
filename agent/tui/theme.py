@@ -117,7 +117,7 @@ Screen {
 .transcript-cell {
     width: 100%;
     height: auto;
-    padding: 0 0 1 0;
+    padding: 0 0 0 0;
 }
 
 .transcript-cell.expandable-cell {
@@ -175,13 +175,13 @@ Screen {
 }
 
 #mode_badge {
-    width: 8;
-    min-width: 8;
+    width: 7;
+    min-width: 7;
     height: 3;
     content-align: center middle;
-    border: solid #30363d;
+    border: none;
     border-right: none;
-    background: #161b22;
+    background: #0d1117;
     padding: 0 1;
 }
 
@@ -189,7 +189,7 @@ Screen {
     width: 1fr;
     height: 3;
     min-height: 3;
-    border: solid #30363d;
+    border: tall #30363d;
     background: #0d1117;
     color: #e6edf3;
     padding: 0 1;
@@ -202,7 +202,7 @@ Screen {
 #bottom_chrome {
     width: 100%;
     height: auto;
-    min-height: 7;
+    min-height: 6;
     background: #0d1117;
     border-top: solid #21262d;
     padding: 0;
@@ -237,7 +237,7 @@ Screen {
 #composer_meta {
     height: 1;
     min-height: 1;
-    padding: 1 3 0 3;
+    padding: 0 3 0 3;
     color: #8b949e;
     background: #0d1117;
 }
@@ -253,7 +253,7 @@ Screen {
 #composer_footer {
     height: 1;
     min-height: 1;
-    padding: 0 3 1 3;
+    padding: 0 3 0 3;
     color: #6e7681;
     background: #0d1117;
 }

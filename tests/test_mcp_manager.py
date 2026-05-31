@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from agent.mcp.manager import McpManager
@@ -87,3 +88,70 @@ def test_server_failure_isolation() -> None:
     assert "bad" in failed
     assert "mcp__good__t" in manager.tool_map
     manager.disconnect_all()
+
+
+def test_lsp_mcp_launch_options_pin_project_workspace(tmp_path: Path) -> None:
+    cfg = McpServerConfig(
+        name="lsp",
+        command="agent",
+        args=["lsp-mcp"],
+        enabled=True,
+        require_approval=False,
+    )
+    manager = McpManager(McpConfig(servers={"lsp": cfg}, project_cwd=tmp_path))
+
+    args, env, cwd = manager._stdio_launch_options(cfg)
+
+    assert args == ["lsp-mcp", "--workspace", str(tmp_path)]
+    assert env["WORKSPACE_ROOT"] == str(tmp_path)
+    assert cwd == tmp_path
+
+
+def test_lsp_mcp_launch_options_respect_explicit_workspace(tmp_path: Path) -> None:
+    cfg = McpServerConfig(
+        name="lsp",
+        command="agent",
+        args=["lsp-mcp", "--workspace", "/explicit"],
+        enabled=True,
+        require_approval=False,
+    )
+    manager = McpManager(McpConfig(servers={"lsp": cfg}, project_cwd=tmp_path))
+
+    args, env, cwd = manager._stdio_launch_options(cfg)
+
+    assert args == ["lsp-mcp", "--workspace", "/explicit"]
+    assert env["WORKSPACE_ROOT"] == "/explicit"
+    assert cwd == tmp_path
+
+
+def test_lsp_mcp_launch_options_normalize_relative_workspace(tmp_path: Path) -> None:
+    cfg = McpServerConfig(
+        name="lsp",
+        command="agent",
+        args=["lsp-mcp", "--workspace", "."],
+        enabled=True,
+        require_approval=False,
+    )
+    manager = McpManager(McpConfig(servers={"lsp": cfg}, project_cwd=tmp_path))
+
+    args, env, cwd = manager._stdio_launch_options(cfg)
+
+    assert args == ["lsp-mcp", "--workspace", str(tmp_path)]
+    assert env["WORKSPACE_ROOT"] == str(tmp_path)
+    assert cwd == tmp_path
+
+
+def test_non_lsp_mcp_launch_options_do_not_set_project_cwd(tmp_path: Path) -> None:
+    cfg = McpServerConfig(
+        name="filesystem",
+        command="npx",
+        args=["-y", "@modelcontextprotocol/server-filesystem", "."],
+        enabled=True,
+    )
+    manager = McpManager(McpConfig(servers={"filesystem": cfg}, project_cwd=tmp_path))
+
+    args, env, cwd = manager._stdio_launch_options(cfg)
+
+    assert args == ["-y", "@modelcontextprotocol/server-filesystem", "."]
+    assert "WORKSPACE_ROOT" not in env
+    assert cwd is None

@@ -3,8 +3,8 @@
 from __future__ import annotations
 
 from agent.tui.cells.base import PatchCell
-from agent.tui.cells.panel import expand_affordance, panel_bottom_border, panel_top_border
-from agent.tui.cells.tool import tool_header
+from agent.tui.cells.panel import expand_affordance
+from agent.tui.cells.tool import row_meta, tool_header
 from agent.tui.diff_render import format_diff_lines, format_file_summary
 
 
@@ -19,16 +19,16 @@ def render_patch_cell(cell: PatchCell) -> str:
     collapsible = cell.status != "running" and diff_lines > 6
     show_diff = cell.expanded or not collapsible or cell.status == "running"
 
-    lines: list[str] = [panel_top_border()]
+    lines: list[str] = []
     header = tool_header("apply_patch", cell.status)
-    affordance = ""
-    if collapsible:
-        affordance = f"  {expand_affordance(expanded=cell.expanded, lines_hidden=diff_lines)}"
-    lines.append(f"[bold cyan]{header}[/bold cyan]{affordance}")
-
+    meta: list[str] = []
     if cell.files:
         summary = format_file_summary([(f.path, f.change_type) for f in cell.files])
-        lines.append(f"  [dim]{summary}[/dim]")
+        meta.append(summary)
+    if collapsible:
+        meta.append(expand_affordance(expanded=cell.expanded, lines_hidden=diff_lines))
+    meta_text = f"  {row_meta(meta)}" if meta else ""
+    lines.append(f"[bold cyan]{header}[/bold cyan]{meta_text}")
 
     if show_diff and cell.diff_text:
         max_lines = 200 if cell.expanded else 40
@@ -43,5 +43,4 @@ def render_patch_cell(cell: PatchCell) -> str:
     elif collapsible and diff_lines:
         lines.append(f"  [dim]({diff_lines} diff lines hidden)[/dim]")
 
-    lines.append(panel_bottom_border())
     return "\n".join(lines)

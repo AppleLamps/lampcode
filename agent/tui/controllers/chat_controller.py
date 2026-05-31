@@ -298,7 +298,11 @@ class ChatController:
         if self._app._slash_has_overrides():
             self._app._config = self._app._resolve_config()
 
-        self._app.query_one("#header", Static).update(str(self._app._config.cwd))
+        from agent.tui.formatting import truncate_path_label
+
+        self._app.query_one("#header", Static).update(
+            f"[dim]{truncate_path_label(str(self._app._config.cwd), max_len=96)}[/dim]"
+        )
         self._app.query_one("#mode_badge", Static).update(
             format_mode_badge(plan_mode=self._app._slash.plan_mode)
         )

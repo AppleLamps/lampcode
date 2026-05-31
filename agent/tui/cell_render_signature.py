@@ -62,7 +62,7 @@ def cell_render_signature(cell: TranscriptCell) -> tuple:
             cell.resolved,
         )
     if isinstance(cell, ErrorCell):
-        return ("error", cell.message, cell.severity, cell.command)
+        return ("error", cell.message, cell.severity, cell.command, cell.source, cell.details)
     if isinstance(cell, TurnSummaryCell):
         return (
             "summary",

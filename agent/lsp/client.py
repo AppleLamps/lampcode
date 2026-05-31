@@ -192,13 +192,7 @@ class LanguageServerSession:
         return list(self._cached_diagnostics(uri))
 
     def _cached_diagnostics(self, uri: str) -> list[dict[str, Any]]:
-        items: list[dict[str, Any]] = []
-        for note in self._rpc._notifications:
-            if note.get("method") == "textDocument/publishDiagnostics":
-                params = note.get("params", {})
-                if params.get("uri") == uri:
-                    items.extend(params.get("diagnostics", []))
-        return items
+        return self._rpc.diagnostics_for_uri(uri)
 
 
 @dataclass

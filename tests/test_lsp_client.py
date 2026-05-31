@@ -80,6 +80,31 @@ def test_json_rpc_request_response() -> None:
     assert result == {"ok": True}
 
 
+def test_json_rpc_keeps_latest_diagnostics_by_uri() -> None:
+    rpc = JsonRpcProcess(["echo"], max_diagnostic_uris=1)
+    rpc._record_notification(
+        {
+            "method": "textDocument/publishDiagnostics",
+            "params": {"uri": "file:///a.py", "diagnostics": [{"message": "old"}]},
+        }
+    )
+    rpc._record_notification(
+        {
+            "method": "textDocument/publishDiagnostics",
+            "params": {"uri": "file:///a.py", "diagnostics": [{"message": "new"}]},
+        }
+    )
+    rpc._record_notification(
+        {
+            "method": "textDocument/publishDiagnostics",
+            "params": {"uri": "file:///b.py", "diagnostics": [{"message": "b"}]},
+        }
+    )
+
+    assert rpc.diagnostics_for_uri("file:///a.py") == []
+    assert rpc.diagnostics_for_uri("file:///b.py") == [{"message": "b"}]
+
+
 def test_server_spec_for_python(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(
         "agent.lsp.servers.shutil.which",

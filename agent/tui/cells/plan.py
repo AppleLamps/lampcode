@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 from agent.tui.cells.base import CompactionCell, PlanCell
-from agent.tui.cells.panel import expand_affordance, panel_bottom_border, panel_top_border
+from agent.tui.cells.panel import expand_affordance
+from agent.tui.cells.tool import row_meta, status_glyph
 
 
 def render_plan_cell(cell: PlanCell) -> str:
@@ -11,12 +12,13 @@ def render_plan_cell(cell: PlanCell) -> str:
     collapsible = body_lines > 4
     show_body = cell.expanded or not collapsible
 
-    lines: list[str] = [panel_top_border()]
-    affordance = ""
+    lines: list[str] = []
+    meta: list[str] = []
     if collapsible:
-        affordance = f"  {expand_affordance(expanded=cell.expanded, lines_hidden=body_lines)}"
+        meta.append(expand_affordance(expanded=cell.expanded, lines_hidden=body_lines))
+    meta_text = f"  {row_meta(meta)}" if meta else ""
     lines.append(
-        f"[bold yellow]📋 Plan[/bold yellow] [dim]{cell.summary}[/dim]{affordance}"
+        f"[bold yellow]{status_glyph('pending')} 📋 Plan[/bold yellow] [dim]{cell.summary}[/dim]{meta_text}"
     )
 
     if show_body and cell.body:
@@ -26,7 +28,6 @@ def render_plan_cell(cell: PlanCell) -> str:
         preview = cell.body[:120].rstrip()
         lines.append(f"  {preview}… [dim](expand for full plan)[/dim]")
 
-    lines.append(panel_bottom_border())
     return "\n".join(lines)
 
 

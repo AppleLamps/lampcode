@@ -162,7 +162,8 @@ def test_apply_event_approval_with_diff_preview() -> None:
     )
     assert state.pending_approval_diff == "+added"
     assert not any(isinstance(c, ApprovalCell) for c in state.transcript)
-    assert any(isinstance(c, WorkingCell) for c in state.transcript)
+    assert not any(isinstance(c, WorkingCell) for c in state.transcript)
+    assert state.status_detail == "Waiting for your approval…"
 
 
 def test_turn_summary_includes_routing_and_fallback() -> None:

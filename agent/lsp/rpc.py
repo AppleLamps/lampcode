@@ -20,17 +20,19 @@ class JsonRpcProcess:
         cwd: str | None = None,
         env: dict[str, str] | None = None,
         timeout_sec: float = 30.0,
+        max_diagnostic_uris: int = 256,
     ) -> None:
         self._command = command
         self._cwd = cwd
         self._env = env
         self._timeout = timeout_sec
+        self._max_diagnostic_uris = max_diagnostic_uris
         self._proc: subprocess.Popen[bytes] | None = None
         self._next_id = 1
         self._lock = threading.Lock()
         self._reader_thread: threading.Thread | None = None
         self._pending: dict[int, dict[str, Any]] = {}
-        self._notifications: list[dict[str, Any]] = []
+        self._diagnostics_by_uri: dict[str, list[dict[str, Any]]] = {}
         self._stop = threading.Event()
         self._read_error: str | None = None
 
@@ -39,7 +41,7 @@ class JsonRpcProcess:
             self._command,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
             cwd=self._cwd,
             env=self._env,
         )
@@ -116,9 +118,31 @@ class JsonRpcProcess:
                     with self._lock:
                         self._pending[int(msg["id"])] = msg
                 elif "method" in msg and "id" not in msg:
-                    self._notifications.append(msg)
+                    self._record_notification(msg)
         except Exception as exc:
             self._read_error = str(exc)
+
+    def _record_notification(self, msg: dict[str, Any]) -> None:
+        if msg.get("method") != "textDocument/publishDiagnostics":
+            return
+        params = msg.get("params", {})
+        uri = params.get("uri")
+        if not isinstance(uri, str):
+            return
+        diagnostics = params.get("diagnostics", [])
+        if not isinstance(diagnostics, list):
+            diagnostics = []
+        with self._lock:
+            if uri in self._diagnostics_by_uri:
+                self._diagnostics_by_uri.pop(uri)
+            self._diagnostics_by_uri[uri] = diagnostics
+            while len(self._diagnostics_by_uri) > self._max_diagnostic_uris:
+                oldest = next(iter(self._diagnostics_by_uri))
+                self._diagnostics_by_uri.pop(oldest)
+
+    def diagnostics_for_uri(self, uri: str) -> list[dict[str, Any]]:
+        with self._lock:
+            return list(self._diagnostics_by_uri.get(uri, []))
 
     def _wait_response(self, req_id: int) -> dict[str, Any]:
         import time
@@ -131,9 +155,6 @@ class JsonRpcProcess:
                 if req_id in self._pending:
                     return self._pending.pop(req_id)
             if self._proc and self._proc.poll() is not None:
-                stderr = ""
-                if self._proc.stderr:
-                    stderr = self._proc.stderr.read().decode("utf-8", errors="replace")[:500]
-                raise LspRpcError(f"LSP process exited ({self._proc.returncode}): {stderr}")
+                raise LspRpcError(f"LSP process exited ({self._proc.returncode})")
             time.sleep(0.01)
         raise LspRpcError(f"LSP request timed out after {self._timeout}s")

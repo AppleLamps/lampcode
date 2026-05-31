@@ -24,6 +24,8 @@ require_approval = false
 allow_mcp_servers = ["lsp"]   # default; keeps LSP tools in --plan mode
 ```
 
+When launched through agent MCP config, `lsp-mcp` is automatically pinned to the resolved project `cwd`. Use an explicit `--workspace` only when running it standalone or intentionally overriding that root.
+
 Config precedence: CLI → env → `~/.agent-cli/config.toml` → `{cwd}/.agent-cli/config.toml` → defaults.
 
 Run standalone for debugging:

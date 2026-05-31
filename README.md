@@ -54,6 +54,8 @@ require_approval = false
 allow_mcp_servers = ["lsp"]
 ```
 
+When `agent` connects this server, it pins `lsp-mcp` to the active project `cwd`.
+
 See [docs/code-navigation.md](docs/code-navigation.md) and the [docs index](docs/README.md).
 
 ```powershell

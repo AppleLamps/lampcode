@@ -1,6 +1,3 @@
-┌─
-✎ apply_patch (completed)
-  M auth.py
+✓ ✎ apply_patch  M auth.py
      1 +def login(): pass
      2 -return None
-└─

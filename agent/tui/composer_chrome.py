@@ -17,11 +17,13 @@ __all__ = [
     "format_approval_label",
     "context_bar",
     "truncate_session_title",
+    "truncate_path_label",
 ]
 
 from agent.tui.formatting import (  # noqa: E402 — re-export for tests
     context_bar,
     format_approval_label,
+    truncate_path_label,
     truncate_session_title,
 )
 

@@ -98,6 +98,7 @@ class McpSettings:
 class McpConfig:
     servers: dict[str, McpServerConfig] = field(default_factory=dict)
     settings: McpSettings = field(default_factory=McpSettings)
+    project_cwd: Path | None = None
 
 
 @dataclass
@@ -1450,6 +1451,7 @@ def load_mcp_config(
     return McpConfig(
         servers=_parse_mcp_servers(merged),
         settings=_parse_mcp_settings(merged),
+        project_cwd=project_cwd.resolve() if project_cwd else None,
     )
 
 

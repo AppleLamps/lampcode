@@ -14,7 +14,7 @@ _AGENT_HEADER = Text.from_markup("\n[bold #3fb950]Agent[/bold #3fb950]\n")
 def render_user_message(cell: UserMessageCell) -> str:
     return (
         f"\n[bold #388bfd]You[/bold #388bfd]\n"
-        f"[on #161b22] [#388bfd]│[/#388bfd] {cell.text} [/on #161b22]"
+        f"  [#388bfd]│[/#388bfd] [white]{cell.text}[/white]"
     )
 
 

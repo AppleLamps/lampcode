@@ -20,6 +20,7 @@ from agent.tui.cells.base import (
     UserMessageCell,
 )
 from agent.tui.cells.error import render_approval_banner_text
+from agent.tui.cells.tool import status_glyph
 from agent.tui.diff_render import strip_rich_markup
 
 _GOLDEN_DIR = Path(__file__).parent / "golden" / "tui"
@@ -60,7 +61,7 @@ def _plain_at_width(cell, width: int = 200) -> str:
     from rich.console import Console
 
     buf = StringIO()
-    Console(file=buf, width=width, force_terminal=True).print(rendered)
+    Console(file=buf, width=width, force_terminal=False, color_system=None).print(rendered)
     return buf.getvalue()
 
 
@@ -73,7 +74,7 @@ def _plain(cell) -> str:
     from rich.console import Console
 
     buf = StringIO()
-    Console(file=buf, width=200, force_terminal=True).print(rendered)
+    Console(file=buf, width=200, force_terminal=False, color_system=None).print(rendered)
     return buf.getvalue()
 
 
@@ -82,7 +83,7 @@ def _assert_golden(name: str, rendered: str) -> None:
     golden_file = _GOLDEN_DIR / name
     if not golden_file.exists():
         golden_file.write_text(rendered, encoding="utf-8")
-    assert rendered == golden_file.read_text(encoding="utf-8")
+    assert rendered.rstrip("\n") == golden_file.read_text(encoding="utf-8").rstrip("\n")
 
 
 def test_render_user_message() -> None:
@@ -147,6 +148,13 @@ def test_render_error_cell() -> None:
     cell = ErrorCell(message="Something failed", severity="error")
     text = _plain(cell)
     assert "Something failed" in text
+
+
+def test_status_glyphs() -> None:
+    assert strip_rich_markup(status_glyph("running")) == "…"
+    assert strip_rich_markup(status_glyph("completed")) == "✓"
+    assert strip_rich_markup(status_glyph("failed")) == "×"
+    assert strip_rich_markup(status_glyph("blocked")) == "!"
 
 
 def test_render_turn_summary() -> None:
@@ -254,6 +262,22 @@ def test_exec_cell_long_output_header() -> None:
         )
     )
     assert "Total output lines: 220" in text
+
+
+def test_collapsed_tool_exec_is_compact() -> None:
+    text = _plain(
+        ToolExecCell(
+            tool_name="run_command",
+            args_brief="pytest -q",
+            status="completed",
+            output="one\ntwo\nthree\nfour",
+            exit_code=0,
+            expanded=False,
+        )
+    )
+    assert text.splitlines()[0].startswith("✓ $ run_command")
+    assert "4 hidden" in text.splitlines()[0]
+    assert "one" not in text
 
 
 def test_golden_error_cell() -> None:

@@ -30,7 +30,7 @@ def _assert_golden(name: str, rendered: str) -> None:
     golden_file = _GOLDEN_DIR / name
     if not golden_file.exists():
         golden_file.write_text(rendered, encoding="utf-8")
-    assert rendered == golden_file.read_text(encoding="utf-8")
+    assert rendered.rstrip("\n") == golden_file.read_text(encoding="utf-8").rstrip("\n")
 
 
 def _plain_renderable(renderable, *, width: int = 120) -> str:

@@ -80,6 +80,8 @@ class ErrorCell(TranscriptCell):
     message: str = ""
     severity: Literal["error", "warning"] = "error"
     command: str | None = None
+    source: str = ""
+    details: str | None = None
 
 
 @dataclass
